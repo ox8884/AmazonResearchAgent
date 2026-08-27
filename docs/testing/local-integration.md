@@ -46,7 +46,8 @@ The gate executes the dedicated integration files directly:
 - `packages/db/src/core-schema.integration.test.ts`
 - `packages/queue/src/queue.integration.test.ts`
 - `apps/worker/src/jobs/import-opportunity-csv.integration.test.ts`
+- `apps/worker/src/jobs/normalize-opportunities.integration.test.ts`
 
-At the time this document was written, that is 9 tests: 4 database schema/RPC, 3 queue adapter, and 2 worker import/retry tests. The command intentionally selects files, not a fixed test count.
+At the time this document was written, that is 11 tests: 4 database schema/RPC, 3 queue adapter, 2 worker import/retry, and 2 normalization worker tests. The command intentionally selects files, not a fixed test count.
 
 The suites create and remove their local fixture records. A failed run may leave only local test rows; use `pnpm exec supabase db reset` to return to a clean local database.
