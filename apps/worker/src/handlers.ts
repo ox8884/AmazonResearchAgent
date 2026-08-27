@@ -22,7 +22,7 @@ import {
 import { runProviderConnectionTest } from './jobs/test-ai-provider';
 import { runMarketProbe } from './jobs/market-probe';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
-import type { MemoryApiBudget } from '@ara/api-budget';
+import type { ApiBudget } from '@ara/api-budget';
 import type { ProductDatabasePage } from '@ara/jungle-scout';
 
 export interface JobExecutionContext {
@@ -77,7 +77,7 @@ export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
   readonly normalizationCatalog?: ProviderCatalog;
   readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
-  readonly apiBudget?: MemoryApiBudget;
+  readonly apiBudget?: ApiBudget;
   readonly queryProductDatabase?: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
 }
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;

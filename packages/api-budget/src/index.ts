@@ -22,7 +22,11 @@ export interface AuthorizeApiCallInput {
   readonly now?: Date;
 }
 
-export interface ApiBudgetStore {
+export interface ApiBudget {
+  authorize(input: AuthorizeApiCallInput): Promise<ApiAuthorizationDecision>;
+}
+
+export interface ApiBudgetStore extends ApiBudget {
   hasFreshCache(cacheKey: string, endpoint: JungleScoutEndpoint, now: Date): boolean;
   reserve(input: AuthorizeApiCallInput, now: Date): ApiAuthorizationDecision;
 }
@@ -75,6 +79,11 @@ export class MemoryApiBudget implements ApiBudgetStore {
     };
   }
 
+  async authorize(input: AuthorizeApiCallInput): Promise<ApiAuthorizationDecision> {
+    const now = input.now ?? new Date();
+    return this.serialize(() => this.reserve(input, now));
+  }
+
   async serialize<T>(work: () => T | Promise<T>): Promise<T> {
     const run = this.chain.then(work, work);
     this.chain = run.then(
@@ -86,9 +95,8 @@ export class MemoryApiBudget implements ApiBudgetStore {
 }
 
 export async function authorizeApiCall(
-  store: MemoryApiBudget,
+  store: ApiBudget,
   input: AuthorizeApiCallInput
 ): Promise<ApiAuthorizationDecision> {
-  const now = input.now ?? new Date();
-  return store.serialize(() => store.reserve(input, now));
+  return store.authorize(input);
 }

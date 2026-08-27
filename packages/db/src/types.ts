@@ -1071,6 +1071,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      authorize_api_call: {
+        Args: {
+          purpose: string
+          estimated_calls: number
+          request_cache_key: string
+          endpoint: string
+          daily_limit: number
+          reserved_limit: number
+          request_budget_date?: string
+        }
+        Returns: {
+          decision_kind: string
+          cache_key: string
+          remaining: number | null
+        }[]
+      }
       claim_ai_analysis: {
         Args: {
           analysis_role: string

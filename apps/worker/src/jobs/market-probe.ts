@@ -5,10 +5,7 @@ import {
   type ApiCallPurpose,
   type Locale
 } from '@ara/shared';
-import {
-  MemoryApiBudget,
-  authorizeApiCall
-} from '@ara/api-budget';
+import { authorizeApiCall, type ApiBudget } from '@ara/api-budget';
 import {
   ProductDatabasePageSchema,
   type ProductDatabasePage
@@ -38,7 +35,7 @@ export interface MarketProbeCheckpoint {
 
 export interface MarketProbeDependencies {
   readonly client: QueueDatabaseClient;
-  readonly budget: MemoryApiBudget;
+  readonly budget: ApiBudget;
   readonly purpose?: ApiCallPurpose;
   readonly queryProductDatabase: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
   onCheckpoint?(checkpoint: MarketProbeCheckpoint): Promise<void>;
