@@ -48,7 +48,11 @@ The gate executes the dedicated integration files directly:
 - `apps/worker/src/jobs/import-opportunity-csv.integration.test.ts`
 - `apps/worker/src/jobs/normalize-opportunities.integration.test.ts`
 - `apps/worker/src/providers/provider-catalog.integration.test.ts`
+
 - `apps/web/app/api/ai-providers/settings-catalog.integration.test.ts`
+- `apps/worker/src/jobs/market-probe.integration.test.ts`
+- `apps/worker/src/jobs/deep-validation.integration.test.ts`
+- `apps/worker/src/jobs/enrich-strong-potential.integration.test.ts`
 
 The command intentionally selects files, not a fixed test count.
 
