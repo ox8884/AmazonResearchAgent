@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "test": "vitest run --passWithNoTests --exclude \"**/*.e2e.spec.ts\"",
+    "test": "vitest run --passWithNoTests --exclude \"**/*.e2e.spec.ts\" --exclude \"**/*.integration.test.ts\"",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
@@ -24,6 +24,8 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@ara/ai-router": "workspace:*",
+    "@ara/research-engine": "workspace:*",
     "@playwright/test": "1.62.1"
   }
 }

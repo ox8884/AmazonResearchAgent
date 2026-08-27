@@ -75,6 +75,12 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@ara/ai-router':
+        specifier: workspace:*
+        version: link:../../packages/ai-router
+      '@ara/research-engine':
+        specifier: workspace:*
+        version: link:../../packages/research-engine
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
