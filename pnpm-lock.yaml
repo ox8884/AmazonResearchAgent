@@ -142,6 +142,9 @@ importers:
       csv-parse:
         specifier: 7.0.2
         version: 7.0.2
+      ky:
+        specifier: 1.14.3
+        version: 1.14.3
       zod:
         specifier: 4.4.3
         version: 4.4.3

@@ -15,6 +15,7 @@
   "dependencies": {
     "@ara/shared": "workspace:*",
     "csv-parse": "7.0.2",
+    "ky": "1.14.3",
     "zod": "4.4.3"
   }
 }
