@@ -31,3 +31,5 @@ export {
 export type { KeywordNormalization } from './ai/normalization-schema';
 export { groupProductFamilies } from './product-family';
 export type { CatalogProduct, ProductFamily } from './product-family';
+export { evaluateProductDataQuality } from './data-quality';
+export type { DataQualityFlag, DataQualityResult } from './data-quality';
