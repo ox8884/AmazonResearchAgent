@@ -28,6 +28,7 @@ import {
 } from '@ara/shared';
 import { resolveApprovedCommandProfile } from './command-profiles';
 import {
+  createPinnedProviderFetch,
   validateProviderBaseUrl
 } from './provider-url-policy';
 
@@ -150,6 +151,8 @@ async function providerFromRow(
       id: row.id,
       baseUrl: validatedUrl.toString(),
       billingType: billingType.data,
+      requiresSecret: true,
+      fetch: createPinnedProviderFetch(networkScope),
       ...(apiKey ? { apiKey } : {}),
       ...(manualModelId ? { manualModelId } : {}),
       ...(modelDiscovery ? { modelDiscovery } : {})
@@ -233,7 +236,7 @@ async function catalogEntry(
 ): Promise<ProviderCatalogEntry> {
   const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
   const health = await adapter.health();
-  const persistedModels = models.map(modelFromRow);
+  const persistedModels = models.filter((model) => model.enabled).map(modelFromRow);
   const roles = configRoles(configRecord(provider.config));
   return {
     provider: adapter,

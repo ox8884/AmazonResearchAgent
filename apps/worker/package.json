@@ -18,7 +18,8 @@
     "@ara/queue": "workspace:*",
     "@ara/research-engine": "workspace:*",
     "@ara/secret-store": "workspace:*",
-    "@ara/shared": "workspace:*"
+    "@ara/shared": "workspace:*",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "tsx": "4.23.12"

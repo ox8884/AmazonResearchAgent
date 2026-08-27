@@ -52,6 +52,9 @@ const RETRY_STATUS_CODES = [
   ...Array.from({ length: 100 }, (_, index) => 500 + index)
 ];
 
+export const MODEL_LIST_MAX_BYTES = 256_000;
+export const COMPLETION_MAX_BYTES = 1_048_576;
+
 export interface OpenAiHttpProviderConfig {
   readonly id: string;
   readonly baseUrl: string;
@@ -61,6 +64,8 @@ export interface OpenAiHttpProviderConfig {
   readonly qualityRank?: number;
   readonly modelDiscovery?: 'enabled' | 'disabled';
   readonly timeoutMs?: number;
+  readonly requiresSecret?: boolean;
+  readonly fetch?: typeof fetch;
 }
 
 export class OpenAiHttpError extends Error {
@@ -146,18 +151,23 @@ function usageFromResponse(
 export class OpenAiHttpProvider implements RawAiProvider {
   readonly id: string;
   readonly billingType: BillingType;
-  private readonly config: Omit<OpenAiHttpProviderConfig, 'apiKey'>;
+  private readonly config: Omit<OpenAiHttpProviderConfig, 'apiKey' | 'fetch'>;
+  private readonly hasApiKey: boolean;
+  private readonly requiresSecret: boolean;
   private readonly http: typeof ky;
 
   constructor(config: OpenAiHttpProviderConfig) {
-    const { apiKey, ...safeConfig } = config;
+    const { apiKey, fetch: customFetch, ...safeConfig } = config;
     this.config = { ...safeConfig, baseUrl: normalizeBaseUrl(config.baseUrl) };
     this.id = config.id;
     this.billingType = config.billingType;
+    this.hasApiKey = Boolean(apiKey);
+    this.requiresSecret = config.requiresSecret ?? true;
     this.http = ky.create({
       prefixUrl: this.config.baseUrl,
       timeout: config.timeoutMs ?? 60_000,
       redirect: 'manual',
+      ...(customFetch ? { fetch: customFetch } : {}),
       retry: {
         limit: 2,
         methods: ['get', 'post'],
@@ -176,21 +186,31 @@ export class OpenAiHttpProvider implements RawAiProvider {
   }
 
   async health(): Promise<ProviderHealth> {
-    try {
-      const models = await this.listModels();
+    if (this.requiresSecret && !this.hasApiKey) {
       return {
-        available: models.length > 0,
+        available: false,
         checkedAt: new Date().toISOString(),
-        reason: models.length > 0 ? null : 'No provider models are available.',
+        reason: 'Provider secret is missing.',
+        retryAfterSeconds: null
+      };
+    }
+    try {
+      const response = await this.http.get('models');
+      await readJsonBounded(response, MODEL_LIST_MAX_BYTES);
+      return {
+        available: true,
+        checkedAt: new Date().toISOString(),
+        reason: null,
         retryAfterSeconds: null
       };
     } catch (error) {
       const mapped = mapError(error);
+      const unauthorized = mapped.status === 401 || mapped.status === 403;
       return {
         available: false,
         checkedAt: new Date().toISOString(),
         reason: mapped.message,
-        retryAfterSeconds: mapped.retryable ? 60 : null
+        retryAfterSeconds: mapped.retryable && !unauthorized ? 60 : null
       };
     }
   }
@@ -207,10 +227,11 @@ export class OpenAiHttpProvider implements RawAiProvider {
       return [descriptor(this.config, this.config.manualModelId, false)];
     }
     try {
-      const response = ModelsResponseSchema.parse(
-        await this.http.get('models').json<unknown>()
+      const response = await this.http.get('models');
+      const parsed = ModelsResponseSchema.parse(
+        await readJsonBounded(response, MODEL_LIST_MAX_BYTES)
       );
-      return response.data.map((model) => descriptor(this.config, model.id, true));
+      return parsed.data.map((model) => descriptor(this.config, model.id, true));
     } catch (error) {
       if (
         error instanceof HTTPError &&
@@ -251,10 +272,11 @@ export class OpenAiHttpProvider implements RawAiProvider {
     };
 
     try {
-      const response = ChatResponseSchema.parse(
-        await this.http.post('chat/completions', { json: body }).json<unknown>()
+      const response = await this.http.post('chat/completions', { json: body });
+      const parsed = ChatResponseSchema.parse(
+        await readJsonBounded(response, COMPLETION_MAX_BYTES)
       );
-      const choice = response.choices[0];
+      const choice = parsed.choices[0];
       if (!choice) {
         throw new OpenAiHttpError('Provider returned no completion.', null, false);
       }
@@ -264,7 +286,7 @@ export class OpenAiHttpProvider implements RawAiProvider {
         modelId: request.modelId,
         role: request.role,
         inputHash: request.inputHash,
-        usage: usageFromResponse(response.usage),
+        usage: usageFromResponse(parsed.usage),
         costClass: this.billingType,
         startedAt,
         completedAt: new Date().toISOString()
@@ -274,3 +296,53 @@ export class OpenAiHttpProvider implements RawAiProvider {
     }
   }
 }
+
+async function readJsonBounded(response: Response, maxBytes: number): Promise<unknown> {
+  const lengthHeader = response.headers.get('content-length');
+  if (lengthHeader) {
+    const declared = Number(lengthHeader);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new OpenAiHttpError(
+        'Provider response exceeded the size limit.',
+        response.status,
+        false
+      );
+    }
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new OpenAiHttpError('Provider response body was empty.', response.status, false);
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new OpenAiHttpError(
+        'Provider response exceeded the size limit.',
+        response.status,
+        false
+      );
+    }
+    chunks.push(value);
+  }
+  const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+  try {
+    return z.unknown().parse(JSON.parse(buffer.toString('utf8')));
+  } catch (error) {
+    throw new OpenAiHttpError(
+      'OpenAI-compatible provider returned malformed data.',
+      response.status,
+      false,
+      error
+    );
+  }
+ }

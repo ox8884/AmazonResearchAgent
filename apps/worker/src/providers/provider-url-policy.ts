@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 export type ProviderNetworkScope = 'public' | 'private' | 'loopback';
 type AddressCategory = ProviderNetworkScope | 'blocked';
@@ -128,6 +129,22 @@ export async function validateProviderBaseUrl(
   scope: ProviderNetworkScope,
   resolveAddress: ProviderAddressResolver = resolveAddresses
 ): Promise<URL> {
+  const pinned = await pinProviderDestination(value, scope, resolveAddress);
+  return pinned.url;
+}
+
+export interface PinnedProviderDestination {
+  readonly url: URL;
+  readonly connectHost: string;
+  readonly hostnameHeader: string;
+  readonly tlsServername: string;
+}
+
+export async function pinProviderDestination(
+  value: string,
+  scope: ProviderNetworkScope,
+  resolveAddress: ProviderAddressResolver = resolveAddresses
+): Promise<PinnedProviderDestination> {
   let url: URL;
   try {
     url = new URL(value);
@@ -180,5 +197,51 @@ export async function validateProviderBaseUrl(
       );
     }
   }
-  return url;
+  const chosen = addresses[0];
+  if (!chosen) {
+    throw new ProviderUrlPolicyError('Provider hostname did not resolve.');
+  }
+  const connectHost =
+    isIP(chosen.address) === 6 ? `[${chosen.address}]` : chosen.address;
+  return {
+    url,
+    connectHost,
+    hostnameHeader: url.host,
+    tlsServername: hostname
+  };
+}
+
+export function createPinnedProviderFetch(
+  scope: ProviderNetworkScope,
+  resolveAddress: ProviderAddressResolver = resolveAddresses
+): typeof fetch {
+  return async (input, init) => {
+    const rawUrl =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const pin = await pinProviderDestination(rawUrl, scope, resolveAddress);
+    const pinned = new URL(rawUrl);
+    pinned.hostname = pin.connectHost;
+    const headers = new Headers(init?.headers);
+    if (input instanceof Request) {
+      input.headers.forEach((value, key) => {
+        if (!headers.has(key)) {
+          headers.set(key, value);
+        }
+      });
+    }
+    headers.set('host', pin.hostnameHeader);
+    const dispatcher = new Agent({
+      connect: { servername: pin.tlsServername }
+    });
+    return undiciFetch(pinned, {
+      ...init,
+      headers,
+      dispatcher,
+      redirect: 'manual'
+    }) as unknown as Response;
+  };
 }

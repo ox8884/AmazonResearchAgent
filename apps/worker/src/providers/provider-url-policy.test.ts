@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ProviderUrlPolicyError,
+  pinProviderDestination,
   validateProviderBaseUrl,
   type ProviderAddressResolver
 } from './provider-url-policy';
@@ -74,5 +75,22 @@ describe('worker provider URL policy', () => {
     await rejects('http://169.254.169.254/latest', 'private');
     await rejects('http://100.100.100.200/latest', 'private');
     await rejects('http://[fd00:ec2::254]/latest', 'private');
+  });
+
+  it('pins the connect host to the lookup used for validation', async () => {
+    let lookups = 0;
+    const resolve: ProviderAddressResolver = async () => {
+      lookups += 1;
+      return lookups === 1 ? [{ address: '8.8.8.8' }] : [{ address: '127.0.0.1' }];
+    };
+    const pinned = await pinProviderDestination(
+      'https://provider.example/v1',
+      'public',
+      resolve
+    );
+    expect(pinned.connectHost).toBe('8.8.8.8');
+    expect(pinned.tlsServername).toBe('provider.example');
+    expect(pinned.hostnameHeader).toBe('provider.example');
+    expect(lookups).toBe(1);
   });
 });
