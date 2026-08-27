@@ -32,6 +32,7 @@ export interface CommandProviderConfig {
   readonly promptMode: CommandPromptMode;
   readonly outputMode: CommandOutputMode;
   readonly environmentAllowlist: readonly string[];
+  readonly fixedEnvironment?: Readonly<Record<string, string>>;
   readonly healthArgs?: readonly string[];
   readonly timeoutMs?: number;
 }
@@ -59,6 +60,7 @@ interface CommandExecutionOptions {
   readonly prompt: string;
   readonly promptMode: CommandPromptMode;
   readonly environmentAllowlist: readonly string[];
+  readonly fixedEnvironment: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
 }
 
@@ -68,9 +70,10 @@ interface CommandExecutionResult {
 }
 
 function allowedEnvironment(
-  environmentAllowlist: readonly string[]
+  environmentAllowlist: readonly string[],
+  fixedEnvironment: Readonly<Record<string, string>>
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { NODE_ENV: 'production' };
+  const environment: NodeJS.ProcessEnv = { ...fixedEnvironment };
   for (const name of environmentAllowlist) {
     const value = process.env[name];
     if (value !== undefined) {
@@ -87,7 +90,10 @@ function executeCommand(
     Promise.withResolvers<CommandExecutionResult>();
   const child = spawn(options.executable, [...options.args], {
     shell: false,
-    env: allowedEnvironment(options.environmentAllowlist),
+    env: allowedEnvironment(
+      options.environmentAllowlist,
+      options.fixedEnvironment
+    ),
     stdio: 'pipe',
     windowsHide: true
   });
@@ -216,6 +222,7 @@ export class CommandProvider implements RawAiProvider {
         prompt: '',
         promptMode: 'stdin',
         environmentAllowlist: this.config.environmentAllowlist,
+        fixedEnvironment: this.config.fixedEnvironment ?? {},
         timeoutMs: this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
       });
       return {
@@ -264,6 +271,7 @@ export class CommandProvider implements RawAiProvider {
       prompt: request.prompt,
       promptMode: this.config.promptMode,
       environmentAllowlist: this.config.environmentAllowlist,
+      fixedEnvironment: this.config.fixedEnvironment ?? {},
       timeoutMs: this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
     });
     return {

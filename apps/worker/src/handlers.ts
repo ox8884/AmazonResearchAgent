@@ -10,13 +10,15 @@ import {
 import {
   AiRequestSchema,
   NormalizeOpportunitiesJobPayloadSchema,
-  ImportOpportunityCsvJobPayloadSchema
+  ImportOpportunityCsvJobPayloadSchema,
+  TestAiProviderConnectionJobPayloadSchema
 } from '@ara/shared';
 import type { Job, JobType, QueueDatabaseClient } from '@ara/queue';
 import {
   runImportJob,
   type ImportSourceFile
 } from './jobs/import-opportunity-csv';
+import { runProviderConnectionTest } from './jobs/test-ai-provider';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
 
 export interface JobExecutionContext {
@@ -67,10 +69,10 @@ class DeferredAiProvider implements AiProvider {
 
 const deferredAiProvider = new DeferredAiProvider();
 
-
 export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
   readonly normalizationCatalog?: ProviderCatalog;
+  readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
 }
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
@@ -153,13 +155,20 @@ export function createJobHandlers(
     }
   };
 
-  if (options.normalizationProvider || options.normalizationCatalog) {
+  if (
+    options.normalizationProvider ||
+    options.normalizationCatalog ||
+    options.resolveProviderCatalog
+  ) {
     handlers.NORMALIZE_OPPORTUNITIES = async (job, context) => {
       const payload = NormalizeOpportunitiesJobPayloadSchema.parse(job.payload);
       let provider = options.normalizationProvider ?? deferredAiProvider;
       let modelId = payload.modelId ?? 'deferred-ai-model';
+      const catalog =
+        (await options.resolveProviderCatalog?.(false)) ??
+        options.normalizationCatalog;
 
-      if (options.normalizationCatalog) {
+      if (catalog) {
         const request = AiRequestSchema.parse({
           role: 'niche_normalization',
           routerMode: 'Balanced',
@@ -167,7 +176,7 @@ export function createJobHandlers(
           allowPaidFallback: false,
           payload: { candidateIds: payload.candidateIds }
         });
-        const decision = routeAiRequest(request, options.normalizationCatalog);
+        const decision = routeAiRequest(request, catalog);
         if (decision.kind === 'route') {
           provider = decision.provider;
           modelId = decision.model.id;
@@ -183,11 +192,23 @@ export function createJobHandlers(
           client,
           provider,
           modelId,
+          workerId: `normalization:${job.id}`,
           promptVersion: payload.promptVersion,
           onCheckpoint: (value) => context.saveCheckpoint(value)
         }
       );
       return result.checkpoint;
+    };
+  }
+  const resolveCatalog = options.resolveProviderCatalog;
+  if (resolveCatalog) {
+    handlers.TEST_AI_PROVIDER_CONNECTION = async (job, context) => {
+      const payload = TestAiProviderConnectionJobPayloadSchema.parse(job.payload);
+      const result = await runProviderConnectionTest(payload.providerId, client);
+      await resolveCatalog(true);
+      const checkpoint = { phase: 'completed', providerTest: result };
+      context.setCheckpoint(checkpoint);
+      return checkpoint;
     };
   }
   return handlers;

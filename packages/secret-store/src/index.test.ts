@@ -16,6 +16,15 @@ describe('encrypted provider secret store', () => {
     expect(Buffer.from(encrypted.authTag, 'base64')).toHaveLength(16);
   });
 
+  // Break: a short secret is echoed in full through last4.
+  it('does not expose a short secret as last4', () => {
+    const encrypted = encryptSecret('abcd', Buffer.alloc(32, 7));
+
+    expect(encrypted.last4).toBe('');
+    expect(encrypted.ciphertext).not.toContain('abcd');
+    expect(decryptSecret(encrypted, Buffer.alloc(32, 7))).toBe('abcd');
+  });
+
   it('rejects tampered ciphertext and the wrong key without exposing secret material', () => {
     const encrypted = encryptSecret('super-secret-value', Buffer.alloc(32, 7));
     const tampered = {

@@ -55,6 +55,7 @@ function request(overrides: Partial<AiRequest> = {}): AiRequest {
     locale: 'ko',
     allowPaidFallback: false,
     requiredCapabilities: ['structured_json'],
+    excludeProviderIds: [],
     payload: { keyword: 'batter squeeze bottle' },
     ...overrides
   };
@@ -73,6 +74,7 @@ describe('AI routing policy', () => {
         {
           provider: payg,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 1,
           health: healthy,
           models: [model('payg', 'paid-model', 'payg', 1)]
@@ -95,6 +97,7 @@ describe('AI routing policy', () => {
         {
           provider: preferred,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 1,
           rolePriority: { niche_normalization: 1 },
           health: healthy,
@@ -103,6 +106,7 @@ describe('AI routing policy', () => {
         {
           provider: cheaper,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 2,
           rolePriority: { niche_normalization: 2 },
           health: healthy,
@@ -127,6 +131,7 @@ describe('AI routing policy', () => {
         {
           provider: subscription,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 1,
           health: healthy,
           models: [model('subscription', 'subscription-model', 'subscription', 1)]
@@ -134,6 +139,7 @@ describe('AI routing policy', () => {
         {
           provider: free,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 2,
           health: healthy,
           models: [model('free', 'free-model', 'free', 200)]
@@ -156,6 +162,7 @@ describe('AI routing policy', () => {
         {
           provider: unavailable,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 1,
           health: { ...healthy, available: false, reason: 'outage' },
           models: [model('unavailable', 'wrong-capability', 'free', 1)]
@@ -163,6 +170,7 @@ describe('AI routing policy', () => {
         {
           provider: healthyProvider,
           enabled: true,
+          roles: ['niche_normalization'],
           priority: 2,
           health: healthy,
           models: [model('healthy', 'responses-model', 'subscription', 1, ['responses'])]
@@ -184,8 +192,8 @@ describe('AI routing policy', () => {
         {
           provider: providerInstance,
           enabled: true,
-          priority: 1,
           roles: ['bulk_classification'],
+          priority: 1,
           health: healthy,
           models: [model('classification-only', 'model', 'free', 1)]
         }
@@ -195,6 +203,78 @@ describe('AI routing policy', () => {
     expect(decision).toMatchObject({
       kind: 'defer',
       reason: 'WAITING_FOR_AI_CAPACITY'
+    });
+  });
+
+  it('treats an empty role assignment as ineligible', () => {
+    const unassigned = provider('unassigned', 'free');
+    const decision = routeAiRequest(
+      request(),
+      catalog([
+        {
+          provider: unassigned,
+          enabled: true,
+          roles: [],
+          priority: 1,
+          health: healthy,
+          models: [model('unassigned', 'model', 'free', 1)]
+        }
+      ])
+    );
+
+    expect(decision).toMatchObject({ kind: 'defer', checkedProviderIds: [] });
+  });
+
+  it('excludes explicitly blocked providers from routing', () => {
+    const blocked = provider('blocked', 'free');
+    const decision = routeAiRequest(
+      request({ excludeProviderIds: ['blocked'] }),
+      catalog([
+        {
+          provider: blocked,
+          enabled: true,
+          roles: ['niche_normalization'],
+          priority: 1,
+          health: healthy,
+          models: [model('blocked', 'model', 'free', 1)]
+        }
+      ])
+    );
+
+    expect(decision).toMatchObject({ kind: 'defer', checkedProviderIds: [] });
+  });
+
+  it('requires strong cross-validation to use another provider', () => {
+    const primary = provider('primary', 'subscription');
+    const independent = provider('independent', 'subscription');
+    const decision = routeAiRequest(
+      request({
+        role: 'strong_cross_validation',
+        primaryProviderId: 'primary'
+      }),
+      catalog([
+        {
+          provider: primary,
+          enabled: true,
+          roles: ['strong_cross_validation'],
+          priority: 1,
+          health: healthy,
+          models: [model('primary', 'primary-model', 'subscription', 1)]
+        },
+        {
+          provider: independent,
+          enabled: true,
+          roles: ['strong_cross_validation'],
+          priority: 2,
+          health: healthy,
+          models: [model('independent', 'independent-model', 'subscription', 2)]
+        }
+      ])
+    );
+
+    expect(decision).toMatchObject({
+      kind: 'route',
+      providerId: 'independent'
     });
   });
 });

@@ -26,6 +26,10 @@ import {
   type AiRole,
   type ProviderCapability
 } from '@ara/shared';
+import { resolveApprovedCommandProfile } from './command-profiles';
+import {
+  validateProviderBaseUrl
+} from './provider-url-policy';
 
 export interface PersistedProviderCatalogOptions {
   readonly encryptionKey?: Buffer;
@@ -52,6 +56,16 @@ function configRecord(value: Json): ConfigRecord {
 function configString(config: ConfigRecord, key: string): string | undefined {
   const value = config[key];
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+function configModelDiscovery(
+  config: ConfigRecord
+): 'enabled' | 'disabled' | undefined {
+  const value = configString(config, 'modelDiscovery');
+  if (value === undefined || value === 'enabled' || value === 'disabled') {
+    return value;
+  }
+  throw new ProviderCatalogError('Stored model discovery policy is invalid.');
 }
 
 function configStrings(config: ConfigRecord, key: string): string[] {
@@ -105,11 +119,11 @@ function decryptProviderKey(
   );
 }
 
-function providerFromRow(
+async function providerFromRow(
   row: ProviderRow,
   secret: ProviderSecretRow | undefined,
   options: PersistedProviderCatalogOptions
-): AiProvider {
+): Promise<AiProvider> {
   const config = configRecord(row.config);
   const kind = ProviderKindSchema.safeParse(row.kind);
   const billingType = BillingTypeSchema.safeParse(row.billing_type);
@@ -119,37 +133,56 @@ function providerFromRow(
 
   if (kind.data === 'openai_http') {
     const baseUrl = configString(config, 'baseUrl');
-    if (!baseUrl) {
-      throw new ProviderCatalogError('Stored HTTP provider has no base URL.');
+    const networkScope = configString(config, 'networkScope');
+    if (
+      !baseUrl ||
+      (networkScope !== 'public' &&
+        networkScope !== 'private' &&
+        networkScope !== 'loopback')
+    ) {
+      throw new ProviderCatalogError('Stored HTTP provider URL policy is incomplete.');
     }
+    const validatedUrl = await validateProviderBaseUrl(baseUrl, networkScope);
     const manualModelId = configString(config, 'manualModelId');
+    const modelDiscovery = configModelDiscovery(config);
     const apiKey = decryptProviderKey(secret, options);
     return new OpenAiHttpProvider({
       id: row.id,
-      baseUrl,
+      baseUrl: validatedUrl.toString(),
       billingType: billingType.data,
       ...(apiKey ? { apiKey } : {}),
-      ...(manualModelId ? { manualModelId } : {})
+      ...(manualModelId ? { manualModelId } : {}),
+      ...(modelDiscovery ? { modelDiscovery } : {})
     });
   }
 
-  const executable = configString(config, 'executable');
+  const profileId = configString(config, 'commandProfileId');
   const modelId = configString(config, 'modelId');
-  if (!executable || !modelId) {
-    throw new ProviderCatalogError('Stored command provider is incomplete.');
+  if (!profileId || !modelId) {
+    throw new ProviderCatalogError('Stored command provider profile is incomplete.');
   }
-  const promptMode = configString(config, 'promptMode');
-  const outputMode = configString(config, 'outputMode');
-  return new CommandProvider({
-    id: row.id,
-    billingType: billingType.data,
-    executable,
-    fixedArgs: configStrings(config, 'fixedArgs'),
-    modelId,
-    promptMode: promptMode === 'final_arg' ? 'final_arg' : 'stdin',
-    outputMode: outputMode === 'text_to_json' ? 'text_to_json' : 'json',
-    environmentAllowlist: configStrings(config, 'environmentAllowlist')
-  });
+  return new CommandProvider(
+    resolveApprovedCommandProfile(
+      profileId,
+      row.id,
+      modelId,
+      billingType.data
+    )
+  );
+}
+
+export async function instantiatePersistedProvider(
+  client: QueueDatabaseClient,
+  providerId: string,
+  options: PersistedProviderCatalogOptions = {}
+): Promise<AiProvider | null> {
+  const repository = createProviderRepository(client);
+  const provider = await repository.findProvider(providerId);
+  if (!provider) {
+    return null;
+  }
+  const secret = await repository.findSecret(providerId);
+  return providerFromRow(provider, secret ?? undefined, options);
 }
 
 function modelFromRow(model: ModelRow): AiModelDescriptor {
@@ -198,23 +231,18 @@ async function catalogEntry(
   secrets: ProviderSecrets,
   options: PersistedProviderCatalogOptions
 ): Promise<ProviderCatalogEntry> {
-  const adapter = providerFromRow(provider, secrets.get(provider.id), options);
+  const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
   const health = await adapter.health();
   const persistedModels = models.map(modelFromRow);
-  const liveModels =
-    persistedModels.length > 0 || !health.available
-      ? persistedModels
-      : await adapter.listModels();
   const roles = configRoles(configRecord(provider.config));
   return {
     provider: adapter,
     enabled: provider.enabled,
     priority: provider.priority,
     health,
-    models: liveModels,
-    ...(roles.length > 0
-      ? { roles, rolePriority: rolePriority(roles, provider.priority) }
-      : {})
+    models: persistedModels,
+    roles,
+    rolePriority: rolePriority(roles, provider.priority)
   };
 }
 
@@ -228,21 +256,54 @@ export async function resolvePersistedProviderCatalog(
     repository.listModels(),
     repository.listSecrets()
   ]);
-  const modelsByProvider = indexModels(models);
+  const modelsByProvider = indexModels(models.filter((model) => model.enabled));
   const secretsByProvider = indexSecrets(secrets);
   const entries: ProviderCatalogEntry[] = [];
   for (const provider of providers) {
     if (!provider.enabled) {
       continue;
     }
-    entries.push(
-      await catalogEntry(
-        provider,
-        modelsByProvider.get(provider.id) ?? [],
-        secretsByProvider,
-        options
-      )
-    );
+    try {
+      entries.push(
+        await catalogEntry(
+          provider,
+          modelsByProvider.get(provider.id) ?? [],
+          secretsByProvider,
+          options
+        )
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        continue;
+      }
+      throw error;
+    }
   }
   return { entries };
+}
+
+export class ProviderCatalogCache {
+  private value: ProviderCatalog | null = null;
+  private expiresAt = 0;
+
+  constructor(
+    private readonly load: () => Promise<ProviderCatalog>,
+    private readonly ttlMs = 60_000,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  invalidate(): void {
+    this.expiresAt = 0;
+  }
+
+  async resolve(forceRefresh = false): Promise<ProviderCatalog> {
+    const currentTime = this.now();
+    if (!forceRefresh && this.value && currentTime < this.expiresAt) {
+      return this.value;
+    }
+    const resolved = await this.load();
+    this.value = resolved;
+    this.expiresAt = currentTime + this.ttlMs;
+    return resolved;
+  }
 }

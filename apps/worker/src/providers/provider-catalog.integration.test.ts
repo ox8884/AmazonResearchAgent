@@ -132,7 +132,7 @@ integration('persisted provider catalog', () => {
     const { data: clusters } = await database
       .from('niche_clusters')
       .select('id')
-      .eq('canonical_name', 'Batter / Pancake Dispenser');
+      .like('canonical_name', 'Batter / Pancake Dispenser%');
     const clusterIds = clusters?.map((cluster) => cluster.id) ?? [];
     if (clusterIds.length > 0) {
       await database.from('niche_cluster_keywords').delete().in('niche_cluster_id', clusterIds);
@@ -156,6 +156,8 @@ integration('persisted provider catalog', () => {
       priority: 1,
       config: {
         baseUrl: mock.baseUrl,
+        networkScope: 'loopback',
+        modelDiscovery: 'disabled',
         manualModelId: 'catalog-model',
         roles: ['niche_normalization']
       }
@@ -184,13 +186,19 @@ integration('persisted provider catalog', () => {
       payload: { keyword: 'pancake dispenser bottle' }
     });
     const decision = routeAiRequest(request, catalog);
+    if (decision.kind !== 'route') {
+      throw new Error('Expected the persisted provider to be routable.');
+    }
     const fixture = await seedCandidate(database);
     importRunIds.push(fixture.importRunId);
-    if (decision.kind !== 'route') throw new Error('Expected the persisted provider to be routable.');
-
     const result = await runNormalizeJob(
       { candidateIds: [fixture.candidateId], locale: 'ko' },
-      { client: database, provider: decision.provider, modelId: decision.model.id }
+      {
+        client: database,
+        provider: decision.provider,
+        modelId: decision.model.id,
+        promptVersion: `it-${randomUUID()}`
+      }
     );
     const { data: candidate } = await database
       .from('candidates')
@@ -203,5 +211,70 @@ integration('persisted provider catalog', () => {
     expect(candidate?.state).toBe('Ready for API Validation');
     expect(JSON.stringify(catalog)).not.toContain('persisted-secret-value');
     expect(JSON.stringify(decision.provider)).not.toContain('persisted-secret-value');
+  });
+
+  it('isolates a malformed provider and excludes disabled models', async () => {
+    mock = await MockOpenAiServer.start();
+    const goodId = `catalog-provider-${randomUUID()}`;
+    const badId = `catalog-provider-${randomUUID()}`;
+    providerIds.push(goodId, badId);
+    const key = Buffer.alloc(32, 9);
+    const encrypted = encryptSecret('persisted-secret-value', key);
+    const repository = createProviderRepository(database);
+    await repository.upsertProvider({
+      id: badId,
+      name: 'Malformed provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: { baseUrl: 'http://127.0.0.1:9/v1', roles: ['niche_normalization'] }
+    });
+    await repository.upsertProvider({
+      id: goodId,
+      name: 'Healthy provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: {
+        baseUrl: mock.baseUrl,
+        networkScope: 'loopback',
+        modelDiscovery: 'disabled',
+        manualModelId: 'enabled-model',
+        roles: ['niche_normalization']
+      }
+    });
+    await repository.upsertModel({
+      provider_id: goodId,
+      model_id: 'enabled-model',
+      display_name: 'Enabled',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 1,
+      enabled: true
+    });
+    await repository.upsertModel({
+      provider_id: goodId,
+      model_id: 'disabled-model',
+      display_name: 'Disabled',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 2,
+      enabled: false
+    });
+    await repository.upsertSecret({
+      provider_id: goodId,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      auth_tag: encrypted.authTag,
+      last4: encrypted.last4
+    });
+
+    const catalog = await resolvePersistedProviderCatalog(database, { encryptionKey: key });
+    const entry = catalog.entries.find((candidate) => candidate.provider.id === goodId);
+
+    expect(catalog.entries.map((candidate) => candidate.provider.id)).toEqual([goodId]);
+    expect(entry?.models.map((model) => model.id)).toEqual(['enabled-model']);
   });
 });

@@ -11,7 +11,10 @@ import {
   resolveJobHandler,
   type JobHandlers
 } from './handlers';
-import { resolvePersistedProviderCatalog } from './providers/provider-catalog';
+import {
+  ProviderCatalogCache,
+  resolvePersistedProviderCatalog
+} from './providers/provider-catalog';
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
 
@@ -229,7 +232,9 @@ export async function main(): Promise<void> {
     url: requiredEnvironment('SUPABASE_URL'),
     serviceRoleKey: requiredEnvironment('SUPABASE_SERVICE_ROLE_KEY')
   });
-  const normalizationCatalog = await resolvePersistedProviderCatalog(client);
+  const providerCatalog = new ProviderCatalogCache(() =>
+    resolvePersistedProviderCatalog(client)
+  );
   const queue = createQueue(client);
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -239,7 +244,10 @@ export async function main(): Promise<void> {
   try {
     await runWorkerLoop({
       queue,
-      handlers: createJobHandlers(client, { normalizationCatalog }),
+      handlers: createJobHandlers(client, {
+        resolveProviderCatalog: (forceRefresh) =>
+          providerCatalog.resolve(forceRefresh)
+      }),
       workerId: process.env.WORKER_ID ?? `${hostname()}-${process.pid}`,
       signal: controller.signal
     });

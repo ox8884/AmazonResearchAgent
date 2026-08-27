@@ -68,6 +68,8 @@ export type CopyKey =
   | 'modelId'
   | 'executable'
   | 'fixedArgs'
+  | 'networkScope'
+  | 'commandProfile'
   | 'saveProvider'
   | 'testConnection'
   | 'providerSaved'
@@ -152,6 +154,8 @@ export const COPY = {
     modelId: 'Model ID',
     executable: 'Command executable',
     fixedArgs: 'Fixed arguments (JSON array)',
+    networkScope: 'Network scope',
+    commandProfile: 'Command profile',
     saveProvider: '저장',
     testConnection: '연결 테스트',
     providerSaved: 'Provider 설정을 저장했습니다.',
@@ -233,6 +237,8 @@ export const COPY = {
     modelId: 'Model ID',
     executable: 'Command executable',
     fixedArgs: 'Fixed arguments (JSON array)',
+    networkScope: 'Network scope',
+    commandProfile: 'Command profile',
     saveProvider: 'Save',
     testConnection: 'Test connection',
     providerSaved: 'Provider settings saved.',

@@ -37,7 +37,8 @@ export {
   NormalizeOpportunitiesJobPayloadSchema,
   ProviderCapabilitySchema,
   ProviderKindSchema,
-  RouterModeSchema
+  RouterModeSchema,
+  TestAiProviderConnectionJobPayloadSchema
 } from './ai';
 export type {
   NormalizeOpportunitiesJobPayload,
@@ -50,5 +51,6 @@ export type {
   BillingType,
   ProviderCapability,
   ProviderKind,
-  RouterMode
+  RouterMode,
+  TestAiProviderConnectionJobPayload
 } from './ai';

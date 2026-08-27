@@ -77,8 +77,10 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(JSON.stringify(provider)).not.toContain('secret-key');
   });
 
-  it('uses a manual model descriptor when discovery is unavailable', async () => {
+  it('uses a manual model without network discovery when discovery is disabled', async () => {
+    let requestCount = 0;
     const mock = await startMockServer((_incoming, response) => {
+      requestCount += 1;
       response.statusCode = 503;
       response.end('unavailable');
     });
@@ -87,12 +89,58 @@ describe('OpenAI-compatible HTTP provider', () => {
       id: 'manual-http',
       baseUrl: mock.baseUrl,
       billingType: 'subscription',
-      manualModelId: 'manual-model'
+      manualModelId: 'manual-model',
+      modelDiscovery: 'disabled'
     };
     const provider = new OpenAiHttpProvider(config);
 
     const models = await provider.listModels();
 
     expect(models.map((model) => model.id)).toEqual(['manual-model']);
+    expect(requestCount).toBe(0);
+  });
+
+  it('does not hide a discovery outage behind a manual model', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 503;
+      response.end('unavailable');
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'manual-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'subscription',
+      manualModelId: 'manual-model',
+      timeoutMs: 1_000
+    });
+
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      status: 503,
+      retryable: true
+    });
+  });
+
+  it('does not follow provider redirects', async () => {
+    let requestCount = 0;
+    const mock = await startMockServer((_incoming, response) => {
+      requestCount += 1;
+      response.statusCode = 302;
+      response.setHeader('location', 'http://169.254.169.254/latest/meta-data');
+      response.end();
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'redirecting-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'free'
+    });
+
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      status: 302,
+      retryable: false
+    });
+    expect(requestCount).toBe(1);
   });
 });

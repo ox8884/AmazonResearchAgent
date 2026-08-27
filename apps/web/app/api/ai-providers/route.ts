@@ -30,20 +30,19 @@ import {
 import { AdminAuthError } from '../../../lib/server/admin-session';
 
 export const runtime = 'nodejs';
-
 const ProviderInputSchema = z.object({
   id: z.string().trim().min(1).max(120).optional(),
   name: z.string().trim().min(1).max(120),
   kind: ProviderKindSchema,
   billingType: BillingTypeSchema,
-  baseUrl: z.union([z.literal(''), z.url()]).transform((value) => value || undefined),
+  baseUrl: z
+    .union([z.literal(''), z.url()])
+    .optional()
+    .transform((value) => value || undefined),
+  networkScope: z.enum(['public', 'private', 'loopback']).default('public'),
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
-  executable: z.string().trim().transform((value) => value || undefined).optional(),
-  fixedArgs: z.array(z.string()).max(64).default([]),
-  promptMode: z.enum(['stdin', 'final_arg']).default('stdin'),
-  outputMode: z.enum(['json', 'text_to_json']).default('json'),
-  environmentAllowlist: z.array(z.string().trim().min(1)).max(32).default([]),
+  commandProfileId: z.string().trim().transform((value) => value || undefined).optional(),
   roles: z.array(AiRoleSchema).default([]),
   enabled: z.boolean().default(true),
   priority: z.number().int().nonnegative().default(100)
@@ -64,6 +63,7 @@ interface PublicModel {
   readonly billingType: string;
   readonly capabilities: readonly string[];
   readonly qualityRank: number;
+  readonly enabled: boolean;
 }
 
 interface PublicProvider {
@@ -74,6 +74,10 @@ interface PublicProvider {
   readonly enabled: boolean;
   readonly secretLast4: string | null;
   readonly roles: readonly string[];
+  readonly baseUrl: string | null;
+  readonly networkScope: 'public' | 'private' | 'loopback' | null;
+  readonly commandProfileId: string | null;
+  readonly modelId: string | null;
   readonly models: readonly PublicModel[];
 }
 
@@ -91,13 +95,18 @@ function jsonStrings(value: Json): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
+function jsonString(value: Json | undefined): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
 function publicModel(model: ModelRow): PublicModel {
   return {
     id: model.model_id,
     displayName: model.display_name,
     billingType: model.billing_type,
     capabilities: jsonStrings(model.capabilities),
-    qualityRank: model.quality_rank
+    qualityRank: model.quality_rank,
+    enabled: model.enabled
   };
 }
 
@@ -112,18 +121,31 @@ function publicProvider(
     !Array.isArray(provider.config)
       ? provider.config
       : {};
+  const networkScope = jsonString(config.networkScope);
   return {
     id: provider.id,
     name: provider.name,
     kind: provider.kind,
     billingType: provider.billing_type,
     enabled: provider.enabled,
-    secretLast4: secret?.last4 ?? null,
+    secretLast4: secret?.last4 ? secret.last4 : null,
     roles: jsonStrings(config.roles ?? null),
+    baseUrl: jsonString(config.baseUrl),
+    networkScope:
+      networkScope === 'public' ||
+      networkScope === 'private' ||
+      networkScope === 'loopback'
+        ? networkScope
+        : null,
+    commandProfileId: jsonString(config.commandProfileId),
+    modelId:
+      jsonString(config.manualModelId) ??
+      jsonString(config.modelId) ??
+      models[0]?.model_id ??
+      null,
     models: models.map(publicModel)
   };
 }
-
 function providerConfig(input: ProviderInput): Json {
   if (input.kind === 'openai_http') {
     if (!input.baseUrl) {
@@ -131,22 +153,20 @@ function providerConfig(input: ProviderInput): Json {
     }
     return {
       baseUrl: input.baseUrl,
+      networkScope: input.networkScope,
+      modelDiscovery: input.modelId ? 'disabled' : 'enabled',
       ...(input.modelId ? { manualModelId: input.modelId } : {}),
       roles: input.roles
     };
   }
-  if (!input.executable || !input.modelId) {
+  if (!input.commandProfileId || !input.modelId) {
     throw new ProviderConfigurationError(
-      'Executable and model ID are required for command providers.'
+      'Command profile and model ID are required for command providers.'
     );
   }
   return {
-    executable: input.executable,
-    fixedArgs: input.fixedArgs,
+    commandProfileId: input.commandProfileId,
     modelId: input.modelId,
-    promptMode: input.promptMode,
-    outputMode: input.outputMode,
-    environmentAllowlist: input.environmentAllowlist,
     roles: input.roles
   };
 }

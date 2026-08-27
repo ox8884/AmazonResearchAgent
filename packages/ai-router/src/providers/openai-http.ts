@@ -46,6 +46,12 @@ const DEFAULT_CAPABILITIES = [
   'health'
 ] as const satisfies readonly ProviderCapability[];
 
+const RETRY_STATUS_CODES = [
+  408,
+  429,
+  ...Array.from({ length: 100 }, (_, index) => 500 + index)
+];
+
 export interface OpenAiHttpProviderConfig {
   readonly id: string;
   readonly baseUrl: string;
@@ -53,6 +59,7 @@ export interface OpenAiHttpProviderConfig {
   readonly apiKey?: string;
   readonly manualModelId?: string;
   readonly qualityRank?: number;
+  readonly modelDiscovery?: 'enabled' | 'disabled';
   readonly timeoutMs?: number;
 }
 
@@ -150,10 +157,11 @@ export class OpenAiHttpProvider implements RawAiProvider {
     this.http = ky.create({
       prefixUrl: this.config.baseUrl,
       timeout: config.timeoutMs ?? 60_000,
+      redirect: 'manual',
       retry: {
         limit: 2,
         methods: ['get', 'post'],
-        statusCodes: [408, 429, 500, 502, 503, 504]
+        statusCodes: RETRY_STATUS_CODES
       },
       hooks: {
         beforeRequest: [
@@ -188,13 +196,27 @@ export class OpenAiHttpProvider implements RawAiProvider {
   }
 
   async listModels(): Promise<readonly AiModelDescriptor[]> {
+    if (this.config.modelDiscovery === 'disabled') {
+      if (!this.config.manualModelId) {
+        throw new OpenAiHttpError(
+          'Manual model ID is required when discovery is disabled.',
+          null,
+          false
+        );
+      }
+      return [descriptor(this.config, this.config.manualModelId, false)];
+    }
     try {
       const response = ModelsResponseSchema.parse(
         await this.http.get('models').json<unknown>()
       );
       return response.data.map((model) => descriptor(this.config, model.id, true));
     } catch (error) {
-      if (this.config.manualModelId) {
+      if (
+        error instanceof HTTPError &&
+        [404, 405].includes(error.response.status) &&
+        this.config.manualModelId
+      ) {
         return [descriptor(this.config, this.config.manualModelId, false)];
       }
       throw mapError(error);

@@ -41,6 +41,8 @@ export const AiRequestSchema = z.object({
     .array(ProviderCapabilitySchema)
     .min(1)
     .default(['structured_json']),
+  primaryProviderId: z.string().trim().min(1).optional(),
+  excludeProviderIds: z.array(z.string().trim().min(1)).default([]),
   payload: JsonObjectSchema
 });
 export type AiRequest = z.infer<typeof AiRequestSchema>;
@@ -96,4 +98,11 @@ export const NormalizeOpportunitiesJobPayloadSchema = z.object({
 });
 export type NormalizeOpportunitiesJobPayload = z.infer<
   typeof NormalizeOpportunitiesJobPayloadSchema
+>;
+
+export const TestAiProviderConnectionJobPayloadSchema = z.object({
+  providerId: z.string().trim().min(1)
+});
+export type TestAiProviderConnectionJobPayload = z.infer<
+  typeof TestAiProviderConnectionJobPayloadSchema
 >;

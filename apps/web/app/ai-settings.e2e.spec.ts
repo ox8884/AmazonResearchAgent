@@ -2,6 +2,14 @@ import { expect, test } from '@playwright/test';
 
 test('saves a custom provider without redisplaying the secret', async ({ page }) => {
   await page.route('**/api/ai-providers', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ providers: [] })
+      });
+      return;
+    }
     if (route.request().method() !== 'POST') {
       await route.continue();
       return;

@@ -97,12 +97,18 @@ export function routeAiRequest(
 ): RouteDecision {
   const candidates: RouteCandidate[] = [];
   const checkedProviderIds: string[] = [];
+  const excludedProviderIds = new Set(request.excludeProviderIds);
+  if (
+    request.role === 'strong_cross_validation' &&
+    request.primaryProviderId
+  ) {
+    excludedProviderIds.add(request.primaryProviderId);
+  }
   for (const entry of catalog.entries) {
-    if (
-      entry.roles &&
-      entry.roles.length > 0 &&
-      !entry.roles.includes(request.role)
-    ) {
+    if (excludedProviderIds.has(entry.provider.id)) {
+      continue;
+    }
+    if (!entry.roles || !entry.roles.includes(request.role)) {
       continue;
     }
     checkedProviderIds.push(entry.provider.id);

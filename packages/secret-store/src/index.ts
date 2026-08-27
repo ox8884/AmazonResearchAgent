@@ -56,7 +56,7 @@ export function encryptSecret(
       ciphertext: ciphertext.toString('base64'),
       iv: iv.toString('base64'),
       authTag: cipher.getAuthTag().toString('base64'),
-      last4: plaintext.slice(-4)
+      last4: plaintext.length < 8 ? '' : plaintext.slice(-4)
     };
   } catch (error) {
     throw new SecretStoreError('Unable to encrypt provider secret.', error);
