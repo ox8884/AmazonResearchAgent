@@ -103,6 +103,9 @@ importers:
       '@ara/shared':
         specifier: workspace:*
         version: link:../shared
+      ky:
+        specifier: 1.14.3
+        version: 1.14.3
       zod:
         specifier: 4.4.3
         version: 4.4.3
