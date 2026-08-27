@@ -96,10 +96,10 @@ class CapacityProvider extends FakeNormalizationProvider {
 }
 
 function databaseClient() {
-  if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error('Supabase integration environment is required.');
-  }
-  return createServerDatabaseClient({ url: supabaseUrl, serviceRoleKey });
+  return createServerDatabaseClient({
+    url: supabaseUrl ?? 'http://127.0.0.1:54321',
+    serviceRoleKey: serviceRoleKey ?? 'integration-test-not-configured'
+  });
 }
 
 async function seedCandidates(
