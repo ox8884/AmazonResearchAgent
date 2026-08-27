@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "id": "B0SINKMAT1",
+      "type": "products",
+      "attributes": {
+        "title": "Silicone Faucet Mat Sink Splash Guard",
+        "brand": "GenericHome",
+        "price": 12.99,
+        "reviews": 420,
+        "rating": 4.4,
+        "parent_asin": "B0SINKPARENT",
+        "seller_type": "FBA",
+        "category": "Kitchen & Dining",
+        "rank": 1200,
+        "weight": 0.4,
+        "listing_date": "2024-03-01",
+        "units_sold_30": 350,
+        "revenue_30": 4546.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    },
+    {
+      "id": "B0MISSING1",
+      "type": "products",
+      "attributes": {
+        "title": "NiuYichee Sink Drip Catcher",
+        "brand": "NiuYichee",
+        "price": null,
+        "reviews": 12,
+        "rating": null,
+        "parent_asin": null,
+        "seller_type": "FBM",
+        "category": "Kitchen & Dining",
+        "rank": null,
+        "weight": null,
+        "listing_date": null,
+        "units_sold_30": 3505,
+        "revenue_30": 9449,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    }
+  ]
+}
