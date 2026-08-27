@@ -352,4 +352,34 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(secret).toEqual({ ciphertext: 'old-cipher', last4: 'old4' });
     expect(models).toEqual([]);
   });
+
+  it('lets only the current analysis owner renew the lease', async () => {
+    const providerId = await seedProvider();
+    const hash = 'b'.repeat(64);
+    const claimed = await sql<{ analysis_id: string }[]>`
+      select analysis_id from claim_ai_analysis(
+        'niche_normalization',
+        ${hash},
+        'worker-a',
+        30,
+        ${providerId},
+        'model-1',
+        'ko',
+        'v1',
+        '{}'::jsonb
+      )
+    `;
+    const analysisId = claimed[0]?.analysis_id;
+    if (!analysisId) {
+      throw new Error('Expected claimed analysis');
+    }
+    const [owner] = await sql<{ result: boolean }[]>`
+      select renew_ai_analysis_lease(${analysisId}::uuid, 'worker-a', 30) as result
+    `;
+    const [other] = await sql<{ result: boolean }[]>`
+      select renew_ai_analysis_lease(${analysisId}::uuid, 'worker-b', 30) as result
+    `;
+    expect(owner?.result).toBe(true);
+    expect(other?.result).toBe(false);
+  });
 });

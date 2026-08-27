@@ -74,4 +74,21 @@ describe('keyword normalization output', () => {
       })
     ).toThrow();
   });
+
+  it('rejects unknown fields instead of stripping them', () => {
+    expect(() =>
+      KeywordNormalizationSchema.parse({
+        classification: 'product_niche',
+        canonicalNiche: 'Batter / Pancake Dispenser',
+        canonicalEnglish: 'Batter / Pancake Dispenser',
+        catalogPhrases: ['pancake dispenser'],
+        aliases: ['batter squeeze bottle'],
+        productFit: 'strong',
+        riskFlags: [],
+        confidence: 0.94,
+        reason: 'Equivalent product phrases describe one dispensing niche.',
+        classificaton: 'product_niche'
+      })
+    ).toThrow();
+  });
 });

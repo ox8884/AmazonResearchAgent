@@ -96,9 +96,9 @@ function canonicalKey(value: string): string {
   return value
     .normalize('NFKC')
     .toLocaleLowerCase('en-US')
-    .trim()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function isCapacityError(error: unknown): boolean {
@@ -304,8 +304,52 @@ async function completeAnalysis(
     cost_class: result.costClass,
     completed_at: result.completedAt
   });
-  if (error || !data) {
+  if (error) {
     throw new NormalizationJobError('complete AI analysis.', error);
+  }
+  if (!data) {
+    throw new AnalysisClaimBusyError();
+  }
+}
+
+async function renewAnalysisLease(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string
+): Promise<boolean> {
+  const { data, error } = await client.rpc('renew_ai_analysis_lease', {
+    analysis_id: analysisId,
+    worker_id: workerId,
+    lease_seconds: 120
+  });
+  if (error) {
+    throw new NormalizationJobError('renew AI analysis lease.', error);
+  }
+  return Boolean(data);
+}
+
+async function withAnalysisHeartbeat<T>(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const timer = setInterval(() => {
+    void renewAnalysisLease(client, analysisId, workerId).then((owned) => {
+      if (!owned) {
+        clearInterval(timer);
+      }
+    });
+  }, 30_000);
+  try {
+    const result = await work();
+    const owned = await renewAnalysisLease(client, analysisId, workerId);
+    if (!owned) {
+      throw new AnalysisClaimBusyError();
+    }
+    return result;
+  } finally {
+    clearInterval(timer);
   }
 }
 
@@ -378,7 +422,7 @@ async function persistDecision(
         decided_by: promptVersion,
         idempotency_key: `ai-normalization:${candidate.id}:${analysisId}:${state}`
       },
-      { onConflict: 'idempotency_key' }
+      { onConflict: 'idempotency_key', ignoreDuplicates: true }
     );
   if (decisionError) {
     throw new NormalizationJobError('persist normalized decision.', decisionError);
@@ -451,14 +495,20 @@ async function normalizeCandidate(
   const reused = result !== null;
   if (!result) {
     try {
-      result = await dependencies.provider.runStructured({
-        role: 'niche_normalization',
-        modelId: dependencies.modelId,
-        locale,
-        prompt: buildNormalizationPrompt(candidate.keyword, locale),
-        inputHash: hash,
-        schema: KeywordNormalizationSchema
-      });
+      result = await withAnalysisHeartbeat(
+        dependencies.client,
+        claim.analysisId,
+        workerId,
+        () =>
+          dependencies.provider.runStructured({
+            role: 'niche_normalization',
+            modelId: dependencies.modelId,
+            locale,
+            prompt: buildNormalizationPrompt(candidate.keyword, locale),
+            inputHash: hash,
+            schema: KeywordNormalizationSchema
+          })
+      );
       await completeAnalysis(
         dependencies.client,
         claim.analysisId,
@@ -467,7 +517,7 @@ async function normalizeCandidate(
       );
     } catch (error) {
       await failAnalysis(dependencies.client, claim.analysisId, workerId);
-      if (!isCapacityError(error)) {
+      if (error instanceof AnalysisClaimBusyError || !isCapacityError(error)) {
         throw error;
       }
       await deferForCapacity(

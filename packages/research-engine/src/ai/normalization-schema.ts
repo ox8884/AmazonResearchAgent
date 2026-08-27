@@ -35,7 +35,7 @@ export const KeywordNormalizationSchema = z.object({
   ),
   confidence: z.number().min(0).max(1),
   reason: z.string().trim().min(1).max(800)
-});
+}).strict();
 export type KeywordNormalization = z.infer<typeof KeywordNormalizationSchema>;
 
 export function buildNormalizationPrompt(

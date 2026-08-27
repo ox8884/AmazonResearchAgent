@@ -825,6 +825,14 @@ export type Database = {
         }
         Returns: boolean
       }
+      renew_ai_analysis_lease: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          lease_seconds: number
+        }
+        Returns: boolean
+      }
       upsert_niche_cluster: {
         Args: {
           canonical_key: string
