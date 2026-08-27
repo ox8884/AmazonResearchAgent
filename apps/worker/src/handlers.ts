@@ -1,9 +1,17 @@
 import { createHash } from 'node:crypto';
 import {
+  routeAiRequest,
+  type AiProvider,
+  type AiProviderResult,
+  type ProviderCatalog,
+  type ProviderHealth,
+  type StructuredAiRequest
+} from '@ara/ai-router';
+import {
+  AiRequestSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema
 } from '@ara/shared';
-import type { AiProvider } from '@ara/ai-router';
 import type { Job, JobType, QueueDatabaseClient } from '@ara/queue';
 import {
   runImportJob,
@@ -23,9 +31,46 @@ export type JobHandler = (
   context: JobExecutionContext
 ) => Promise<unknown>;
 
+class DeferredAiCapacityError extends Error {
+  readonly retryable = true;
+
+  constructor() {
+    super('No eligible AI provider is currently available.');
+    this.name = 'DeferredAiCapacityError';
+  }
+}
+
+class DeferredAiProvider implements AiProvider {
+  readonly id = 'deferred-ai-capacity';
+  readonly billingType = 'subscription' as const;
+
+  async health(): Promise<ProviderHealth> {
+    return {
+      available: false,
+      checkedAt: new Date().toISOString(),
+      reason: 'No eligible AI provider is currently available.',
+      retryAfterSeconds: 60
+    };
+  }
+
+  async listModels() {
+    return [];
+  }
+
+  async runStructured<T>(
+    request: StructuredAiRequest<T>
+  ): Promise<AiProviderResult<T>> {
+    void request;
+    throw new DeferredAiCapacityError();
+  }
+}
+
+const deferredAiProvider = new DeferredAiProvider();
+
 
 export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
+  readonly normalizationCatalog?: ProviderCatalog;
 }
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
@@ -108,18 +153,36 @@ export function createJobHandlers(
     }
   };
 
-  if (options.normalizationProvider) {
+  if (options.normalizationProvider || options.normalizationCatalog) {
     handlers.NORMALIZE_OPPORTUNITIES = async (job, context) => {
       const payload = NormalizeOpportunitiesJobPayloadSchema.parse(job.payload);
-      if (payload.providerId !== options.normalizationProvider?.id) {
-        throw new Error('Normalization provider does not match the job payload.');
+      let provider = options.normalizationProvider ?? deferredAiProvider;
+      let modelId = payload.modelId ?? 'deferred-ai-model';
+
+      if (options.normalizationCatalog) {
+        const request = AiRequestSchema.parse({
+          role: 'niche_normalization',
+          routerMode: 'Balanced',
+          locale: payload.locale,
+          allowPaidFallback: false,
+          payload: { candidateIds: payload.candidateIds }
+        });
+        const decision = routeAiRequest(request, options.normalizationCatalog);
+        if (decision.kind === 'route') {
+          provider = decision.provider;
+          modelId = decision.model.id;
+        } else {
+          provider = deferredAiProvider;
+        }
       }
+
+      throwIfAborted(context.signal);
       const result = await runNormalizeJob(
         { candidateIds: payload.candidateIds, locale: payload.locale },
         {
           client,
-          provider: options.normalizationProvider,
-          modelId: payload.modelId,
+          provider,
+          modelId,
           promptVersion: payload.promptVersion,
           onCheckpoint: (value) => context.saveCheckpoint(value)
         }

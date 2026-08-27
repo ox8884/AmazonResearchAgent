@@ -139,11 +139,12 @@ function usageFromResponse(
 export class OpenAiHttpProvider implements RawAiProvider {
   readonly id: string;
   readonly billingType: BillingType;
-  private readonly config: OpenAiHttpProviderConfig;
+  private readonly config: Omit<OpenAiHttpProviderConfig, 'apiKey'>;
   private readonly http: typeof ky;
 
   constructor(config: OpenAiHttpProviderConfig) {
-    this.config = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
+    const { apiKey, ...safeConfig } = config;
+    this.config = { ...safeConfig, baseUrl: normalizeBaseUrl(config.baseUrl) };
     this.id = config.id;
     this.billingType = config.billingType;
     this.http = ky.create({
@@ -157,8 +158,8 @@ export class OpenAiHttpProvider implements RawAiProvider {
       hooks: {
         beforeRequest: [
           (request) => {
-            if (this.config.apiKey) {
-              request.headers.set('authorization', `Bearer ${this.config.apiKey}`);
+            if (apiKey) {
+              request.headers.set('authorization', `Bearer ${apiKey}`);
             }
           }
         ]

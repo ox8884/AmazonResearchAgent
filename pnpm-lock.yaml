@@ -99,6 +99,9 @@ importers:
       '@ara/research-engine':
         specifier: workspace:*
         version: link:../../packages/research-engine
+      '@ara/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
       '@ara/shared':
         specifier: workspace:*
         version: link:../../packages/shared

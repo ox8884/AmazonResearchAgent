@@ -17,6 +17,7 @@
     "@ara/jungle-scout": "workspace:*",
     "@ara/queue": "workspace:*",
     "@ara/research-engine": "workspace:*",
+    "@ara/secret-store": "workspace:*",
     "@ara/shared": "workspace:*"
   },
   "devDependencies": {

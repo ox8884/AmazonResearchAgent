@@ -74,7 +74,7 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(result.output.classification).toBe('product_niche');
     expect(result.usage.totalTokens).toBe(13);
     expect(mock.authorization).toBe('Bearer secret-key');
-    expect(JSON.stringify(result)).not.toContain('secret-key');
+    expect(JSON.stringify(provider)).not.toContain('secret-key');
   });
 
   it('uses a manual model descriptor when discovery is unavailable', async () => {

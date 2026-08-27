@@ -1,0 +1,207 @@
+import { createServer, type Server } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { createProviderRepository, createServerDatabaseClient } from '@ara/db';
+import { routeAiRequest } from '@ara/ai-router';
+import { AiRequestSchema } from '@ara/shared';
+import { encryptSecret } from '@ara/secret-store';
+import { afterEach, describe, expect, it } from 'vitest';
+import { runNormalizeJob } from '../jobs/normalize-opportunities';
+import { resolvePersistedProviderCatalog } from './provider-catalog';
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const integration = supabaseUrl && serviceRoleKey ? describe : describe.skip;
+
+class MockOpenAiServer {
+  readonly server: Server;
+  readonly baseUrl: string;
+
+  private constructor(server: Server, baseUrl: string) {
+    this.server = server;
+    this.baseUrl = baseUrl;
+  }
+
+  static async start(): Promise<MockOpenAiServer> {
+    const server = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url === '/v1/models') {
+        response.end(JSON.stringify({ data: [{ id: 'catalog-model' }] }));
+        return;
+      }
+      if (request.url === '/v1/chat/completions') {
+        response.end(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            classification: 'product_niche',
+            canonicalNiche: 'Batter / Pancake Dispenser',
+            canonicalEnglish: 'Batter / Pancake Dispenser',
+            catalogPhrases: ['pancake dispenser'],
+            aliases: ['pancake dispenser bottle'],
+            productFit: 'strong',
+            riskFlags: [],
+            confidence: 0.95,
+            reason: 'Mock provider fixture.'
+          }) } }],
+          usage: { prompt_tokens: 4, completion_tokens: 8, total_tokens: 12 }
+        }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: 'not found' }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    return new MockOpenAiServer(server, `http://127.0.0.1:${address.port}/v1`);
+  }
+}
+
+function client() {
+  return createServerDatabaseClient({
+    url: supabaseUrl ?? 'http://127.0.0.1:54321',
+    serviceRoleKey: serviceRoleKey ?? 'integration-test-not-configured'
+  });
+}
+
+async function seedCandidate(
+  database: ReturnType<typeof client>
+): Promise<{ importRunId: string; candidateId: string }> {
+  const importRunId = randomUUID();
+  const rawId = randomUUID();
+  const candidateId = randomUUID();
+  const { error: importError } = await database.from('import_runs').insert({
+    id: importRunId,
+    submission_hash: `catalog-it-${importRunId}`,
+    file_count: 1,
+    total_row_count: 1,
+    unique_keyword_count: 1,
+    source_files: []
+  });
+  if (importError) throw importError;
+  const { error: rawError } = await database.from('raw_opportunity_keywords').insert({
+    id: rawId,
+    import_run_id: importRunId,
+    source_file_name: 'catalog-fixture.csv',
+    source_hash: `catalog-source-${importRunId}`,
+    source_row_number: 1,
+    row_hash: `catalog-row-${importRunId}`,
+    raw_row_text: 'pancake dispenser bottle',
+    raw_row: { Keyword: 'pancake dispenser bottle' },
+    parsed_row: { keyword: 'pancake dispenser bottle' },
+    keyword: 'pancake dispenser bottle',
+    normalized_exact_keyword: 'pancake dispenser bottle',
+    is_exact_duplicate: false
+  });
+  if (rawError) throw rawError;
+  const { error: candidateError } = await database.from('candidates').insert({
+    id: candidateId,
+    import_run_id: importRunId,
+    representative_raw_keyword_id: rawId,
+    keyword: 'pancake dispenser bottle',
+    normalized_exact_keyword: 'pancake dispenser bottle',
+    state: 'AI Screening',
+    rule_passed: true,
+    rule_reasons: [],
+    risk_flags: [],
+    preliminary_score: 80,
+    preliminary_score_components: {},
+    eligible_for_ai_normalization: true
+  });
+  if (candidateError) throw candidateError;
+  return { importRunId, candidateId };
+}
+
+integration('persisted provider catalog', () => {
+  const database = client();
+  const providerIds: string[] = [];
+  const importRunIds: string[] = [];
+  let mock: MockOpenAiServer | undefined;
+
+  afterEach(async () => {
+    mock?.server.close();
+    mock = undefined;
+    for (const providerId of providerIds.splice(0)) {
+      await database.from('ai_usage').delete().eq('provider_id', providerId);
+      await database.from('ai_analyses').delete().eq('provider_id', providerId);
+      await database.from('ai_providers').delete().eq('id', providerId);
+    }
+    for (const importRunId of importRunIds.splice(0)) {
+      await database.from('import_runs').delete().eq('id', importRunId);
+    }
+    const { data: clusters } = await database
+      .from('niche_clusters')
+      .select('id')
+      .eq('canonical_name', 'Batter / Pancake Dispenser');
+    const clusterIds = clusters?.map((cluster) => cluster.id) ?? [];
+    if (clusterIds.length > 0) {
+      await database.from('niche_cluster_keywords').delete().in('niche_cluster_id', clusterIds);
+      await database.from('niche_clusters').delete().in('id', clusterIds);
+    }
+  });
+
+  it('resolves persisted settings into a router catalog and normalization provider', async () => {
+    mock = await MockOpenAiServer.start();
+    const providerId = `catalog-provider-${randomUUID()}`;
+    providerIds.push(providerId);
+    const key = Buffer.alloc(32, 9);
+    const encrypted = encryptSecret('persisted-secret-value', key);
+    const repository = createProviderRepository(database);
+    await repository.upsertProvider({
+      id: providerId,
+      name: 'Catalog mock provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: {
+        baseUrl: mock.baseUrl,
+        manualModelId: 'catalog-model',
+        roles: ['niche_normalization']
+      }
+    });
+    await repository.upsertModel({
+      provider_id: providerId,
+      model_id: 'catalog-model',
+      display_name: 'Catalog model',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 1
+    });
+    await repository.upsertSecret({
+      provider_id: providerId,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      auth_tag: encrypted.authTag,
+      last4: encrypted.last4
+    });
+
+    const catalog = await resolvePersistedProviderCatalog(database, { encryptionKey: key });
+    const request = AiRequestSchema.parse({
+      role: 'niche_normalization',
+      routerMode: 'Balanced',
+      locale: 'ko',
+      payload: { keyword: 'pancake dispenser bottle' }
+    });
+    const decision = routeAiRequest(request, catalog);
+    const fixture = await seedCandidate(database);
+    importRunIds.push(fixture.importRunId);
+    if (decision.kind !== 'route') throw new Error('Expected the persisted provider to be routable.');
+
+    const result = await runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko' },
+      { client: database, provider: decision.provider, modelId: decision.model.id }
+    );
+    const { data: candidate } = await database
+      .from('candidates')
+      .select('state,niche_cluster_id')
+      .eq('id', fixture.candidateId)
+      .single();
+
+    expect(decision.providerId).toBe(providerId);
+    expect(result.clusteredCount).toBe(1);
+    expect(candidate?.state).toBe('Ready for API Validation');
+    expect(JSON.stringify(catalog)).not.toContain('persisted-secret-value');
+    expect(JSON.stringify(decision.provider)).not.toContain('persisted-secret-value');
+  });
+});

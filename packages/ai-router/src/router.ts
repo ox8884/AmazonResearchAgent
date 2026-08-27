@@ -14,6 +14,7 @@ export interface ProviderCatalogEntry {
   readonly provider: AiProvider;
   readonly enabled: boolean;
   readonly priority: number;
+  readonly roles?: readonly AiRole[];
   readonly rolePriority?: Partial<Record<AiRole, number>>;
   readonly health: ProviderHealth;
   readonly models: readonly AiModelDescriptor[];
@@ -97,6 +98,13 @@ export function routeAiRequest(
   const candidates: RouteCandidate[] = [];
   const checkedProviderIds: string[] = [];
   for (const entry of catalog.entries) {
+    if (
+      entry.roles &&
+      entry.roles.length > 0 &&
+      !entry.roles.includes(request.role)
+    ) {
+      continue;
+    }
     checkedProviderIds.push(entry.provider.id);
     if (!entry.enabled || !entry.health.available) {
       continue;

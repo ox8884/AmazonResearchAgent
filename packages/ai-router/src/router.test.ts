@@ -175,4 +175,26 @@ describe('AI routing policy', () => {
       expect(decision.model.id).toBe('responses-model');
     }
   });
+
+  it('does not route a provider outside its assigned roles', () => {
+    const providerInstance = provider('classification-only', 'free');
+    const decision = routeAiRequest(
+      request(),
+      catalog([
+        {
+          provider: providerInstance,
+          enabled: true,
+          priority: 1,
+          roles: ['bulk_classification'],
+          health: healthy,
+          models: [model('classification-only', 'model', 'free', 1)]
+        }
+      ])
+    );
+
+    expect(decision).toMatchObject({
+      kind: 'defer',
+      reason: 'WAITING_FOR_AI_CAPACITY'
+    });
+  });
 });
