@@ -9,6 +9,7 @@ import {
 } from '@ara/ai-router';
 import {
   AiRequestSchema,
+  MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
   TestAiProviderConnectionJobPayloadSchema
@@ -19,7 +20,10 @@ import {
   type ImportSourceFile
 } from './jobs/import-opportunity-csv';
 import { runProviderConnectionTest } from './jobs/test-ai-provider';
+import { runMarketProbe } from './jobs/market-probe';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
+import type { MemoryApiBudget } from '@ara/api-budget';
+import type { ProductDatabasePage } from '@ara/jungle-scout';
 
 export interface JobExecutionContext {
   signal: AbortSignal;
@@ -73,6 +77,8 @@ export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
   readonly normalizationCatalog?: ProviderCatalog;
   readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
+  readonly apiBudget?: MemoryApiBudget;
+  readonly queryProductDatabase?: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
 }
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
@@ -209,6 +215,23 @@ export function createJobHandlers(
       const checkpoint = { phase: 'completed', providerTest: result };
       context.setCheckpoint(checkpoint);
       return checkpoint;
+    };
+  }
+  const apiBudget = options.apiBudget;
+  const queryProductDatabase = options.queryProductDatabase;
+  if (apiBudget && queryProductDatabase) {
+    handlers.MARKET_PROBE = async (job, context) => {
+      const payload = MarketProbeJobPayloadSchema.parse(job.payload);
+      const result = await runMarketProbe(
+        { candidateId: payload.candidateId, locale: payload.locale },
+        {
+          client,
+          budget: apiBudget,
+          queryProductDatabase,
+          onCheckpoint: (value) => context.saveCheckpoint(value)
+        }
+      );
+      return result.checkpoint;
     };
   }
   return handlers;

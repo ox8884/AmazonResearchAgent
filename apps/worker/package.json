@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@ara/ai-router": "workspace:*",
+    "@ara/api-budget": "workspace:*",
     "@ara/db": "workspace:*",
     "@ara/jungle-scout": "workspace:*",
     "@ara/queue": "workspace:*",

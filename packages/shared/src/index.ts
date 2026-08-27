@@ -58,13 +58,17 @@ export type {
 export {
   ApiCacheKeyInputSchema,
   ApiCallPurposeSchema,
+  DeepValidationJobPayloadSchema,
   JungleScoutEndpointSchema,
+  MarketProbeJobPayloadSchema,
   MarketSnapshotSchema,
   makeApiCacheKey
 } from './jungle-scout';
 export type {
   ApiCacheKeyInput,
   ApiCallPurpose,
+  DeepValidationJobPayload,
   JungleScoutEndpoint,
+  MarketProbeJobPayload,
   MarketSnapshot
 } from './jungle-scout';

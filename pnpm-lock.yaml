@@ -90,6 +90,9 @@ importers:
       '@ara/ai-router':
         specifier: workspace:*
         version: link:../../packages/ai-router
+      '@ara/api-budget':
+        specifier: workspace:*
+        version: link:../../packages/api-budget
       '@ara/db':
         specifier: workspace:*
         version: link:../../packages/db

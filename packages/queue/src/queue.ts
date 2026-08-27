@@ -7,7 +7,10 @@ import {
 export type JobType =
   | 'IMPORT_OPPORTUNITY_CSV'
   | 'NORMALIZE_OPPORTUNITIES'
-  | 'TEST_AI_PROVIDER_CONNECTION';
+  | 'TEST_AI_PROVIDER_CONNECTION'
+  | 'MARKET_PROBE'
+  | 'DEEP_VALIDATION'
+  | 'ENRICH_STRONG_POTENTIAL';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type QueueDatabaseClient = ReturnType<typeof createServerDatabaseClient>;
 

@@ -35,13 +35,13 @@ function canonicalPhrases(phrases: readonly string[]): readonly string[] {
 
 export function makeApiCacheKey(input: ApiCacheKeyInput): string {
   const parsed = ApiCacheKeyInputSchema.parse(input);
-  return [
-    parsed.endpoint,
-    parsed.marketplace,
-    canonicalPhrases(parsed.phrases).join('\u0001'),
-    parsed.version,
-    JSON.stringify(parsed.filters)
-  ].join('\u0000');
+  return JSON.stringify({
+    endpoint: parsed.endpoint,
+    marketplace: parsed.marketplace,
+    phrases: canonicalPhrases(parsed.phrases),
+    version: parsed.version,
+    filters: parsed.filters
+  });
 }
 
 export const MarketSnapshotSchema = z.object({
@@ -53,3 +53,16 @@ export const MarketSnapshotSchema = z.object({
   confidence: z.number().min(0).max(1)
 });
 export type MarketSnapshot = z.infer<typeof MarketSnapshotSchema>;
+
+
+export const MarketProbeJobPayloadSchema = z.object({
+  candidateId: z.uuid(),
+  locale: z.enum(['ko', 'en'])
+});
+export type MarketProbeJobPayload = z.infer<typeof MarketProbeJobPayloadSchema>;
+
+export const DeepValidationJobPayloadSchema = z.object({
+  candidateId: z.uuid(),
+  locale: z.enum(['ko', 'en'])
+});
+export type DeepValidationJobPayload = z.infer<typeof DeepValidationJobPayloadSchema>;
