@@ -44,12 +44,18 @@ importers:
 
   apps/web:
     dependencies:
+      '@ara/ai-router':
+        specifier: workspace:*
+        version: link:../../packages/ai-router
       '@ara/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@ara/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@ara/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
       '@ara/shared':
         specifier: workspace:*
         version: link:../../packages/shared

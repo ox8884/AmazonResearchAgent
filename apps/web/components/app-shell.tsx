@@ -25,6 +25,7 @@ export function AppShell({
           <nav className="primary-nav" aria-label="Primary">
             <a href={localizedHref(locale)}>{copy.navHome}</a>
             <a href={localizedHref(locale, '/imports')}>{copy.navImports}</a>
+            <a href={localizedHref(locale, '/settings/ai')}>{copy.navAiSettings}</a>
           </nav>
           <LanguageSwitcher
             locale={locale}

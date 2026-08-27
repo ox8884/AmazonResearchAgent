@@ -583,6 +583,44 @@ export type Database = {
         }
         Relationships: []
       }
+      provider_secrets: {
+        Row: {
+          auth_tag: string
+          ciphertext: string
+          created_at: string
+          iv: string
+          last4: string
+          provider_id: string
+          rotated_at: string
+        }
+        Insert: {
+          auth_tag: string
+          ciphertext: string
+          created_at?: string
+          iv: string
+          last4: string
+          provider_id: string
+          rotated_at?: string
+        }
+        Update: {
+          auth_tag?: string
+          ciphertext?: string
+          created_at?: string
+          iv?: string
+          last4?: string
+          provider_id?: string
+          rotated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "provider_secrets_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: true
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       raw_opportunity_keywords: {
         Row: {
           created_at: string

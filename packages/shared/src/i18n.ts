@@ -56,7 +56,27 @@ export type CopyKey =
   | 'showcaseStates'
   | 'uploadTooMany'
   | 'uploadTooLarge'
-  | 'uploadInvalidFile';
+  | 'uploadInvalidFile'
+  | 'navAiSettings'
+  | 'aiSettingsTitle'
+  | 'aiSettingsDescription'
+  | 'providerName'
+  | 'billingType'
+  | 'providerKind'
+  | 'baseUrl'
+  | 'apiKey'
+  | 'modelId'
+  | 'executable'
+  | 'fixedArgs'
+  | 'saveProvider'
+  | 'testConnection'
+  | 'providerSaved'
+  | 'secretStored'
+  | 'connectionReady'
+  | 'connectionUnavailable'
+  | 'noProviders'
+  | 'roleAssignments'
+  | 'providerEnabled';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -115,7 +135,27 @@ export const COPY = {
     showcaseStates: '폼 / 빈 상태 / 오류',
     uploadTooMany: 'CSV 파일은 최대 20개까지만 선택하세요.',
     uploadTooLarge: '각 CSV 파일은 10 MB 이하여야 합니다.',
-    uploadInvalidFile: '비어 있지 않은 CSV 파일만 선택할 수 있습니다.'
+    uploadInvalidFile: '비어 있지 않은 CSV 파일만 선택할 수 있습니다.',
+    navAiSettings: 'AI 설정',
+    aiSettingsTitle: 'AI Provider 설정',
+    aiSettingsDescription: 'AI provider를 추가하고 역할별 실행 경로를 관리합니다.',
+    providerName: 'Provider name',
+    billingType: 'Billing type',
+    providerKind: 'Provider kind',
+    baseUrl: 'Base URL',
+    apiKey: 'API Key',
+    modelId: 'Model ID',
+    executable: 'Command executable',
+    fixedArgs: 'Fixed arguments (JSON array)',
+    saveProvider: '저장',
+    testConnection: '연결 테스트',
+    providerSaved: 'Provider 설정을 저장했습니다.',
+    secretStored: '저장된 key',
+    connectionReady: 'Provider 연결 가능',
+    connectionUnavailable: 'Provider 연결 불가',
+    noProviders: '저장된 provider가 없습니다.',
+    roleAssignments: 'Role assignments',
+    providerEnabled: 'Provider enabled'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -171,7 +211,27 @@ export const COPY = {
     showcaseStates: 'Form / empty / error',
     uploadTooMany: 'Choose no more than 20 CSV files.',
     uploadTooLarge: 'Each CSV file must be no larger than 10 MB.',
-    uploadInvalidFile: 'Choose non-empty CSV files only.'
+    uploadInvalidFile: 'Choose non-empty CSV files only.',
+    navAiSettings: 'AI settings',
+    aiSettingsTitle: 'AI provider settings',
+    aiSettingsDescription: 'Add providers and manage role-specific execution routes.',
+    providerName: 'Provider name',
+    billingType: 'Billing type',
+    providerKind: 'Provider kind',
+    baseUrl: 'Base URL',
+    apiKey: 'API Key',
+    modelId: 'Model ID',
+    executable: 'Command executable',
+    fixedArgs: 'Fixed arguments (JSON array)',
+    saveProvider: 'Save',
+    testConnection: 'Test connection',
+    providerSaved: 'Provider settings saved.',
+    secretStored: 'Stored key',
+    connectionReady: 'Provider available',
+    connectionUnavailable: 'Provider unavailable',
+    noProviders: 'No providers have been saved.',
+    roleAssignments: 'Role assignments',
+    providerEnabled: 'Provider enabled'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

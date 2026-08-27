@@ -665,6 +665,80 @@ input[type="file"]::file-selector-button {
   font-weight: 600;
 }
 
+.ai-provider-form {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.field-stack--wide {
+  grid-column: 1 / -1;
+}
+
+.field-stack input:not([type="file"]):not([type="checkbox"]),
+.field-stack select {
+  min-height: 2.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
+}
+
+.field-stack input:not([type="file"]):not([type="checkbox"]):focus-visible,
+.field-stack select:focus-visible {
+  border-color: var(--accent);
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.checkbox-field input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.role-assignments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: var(--space-2) var(--space-4);
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.role-assignments legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.provider-result {
+  display: grid;
+  gap: var(--space-3);
+  border-block-start: 1px solid var(--border);
+  padding-block-start: var(--space-5);
+}
+
+.provider-result h2,
+.provider-result p {
+  margin-block-end: 0;
+}
+
 @media (max-width: 48rem) {
   .app-header__inner {
     flex-wrap: wrap;
@@ -694,6 +768,14 @@ input[type="file"]::file-selector-button {
 
   .page-heading--split .button {
     width: 100%;
+  }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .field-stack--wide {
+    grid-column: auto;
   }
 
   .data-row,

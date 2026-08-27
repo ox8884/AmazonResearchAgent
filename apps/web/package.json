@@ -12,8 +12,10 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@ara/ai-router": "workspace:*",
     "@ara/db": "workspace:*",
     "@ara/queue": "workspace:*",
+    "@ara/secret-store": "workspace:*",
     "@ara/shared": "workspace:*",
     "@supabase/supabase-js": "2.112.2",
     "ky": "1.14.3",
