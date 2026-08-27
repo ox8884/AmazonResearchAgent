@@ -328,12 +328,15 @@ describe('AI analysis and cluster hardening RPCs', () => {
             'auth_tag', 'new-tag',
             'last4', 'new4'
           ),
-          jsonb_build_object(
-            'model_id', 'broken-model',
-            'display_name', 'broken-model',
-            'capabilities', '[]'::jsonb,
-            'billing_type', 'not-a-billing-type'
-          )
+          jsonb_build_array(
+            jsonb_build_object(
+              'model_id', 'broken-model',
+              'display_name', 'broken-model',
+              'capabilities', '[]'::jsonb,
+              'billing_type', 'not-a-billing-type'
+            )
+          ),
+          'manual'
         )
       `
     ).rejects.toThrow();
@@ -381,5 +384,89 @@ describe('AI analysis and cluster hardening RPCs', () => {
     `;
     expect(owner?.result).toBe(true);
     expect(other?.result).toBe(false);
+  });
+
+  it('disables obsolete manual models and preserves priority on edit', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId},
+          'name', ${providerId},
+          'kind', 'command',
+          'billing_type', 'free',
+          'enabled', true,
+          'priority', 7,
+          'config', '{}'::jsonb
+        ),
+        null,
+        jsonb_build_array(
+          jsonb_build_object(
+            'model_id', 'old-model',
+            'display_name', 'old-model',
+            'capabilities', '["structured_json"]'::jsonb,
+            'billing_type', 'free',
+            'enabled', true,
+            'priority', 3,
+            'origin', 'manual'
+          )
+        ),
+        'manual'
+      )
+    `;
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId},
+          'name', ${providerId},
+          'kind', 'command',
+          'billing_type', 'free',
+          'enabled', true,
+          'priority', 7,
+          'config', '{}'::jsonb
+        ),
+        null,
+        jsonb_build_array(
+          jsonb_build_object(
+            'model_id', 'new-model',
+            'display_name', 'new-model',
+            'capabilities', '["structured_json"]'::jsonb,
+            'billing_type', 'free',
+            'enabled', true,
+            'priority', 4,
+            'origin', 'manual'
+          )
+        ),
+        'manual'
+      )
+    `;
+    const models = await sql<{ model_id: string; enabled: boolean; priority: number }[]>`
+      select model_id, enabled, priority from ai_models where provider_id = ${providerId}
+      order by model_id
+    `;
+    const [provider] = await sql<{ priority: number }[]>`
+      select priority from ai_providers where id = ${providerId}
+    `;
+    expect(provider?.priority).toBe(7);
+    expect(models).toEqual([
+      { model_id: 'new-model', enabled: true, priority: 4 },
+      { model_id: 'old-model', enabled: false, priority: 3 }
+    ]);
+  });
+
+  it('rate-limits admin login attempts in postgres', async () => {
+    await sql`update admin_login_guard set attempts = 0, scrypt_inflight = false, window_started_at = now() where bucket = 'admin-login'`;
+    const allowed = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(2, 300) as result
+    `;
+    const second = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(2, 300) as result
+    `;
+    const blocked = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(2, 300) as result
+    `;
+    expect(allowed[0]?.result).toBe(true);
+    expect(second[0]?.result).toBe(true);
+    expect(blocked[0]?.result).toBe(false);
   });
 });

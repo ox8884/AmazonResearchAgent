@@ -1,6 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent } from 'undici';
 
 export type ProviderNetworkScope = 'public' | 'private' | 'loopback';
 type AddressCategory = ProviderNetworkScope | 'blocked';
@@ -215,6 +215,7 @@ export function createPinnedProviderFetch(
   scope: ProviderNetworkScope,
   resolveAddress: ProviderAddressResolver = resolveAddresses
 ): typeof fetch {
+  const agents = new Map<string, Agent>();
   return async (input, init) => {
     const rawUrl =
       typeof input === 'string'
@@ -223,25 +224,56 @@ export function createPinnedProviderFetch(
           ? input.toString()
           : input.url;
     const pin = await pinProviderDestination(rawUrl, scope, resolveAddress);
-    const pinned = new URL(rawUrl);
-    pinned.hostname = pin.connectHost;
-    const headers = new Headers(init?.headers);
+    const original = new URL(rawUrl);
+    const origin = `${original.protocol}//${pin.connectHost}${original.port ? `:${original.port}` : ''}`;
+    const headers: string[] = [];
+    const incoming = new Headers(init?.headers);
     if (input instanceof Request) {
       input.headers.forEach((value, key) => {
-        if (!headers.has(key)) {
-          headers.set(key, value);
+        if (!incoming.has(key)) {
+          incoming.set(key, value);
         }
       });
     }
-    headers.set('host', pin.hostnameHeader);
-    const dispatcher = new Agent({
-      connect: { servername: pin.tlsServername }
+    incoming.forEach((value, key) => {
+      if (key.toLowerCase() !== 'host') {
+        headers.push(key, value);
+      }
     });
-    return undiciFetch(pinned, {
-      ...init,
+    headers.push('host', pin.hostnameHeader);
+    const existing = agents.get(pin.tlsServername);
+    const dispatcher =
+      existing ??
+      new Agent({
+        connect: { servername: pin.tlsServername }
+      });
+    if (!existing) {
+      agents.set(pin.tlsServername, dispatcher);
+    }
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const body =
+      init?.body ?? (input instanceof Request && method !== 'GET' && method !== 'HEAD' ? input.body : undefined);
+    const requested = await dispatcher.request({
+      origin,
+      path: `${original.pathname}${original.search}`,
+      method,
       headers,
-      dispatcher,
-      redirect: 'manual'
-    }) as unknown as Response;
+      body,
+      maxRedirections: 0
+    });
+    const responseHeaders = new Headers();
+    for (const [key, value] of Object.entries(requested.headers)) {
+      if (typeof value === 'string') {
+        responseHeaders.set(key, value);
+      } else if (Array.isArray(value)) {
+        for (const item of value) {
+          responseHeaders.append(key, item);
+        }
+      }
+    }
+    return new Response(requested.body, {
+      status: requested.statusCode,
+      headers: responseHeaders
+    });
   };
 }

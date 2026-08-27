@@ -1,6 +1,10 @@
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   ProviderUrlPolicyError,
+  createPinnedProviderFetch,
   pinProviderDestination,
   validateProviderBaseUrl,
   type ProviderAddressResolver
@@ -92,5 +96,26 @@ describe('worker provider URL policy', () => {
     expect(pinned.tlsServername).toBe('provider.example');
     expect(pinned.hostnameHeader).toBe('provider.example');
     expect(lookups).toBe(1);
+  });
+
+  it('connects to the validated IP while sending the original Host header', async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.socket.remoteAddress ?? ''}|${request.headers.host ?? ''}`);
+      response.statusCode = 200;
+      response.end('{"ok":true}');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    const fetchPinned = createPinnedProviderFetch('loopback', async () => [
+      { address: '127.0.0.1' }
+    ]);
+    const response = await fetchPinned(
+      `http://provider.example:${address.port}/v1/models`
+    );
+    server.close();
+    expect(response.status).toBe(200);
+    expect(seen[0]).toContain(`provider.example:${address.port}`);
   });
 });

@@ -9,9 +9,11 @@ import {
 } from '@ara/db';
 import {
   AiRoleSchema,
+  assertPersistableModelId,
   BillingTypeSchema,
   ProviderCapabilitySchema,
-  ProviderKindSchema
+  ProviderKindSchema,
+  UnsafeModelIdError
 } from '@ara/shared';
 import {
   encryptSecret,
@@ -42,6 +44,8 @@ const ProviderInputSchema = z.object({
   networkScope: z.enum(['public', 'private', 'loopback']).default('public'),
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
+  modelEnabled: z.boolean().default(true),
+  modelPriority: z.number().int().nonnegative().default(100),
   commandProfileId: z.string().trim().transform((value) => value || undefined).optional(),
   roles: z.array(AiRoleSchema).default([]),
   enabled: z.boolean().default(true),
@@ -64,6 +68,8 @@ interface PublicModel {
   readonly capabilities: readonly string[];
   readonly qualityRank: number;
   readonly enabled: boolean;
+  readonly priority: number;
+  readonly origin: string;
 }
 
 interface PublicProvider {
@@ -72,6 +78,7 @@ interface PublicProvider {
   readonly kind: string;
   readonly billingType: string;
   readonly enabled: boolean;
+  readonly priority: number;
   readonly secretLast4: string | null;
   readonly roles: readonly string[];
   readonly baseUrl: string | null;
@@ -106,7 +113,9 @@ function publicModel(model: ModelRow): PublicModel {
     billingType: model.billing_type,
     capabilities: jsonStrings(model.capabilities),
     qualityRank: model.quality_rank,
-    enabled: model.enabled
+    enabled: model.enabled,
+    priority: model.priority,
+    origin: model.origin
   };
 }
 
@@ -128,6 +137,7 @@ function publicProvider(
     kind: provider.kind,
     billingType: provider.billing_type,
     enabled: provider.enabled,
+    priority: provider.priority,
     secretLast4: secret?.last4 ? secret.last4 : null,
     roles: jsonStrings(config.roles ?? null),
     baseUrl: jsonString(config.baseUrl),
@@ -236,6 +246,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const providerId = input.id ?? `provider-${randomUUID()}`;
+    const modelId = input.modelId
+      ? assertPersistableModelId(input.modelId, input.apiKey?.trim())
+      : undefined;
     const provider = await repository.saveSettings({
       provider: {
         id: providerId,
@@ -244,7 +257,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         billing_type: input.billingType,
         enabled: input.enabled,
         priority: input.priority,
-        config: providerConfig(input)
+        config: providerConfig({ ...input, modelId })
       },
       secret: encrypted
         ? {
@@ -255,17 +268,22 @@ export async function POST(request: Request): Promise<NextResponse> {
             last4: encrypted.last4
           }
         : null,
-      model: input.modelId
-        ? {
-            provider_id: providerId,
-            model_id: input.modelId,
-            display_name: input.modelId,
-            capabilities: [...MODEL_CAPABILITIES],
-            billing_type: input.billingType,
-            quality_rank: 100,
-            enabled: true
-          }
-        : null
+      models: modelId
+        ? [
+            {
+              provider_id: providerId,
+              model_id: modelId,
+              display_name: modelId,
+              capabilities: [...MODEL_CAPABILITIES],
+              billing_type: input.billingType,
+              quality_rank: 100,
+              enabled: input.modelEnabled,
+              priority: input.modelPriority,
+              origin: 'manual'
+            }
+          ]
+        : [],
+      reconcileMode: modelId ? 'manual' : 'none'
     });
 
     const [secret, models] = await Promise.all([
@@ -280,7 +298,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (error instanceof AdminAuthError) {
       return adminAuthErrorResponse(error);
     }
-    if (error instanceof ProviderConfigurationError || error instanceof z.ZodError) {
+    if (
+      error instanceof ProviderConfigurationError ||
+      error instanceof z.ZodError ||
+      error instanceof UnsafeModelIdError
+    ) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }
     if (

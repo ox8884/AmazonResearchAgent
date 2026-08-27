@@ -1,5 +1,6 @@
 import { createProviderRepository } from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
+import { assertPersistableModelId, UnsafeModelIdError } from '@ara/shared';
 import {
   instantiatePersistedProvider,
   type PersistedProviderCatalogOptions
@@ -55,22 +56,49 @@ export async function runProviderConnectionTest(
     return unavailableResult(providerId, started, 'provider_unavailable');
   }
 
-  const discovered = await adapter.listModels();
+  let discovered;
+  try {
+    discovered = await adapter.listModels();
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return unavailableResult(providerId, started, 'provider_unavailable');
+    }
+    throw error;
+  }
+
   const repository = createProviderRepository(client);
+  const provider = await repository.findProvider(providerId);
+  if (!provider) {
+    return unavailableResult(providerId, started, 'provider_not_found');
+  }
   const existing = await repository.listModels(providerId);
   const enabledById = new Map(
     existing.map((model) => [model.model_id, model.enabled])
   );
-  for (const model of discovered) {
-    await repository.upsertModel({
-      provider_id: providerId,
-      model_id: model.id,
-      display_name: model.displayName,
-      capabilities: [...model.capabilities],
-      billing_type: model.billingType,
-      quality_rank: model.qualityRank,
-      enabled: enabledById.get(model.id) ?? true
+  try {
+    await repository.saveSettings({
+      provider,
+      secret: null,
+      models: discovered.map((model) => {
+        const modelId = assertPersistableModelId(model.id);
+        return {
+          provider_id: providerId,
+          model_id: modelId,
+          display_name: model.displayName,
+          capabilities: [...model.capabilities],
+          billing_type: model.billingType,
+          quality_rank: model.qualityRank,
+          enabled: enabledById.get(modelId) ?? true,
+          origin: 'discovered'
+        };
+      }),
+      reconcileMode: 'discovery'
     });
+  } catch (error: unknown) {
+    if (error instanceof UnsafeModelIdError || error instanceof Error) {
+      return unavailableResult(providerId, started, 'provider_misconfigured');
+    }
+    throw error;
   }
 
   return {

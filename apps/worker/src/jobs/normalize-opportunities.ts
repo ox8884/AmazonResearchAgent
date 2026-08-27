@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  InvalidStructuredOutputError,
   type AiProvider,
   type AiProviderResult
 } from '@ara/ai-router';
@@ -31,6 +32,8 @@ export interface NormalizeJobDependencies {
   readonly modelId: string;
   readonly workerId?: string;
   readonly promptVersion?: string;
+  readonly leaseSeconds?: number;
+  readonly heartbeatMs?: number;
   onCheckpoint?(checkpoint: NormalizeCheckpoint): Promise<void>;
 }
 
@@ -244,7 +247,7 @@ async function claimAnalysis(
     analysis_role: 'niche_normalization',
     analysis_input_hash: hash,
     worker_id: workerId,
-    lease_seconds: 120,
+    lease_seconds: dependencies.leaseSeconds ?? 120,
     provider_id: dependencies.provider.id,
     model_id: dependencies.modelId,
     analysis_locale: locale,
@@ -315,12 +318,13 @@ async function completeAnalysis(
 async function renewAnalysisLease(
   client: QueueDatabaseClient,
   analysisId: string,
-  workerId: string
+  workerId: string,
+  leaseSeconds: number
 ): Promise<boolean> {
   const { data, error } = await client.rpc('renew_ai_analysis_lease', {
     analysis_id: analysisId,
     worker_id: workerId,
-    lease_seconds: 120
+    lease_seconds: leaseSeconds
   });
   if (error) {
     throw new NormalizationJobError('renew AI analysis lease.', error);
@@ -332,18 +336,20 @@ async function withAnalysisHeartbeat<T>(
   client: QueueDatabaseClient,
   analysisId: string,
   workerId: string,
+  leaseSeconds: number,
+  heartbeatMs: number,
   work: () => Promise<T>
 ): Promise<T> {
   const timer = setInterval(() => {
-    void renewAnalysisLease(client, analysisId, workerId).then((owned) => {
+    void renewAnalysisLease(client, analysisId, workerId, leaseSeconds).then((owned) => {
       if (!owned) {
         clearInterval(timer);
       }
     });
-  }, 30_000);
+  }, heartbeatMs);
   try {
     const result = await work();
-    const owned = await renewAnalysisLease(client, analysisId, workerId);
+    const owned = await renewAnalysisLease(client, analysisId, workerId, leaseSeconds);
     if (!owned) {
       throw new AnalysisClaimBusyError();
     }
@@ -356,8 +362,19 @@ async function withAnalysisHeartbeat<T>(
 async function failAnalysis(
   client: QueueDatabaseClient,
   analysisId: string,
-  workerId: string
+  workerId: string,
+  usage: Json | null
 ): Promise<void> {
+  if (usage) {
+    const { error: usageError } = await client.rpc('record_failed_ai_usage', {
+      analysis_id: analysisId,
+      worker_id: workerId,
+      analysis_usage: usage
+    });
+    if (usageError) {
+      throw new NormalizationJobError('record failed AI usage.', usageError);
+    }
+  }
   const { error } = await client.rpc('fail_ai_analysis', {
     analysis_id: analysisId,
     worker_id: workerId,
@@ -499,6 +516,8 @@ async function normalizeCandidate(
         dependencies.client,
         claim.analysisId,
         workerId,
+        dependencies.leaseSeconds ?? 120,
+        dependencies.heartbeatMs ?? 30_000,
         () =>
           dependencies.provider.runStructured({
             role: 'niche_normalization',
@@ -516,7 +535,27 @@ async function normalizeCandidate(
         result
       );
     } catch (error) {
-      await failAnalysis(dependencies.client, claim.analysisId, workerId);
+      await failAnalysis(
+        dependencies.client,
+        claim.analysisId,
+        workerId,
+        error instanceof InvalidStructuredOutputError
+          ? asJson({
+              ...error.usage,
+              success: false,
+              repairAttempted: error.attempts.length > 1,
+              attempts: error.attempts.map((attempt) => ({
+                providerId: attempt.providerId,
+                modelId: attempt.modelId,
+                role: attempt.role,
+                usage: attempt.usage,
+                costClass: attempt.costClass,
+                startedAt: attempt.startedAt,
+                completedAt: attempt.completedAt
+              }))
+            })
+          : null
+      );
       if (error instanceof AnalysisClaimBusyError || !isCapacityError(error)) {
         throw error;
       }

@@ -79,6 +79,9 @@ export type CopyKey =
   | 'noProviders'
   | 'roleAssignments'
   | 'providerEnabled'
+  | 'providerPriority'
+  | 'modelEnabled'
+  | 'modelPriority'
   | 'adminLoginTitle'
   | 'adminPassword'
   | 'adminLogin'
@@ -165,6 +168,9 @@ export const COPY = {
     noProviders: '저장된 provider가 없습니다.',
     roleAssignments: 'Role assignments',
     providerEnabled: 'Provider enabled',
+    providerPriority: 'Provider priority',
+    modelEnabled: 'Model enabled',
+    modelPriority: 'Model priority',
     adminLoginTitle: '관리자 로그인',
     adminPassword: '관리자 비밀번호',
     adminLogin: '로그인',
@@ -248,6 +254,9 @@ export const COPY = {
     noProviders: 'No providers have been saved.',
     roleAssignments: 'Role assignments',
     providerEnabled: 'Provider enabled',
+    providerPriority: 'Provider priority',
+    modelEnabled: 'Model enabled',
+    modelPriority: 'Model priority',
     adminLoginTitle: 'Admin login',
     adminPassword: 'Admin password',
     adminLogin: 'Log in',

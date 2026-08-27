@@ -155,6 +155,7 @@ export type Database = {
           enabled: boolean
           id: string
           model_id: string
+          origin: string
           priority: number
           provider_id: string
           quality_rank: number
@@ -168,6 +169,7 @@ export type Database = {
           enabled?: boolean
           id?: string
           model_id: string
+          origin?: string
           priority?: number
           provider_id: string
           quality_rank?: number
@@ -848,9 +850,33 @@ export type Database = {
         Args: {
           provider_row: Json
           secret_row: Json | null
-          model_row: Json | null
+          models: Json | null
+          reconcile_mode: string
         }
         Returns: Json
+      }
+      consume_admin_login_attempt: {
+        Args: {
+          max_attempts: number
+          window_seconds: number
+        }
+        Returns: boolean
+      }
+      acquire_admin_login_scrypt: {
+        Args: Record<string, never>
+        Returns: boolean
+      }
+      release_admin_login_scrypt: {
+        Args: Record<string, never>
+        Returns: boolean
+      }
+      record_failed_ai_usage: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          analysis_usage: Json
+        }
+        Returns: boolean
       }
       checkpoint_job: {
         Args: {

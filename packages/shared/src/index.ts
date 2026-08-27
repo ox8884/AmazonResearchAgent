@@ -33,12 +33,15 @@ export {
   AiRequestSchema,
   AiRoleSchema,
   AiUsageSchema,
+  assertPersistableModelId,
   BillingTypeSchema,
+  ModelIdSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ProviderCapabilitySchema,
   ProviderKindSchema,
   RouterModeSchema,
-  TestAiProviderConnectionJobPayloadSchema
+  TestAiProviderConnectionJobPayloadSchema,
+  UnsafeModelIdError
 } from './ai';
 export type {
   NormalizeOpportunitiesJobPayload,

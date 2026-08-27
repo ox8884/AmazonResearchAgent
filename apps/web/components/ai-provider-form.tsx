@@ -18,7 +18,9 @@ const ProviderModelSchema = z.object({
   billingType: BillingTypeSchema,
   capabilities: z.array(z.string()),
   qualityRank: z.number(),
-  enabled: z.boolean().default(true)
+  enabled: z.boolean().default(true),
+  priority: z.number().default(100),
+  origin: z.string().default('manual')
 });
 
 const SavedProviderSchema = z.object({
@@ -27,6 +29,7 @@ const SavedProviderSchema = z.object({
   kind: ProviderKindSchema,
   billingType: BillingTypeSchema,
   enabled: z.boolean(),
+  priority: z.number().default(100),
   secretLast4: z.string().nullable(),
   roles: z.array(z.string()).default([]),
   baseUrl: z.string().nullable().optional(),
@@ -156,11 +159,14 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
       networkScope: formData.get('networkScope') ?? 'public',
       apiKey: formData.get('apiKey') ?? '',
       modelId: formData.get('modelId') ?? '',
+      modelEnabled: formData.get('modelEnabled') === 'on',
+      modelPriority: Number(formData.get('modelPriority') ?? 100),
       commandProfileId: formData.get('commandProfileId') ?? '',
       roles: formData
         .getAll('roles')
         .filter((value): value is string => typeof value === 'string'),
-      enabled: formData.get('enabled') === 'on'
+      enabled: formData.get('enabled') === 'on',
+      priority: Number(formData.get('priority') ?? 100)
     };
 
     try {
@@ -285,12 +291,40 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
             <span>{copy.providerEnabled}</span>
           </label>
           <div className="field-stack">
+            <label htmlFor="provider-priority">{copy.providerPriority}</label>
+            <input
+              id="provider-priority"
+              name="priority"
+              type="number"
+              min={0}
+              defaultValue={saved?.priority ?? 100}
+            />
+          </div>
+          <div className="field-stack">
             <label htmlFor="model-id">{copy.modelId}</label>
             <input
               id="model-id"
               name="modelId"
               placeholder="model-id"
               defaultValue={saved?.modelId ?? ''}
+            />
+          </div>
+          <label className="checkbox-field">
+            <input
+              name="modelEnabled"
+              type="checkbox"
+              defaultChecked={saved?.models[0]?.enabled ?? true}
+            />
+            <span>{copy.modelEnabled}</span>
+          </label>
+          <div className="field-stack">
+            <label htmlFor="model-priority">{copy.modelPriority}</label>
+            <input
+              id="model-priority"
+              name="modelPriority"
+              type="number"
+              min={0}
+              defaultValue={saved?.models[0]?.priority ?? 100}
             />
           </div>
           <div className="field-stack field-stack--wide">

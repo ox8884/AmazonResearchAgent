@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET as listProviders, POST as saveProvider } from '../../app/api/ai-providers/route';
 import { POST as testProvider } from '../../app/api/ai-providers/test/route';
 import { GET as getProviderTest } from '../../app/api/ai-provider-tests/[jobId]/route';
 import { POST as login } from '../../app/api/auth/login/route';
 import { hashAdminPassword } from './admin-session';
 import { loginRateLimit, loginScryptGate } from './abuse-guard';
+
+vi.mock('./login-guard', () => ({
+  consumeDurableLoginAttempt: async () => undefined,
+  withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
+}));
 
 const originalEnvironment = {
   ADMIN_PASSWORD_SCRYPT: process.env.ADMIN_PASSWORD_SCRYPT,

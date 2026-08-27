@@ -27,7 +27,8 @@ export interface ProviderRepository {
   saveSettings(input: {
     readonly provider: ProviderInsert;
     readonly secret: ProviderSecretInsert | null;
-    readonly model: ModelInsert | null;
+    readonly models: readonly ModelInsert[];
+    readonly reconcileMode: 'none' | 'manual' | 'discovery';
   }): Promise<ProviderRow>;
 }
 
@@ -138,7 +139,8 @@ export function createProviderRepository(
       const { error } = await client.rpc('save_ai_provider_settings', {
         provider_row: input.provider,
         secret_row: input.secret,
-        model_row: input.model
+        models: [...input.models],
+        reconcile_mode: input.reconcileMode
       });
       if (error) {
         throw new ProviderRepositoryError('save provider settings atomically', error);

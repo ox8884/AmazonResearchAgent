@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { createServerDatabaseClient } from '@ara/db';
 import {
+  InvalidStructuredOutputError,
   type AiProvider,
   type AiProviderResult,
   type ProviderHealth,
+  type RawAiProviderResult,
   type StructuredAiRequest
 } from '@ara/ai-router';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   AiUsageSchema,
   type AiModelDescriptor
 } from '@ara/shared';
-import { afterEach, describe, expect, it } from 'vitest';
 import {
   runNormalizeJob,
   type NormalizeJobInput
@@ -411,5 +413,128 @@ integration('opportunity normalization job', () => {
     await jobA;
 
     expect(provider.calls).toBe(1);
+  });
+
+  it('renews an analysis lease so a second worker cannot start another provider call', async () => {
+    class SlowProvider extends FakeNormalizationProvider {
+      override async runStructured<T>(
+        request: StructuredAiRequest<T>
+      ): Promise<AiProviderResult<T>> {
+        this.calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        this.calls -= 1;
+        return super.runStructured(request);
+      }
+    }
+    const provider = new SlowProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const fixture = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(fixture.importRunId);
+    const promptVersion = `it-${randomUUID()}`;
+    const jobA = runNormalizeJob(
+      { candidateIds: fixture.candidateIds, locale: 'ko' },
+      {
+        client,
+        provider,
+        modelId: 'fake-normalizer-model',
+        workerId: 'lease-a',
+        promptVersion,
+        leaseSeconds: 1,
+        heartbeatMs: 200
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await expect(
+      runNormalizeJob(
+        { candidateIds: fixture.candidateIds, locale: 'ko' },
+        {
+          client,
+          provider,
+          modelId: 'fake-normalizer-model',
+          workerId: 'lease-b',
+          promptVersion,
+          leaseSeconds: 1
+        }
+      )
+    ).rejects.toThrow('AI analysis is already leased by another worker.');
+    await jobA;
+    expect(provider.calls).toBe(1);
+  });
+
+  it('records durable usage after initial and repair structured failures', async () => {
+    const attempt = (isRepair: boolean): RawAiProviderResult => ({
+      rawOutput: '{"classification":"maybe"}',
+      providerId: 'unused',
+      modelId: 'usage-model',
+      role: 'niche_normalization',
+      inputHash: 'c'.repeat(64),
+      usage: {
+        inputTokens: 3,
+        outputTokens: 4,
+        totalTokens: 7,
+        requestCount: 1
+      },
+      costClass: 'subscription',
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(1).toISOString(),
+      ...(isRepair ? {} : {})
+    });
+    class BrokenStructuredProvider extends FakeNormalizationProvider {
+      override async runStructured<T>(
+        request: StructuredAiRequest<T>
+      ): Promise<AiProviderResult<T>> {
+        void request;
+        this.calls += 1;
+        throw new InvalidStructuredOutputError(
+          {
+            inputTokens: 6,
+            outputTokens: 8,
+            totalTokens: 14,
+            requestCount: 2
+          },
+          [attempt(false), attempt(true)]
+        );
+      }
+    }
+    const provider = new BrokenStructuredProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'subscription',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const fixture = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(fixture.importRunId);
+    await expect(
+      runNormalizeJob(
+        { candidateIds: fixture.candidateIds, locale: 'ko' },
+        { client, provider, modelId: 'usage-model', promptVersion: `it-${randomUUID()}` }
+      )
+    ).rejects.toBeInstanceOf(InvalidStructuredOutputError);
+    const { data: usage } = await client
+      .from('ai_usage')
+      .select('usage,provider_id,model_id,role')
+      .eq('provider_id', provider.id);
+    expect(usage).toHaveLength(1);
+    expect(usage?.[0]?.model_id).toBe('usage-model');
+    expect(usage?.[0]?.role).toBe('niche_normalization');
+    expect(usage?.[0]?.usage).toMatchObject({ requestCount: 2, repairAttempted: true });
   });
 });

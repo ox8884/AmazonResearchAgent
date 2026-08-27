@@ -16,6 +16,11 @@ vi.mock('../../../lib/server/enqueue-import', () => ({
   ImportEnqueueError: class ImportEnqueueError extends Error {}
 }));
 
+vi.mock('../../../lib/server/login-guard', () => ({
+  consumeDurableLoginAttempt: async () => undefined,
+  withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
+}));
+
 vi.mock('../../../lib/import-upload', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/import-upload')>(
     '../../../lib/import-upload'
