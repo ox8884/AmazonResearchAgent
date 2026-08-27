@@ -58,8 +58,8 @@ class FakeNormalizationProvider implements AiProvider {
         }
       : {
           classification: 'product_niche',
-          canonicalNiche: 'Batter / Pancake Dispenser',
-          canonicalEnglish: 'Batter / Pancake Dispenser',
+          canonicalNiche: `Batter / Pancake Dispenser ${this.id}`,
+          canonicalEnglish: `Batter / Pancake Dispenser ${this.id}`,
           catalogPhrases: ['pancake dispenser', 'batter dispenser bottle'],
           aliases: ['pancake dispenser bottle'],
           productFit: 'strong',
@@ -179,7 +179,7 @@ integration('opportunity normalization job', () => {
     const { data: clusters } = await client
       .from('niche_clusters')
       .select('id')
-      .eq('canonical_name', 'Batter / Pancake Dispenser');
+      .like('canonical_name', 'Batter / Pancake Dispenser%');
     const clusterIds = clusters?.map((cluster) => cluster.id) ?? [];
     if (clusterIds.length > 0) {
       await client.from('niche_cluster_keywords').delete().in('niche_cluster_id', clusterIds);
@@ -209,22 +209,25 @@ integration('opportunity normalization job', () => {
     ]);
     importRuns.push(fixture.importRunId);
     const input: NormalizeJobInput = { candidateIds: fixture.candidateIds, locale: 'ko' };
+    const promptVersion = `it-${randomUUID()}`;
 
     const first = await runNormalizeJob(input, {
       client,
       provider,
-      modelId: 'fake-normalizer-model'
+      modelId: 'fake-normalizer-model',
+      promptVersion
     });
     const second = await runNormalizeJob(input, {
       client,
       provider,
-      modelId: 'fake-normalizer-model'
+      modelId: 'fake-normalizer-model',
+      promptVersion
     });
 
     const { data: clusters } = await client
       .from('niche_clusters')
       .select('id')
-      .eq('canonical_name', 'Batter / Pancake Dispenser');
+      .eq('canonical_name', `Batter / Pancake Dispenser ${provider.id}`);
     const { data: links } = await client
       .from('niche_cluster_keywords')
       .select('raw_opportunity_keyword_id')
@@ -268,7 +271,7 @@ integration('opportunity normalization job', () => {
 
     const result = await runNormalizeJob(
       { candidateIds: fixture.candidateIds, locale: 'ko' },
-      { client, provider, modelId: 'capacity-model' }
+      { client, provider, modelId: 'capacity-model', promptVersion: `it-${randomUUID()}` }
     );
     const { data: candidate } = await client
       .from('candidates')
@@ -278,5 +281,135 @@ integration('opportunity normalization job', () => {
 
     expect(result.deferredCount).toBe(1);
     expect(candidate?.state).toBe('Waiting for AI Capacity');
+  });
+
+  it('keeps Korean and English hashes distinct and reuses one call per locale', async () => {
+    const provider = new FakeNormalizationProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const fixture = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(fixture.importRunId);
+    const promptVersion = `it-${randomUUID()}`;
+    await runNormalizeJob(
+      { candidateIds: fixture.candidateIds, locale: 'ko' },
+      { client, provider, modelId: 'fake-normalizer-model', workerId: 'locale-ko', promptVersion }
+    );
+    await runNormalizeJob(
+      { candidateIds: fixture.candidateIds, locale: 'en' },
+      { client, provider, modelId: 'fake-normalizer-model', workerId: 'locale-en', promptVersion }
+    );
+
+    const { data: analyses } = await client
+      .from('ai_analyses')
+      .select('input_hash,locale')
+      .eq('provider_id', provider.id);
+
+    expect(provider.calls).toBe(2);
+    expect(analyses).toHaveLength(2);
+    expect(new Set(analyses?.map((analysis) => analysis.input_hash)).size).toBe(2);
+    expect(new Set(analyses?.map((analysis) => analysis.locale))).toEqual(new Set(['ko', 'en']));
+  });
+
+  it('keeps candidate decisions distinct while claiming the same analysis once', async () => {
+    const provider = new FakeNormalizationProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const first = await seedCandidates(client, ['batter squeeze bottle']);
+    const second = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(first.importRunId, second.importRunId);
+    const candidateIds = [...first.candidateIds, ...second.candidateIds];
+
+    await runNormalizeJob(
+      { candidateIds, locale: 'ko' },
+      {
+        client,
+        provider,
+        modelId: 'fake-normalizer-model',
+        workerId: 'same-hash',
+        promptVersion: `it-${randomUUID()}`
+      }
+    );
+
+    const { data: analyses } = await client
+      .from('ai_analyses')
+      .select('id,input_hash')
+      .eq('provider_id', provider.id);
+    const { data: decisions } = await client
+      .from('decision_history')
+      .select('candidate_id,idempotency_key')
+      .in('candidate_id', candidateIds);
+
+    expect(provider.calls).toBe(1);
+    expect(analyses).toHaveLength(1);
+    expect(decisions).toHaveLength(2);
+    expect(new Set(decisions?.map((decision) => decision.idempotency_key)).size).toBe(2);
+  });
+
+  it('calls the fake provider once when two workers race the same input', async () => {
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    class GatedProvider extends FakeNormalizationProvider {
+      override async runStructured<T>(
+        request: StructuredAiRequest<T>
+      ): Promise<AiProviderResult<T>> {
+        this.calls += 1;
+        started.resolve();
+        await held.promise;
+        this.calls -= 1;
+        return super.runStructured(request);
+      }
+    }
+    const provider = new GatedProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const first = await seedCandidates(client, ['batter squeeze bottle']);
+    const second = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(first.importRunId, second.importRunId);
+
+    const promptVersion = `it-${randomUUID()}`;
+    const jobA = runNormalizeJob(
+      { candidateIds: first.candidateIds, locale: 'ko' },
+      { client, provider, modelId: 'fake-normalizer-model', workerId: 'race-a', promptVersion }
+    );
+    await started.promise;
+    const jobB = runNormalizeJob(
+      { candidateIds: second.candidateIds, locale: 'ko' },
+      { client, provider, modelId: 'fake-normalizer-model', workerId: 'race-b', promptVersion }
+    );
+    await expect(jobB).rejects.toThrow('AI analysis is already leased by another worker.');
+    held.resolve();
+    await jobA;
+
+    expect(provider.calls).toBe(1);
   });
 });

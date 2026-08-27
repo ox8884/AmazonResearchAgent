@@ -36,7 +36,9 @@ export type Database = {
     Tables: {
       ai_analyses: {
         Row: {
-          completed_at: string
+          attempts: number
+          available_at: string
+          completed_at: string | null
           cost_class: string
           created_at: string
           entity_id: string
@@ -44,17 +46,23 @@ export type Database = {
           id: string
           input_hash: string
           input_payload: Json
+          last_error: string | null
+          leased_by: string | null
+          leased_until: string | null
           locale: string
           model_id: string
-          output: Json
+          output: Json | null
           prompt_version: string
           provider_id: string
           role: string
           started_at: string
+          status: string
           usage: Json
         }
         Insert: {
-          completed_at: string
+          attempts?: number
+          available_at?: string
+          completed_at?: string | null
           cost_class: string
           created_at?: string
           entity_id: string
@@ -62,17 +70,23 @@ export type Database = {
           id?: string
           input_hash: string
           input_payload?: Json
+          last_error?: string | null
+          leased_by?: string | null
+          leased_until?: string | null
           locale: string
           model_id: string
-          output: Json
+          output?: Json | null
           prompt_version: string
           provider_id: string
           role: string
           started_at: string
+          status?: string
           usage?: Json
         }
         Update: {
-          completed_at?: string
+          attempts?: number
+          available_at?: string
+          completed_at?: string | null
           cost_class?: string
           created_at?: string
           entity_id?: string
@@ -80,13 +94,17 @@ export type Database = {
           id?: string
           input_hash?: string
           input_payload?: Json
+          last_error?: string | null
+          leased_by?: string | null
+          leased_until?: string | null
           locale?: string
           model_id?: string
-          output?: Json
+          output?: Json | null
           prompt_version?: string
           provider_id?: string
           role?: string
           started_at?: string
+          status?: string
           usage?: Json
         }
         Relationships: [
@@ -95,6 +113,35 @@ export type Database = {
             columns: ["provider_id"]
             isOneToOne: false
             referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_analysis_entities: {
+        Row: {
+          analysis_id: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+        }
+        Insert: {
+          analysis_id: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+        }
+        Update: {
+          analysis_id?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_analysis_entities_analysis_id_fkey"
+            columns: ["analysis_id"]
+            isOneToOne: false
+            referencedRelation: "ai_analyses"
             referencedColumns: ["id"]
           },
         ]
@@ -559,6 +606,7 @@ export type Database = {
           created_at: string
           id: string
           state: string
+          canonical_key: string
           updated_at: string
         }
         Insert: {
@@ -569,6 +617,7 @@ export type Database = {
           created_at?: string
           id?: string
           state?: string
+          canonical_key: string
           updated_at?: string
         }
         Update: {
@@ -579,6 +628,7 @@ export type Database = {
           created_at?: string
           id?: string
           state?: string
+          canonical_key?: string
           updated_at?: string
         }
         Relationships: []
@@ -736,6 +786,56 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_ai_analysis: {
+        Args: {
+          analysis_role: string
+          analysis_input_hash: string
+          worker_id: string
+          lease_seconds: number
+          provider_id: string
+          model_id: string
+          analysis_locale: string
+          prompt_version: string
+          input_payload: Json
+        }
+        Returns: {
+          analysis_id: string
+          claim_status: string
+          output: Json | null
+          usage: Json | null
+        }[]
+      }
+      complete_ai_analysis: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          analysis_output: Json
+          analysis_usage: Json
+          cost_class: string
+          completed_at: string
+        }
+        Returns: boolean
+      }
+      fail_ai_analysis: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          error_code: string
+          retry_at: string
+        }
+        Returns: boolean
+      }
+      upsert_niche_cluster: {
+        Args: {
+          canonical_key: string
+          canonical_name: string
+          canonical_english: string | null
+          aliases: Json
+          catalog_phrases: Json
+          cluster_state: string
+        }
+        Returns: string
+      }
       checkpoint_job: {
         Args: {
           checkpoint: Json

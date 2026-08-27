@@ -29,6 +29,7 @@ export interface NormalizeJobDependencies {
   readonly client: QueueDatabaseClient;
   readonly provider: AiProvider;
   readonly modelId: string;
+  readonly workerId?: string;
   readonly promptVersion?: string;
   onCheckpoint?(checkpoint: NormalizeCheckpoint): Promise<void>;
 }
@@ -81,24 +82,23 @@ function asJson(value: unknown): Json {
   return JSON.parse(serialized) as Json;
 }
 
-function stringArray(value: Json | null | undefined): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === 'string');
-}
-
-function mergeStrings(...values: readonly string[][]): string[] {
-  return [...new Set(values.flat().map((value) => value.trim()).filter(Boolean))];
-}
-
 function inputHash(
   keyword: string,
-  promptVersion: string
+  promptVersion: string,
+  locale: Locale
 ): string {
   return sha256(
-    `niche_normalization\0${promptVersion}\0${normalizeExactKeyword(keyword)}`
+    `niche_normalization\0${promptVersion}\0${locale}\0${normalizeExactKeyword(keyword)}`
   );
+}
+
+function canonicalKey(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .trim()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ');
 }
 
 function isCapacityError(error: unknown): boolean {
@@ -154,6 +154,9 @@ function analysisResult(
   row: AnalysisRow,
   output: KeywordNormalization
 ): AiProviderResult<KeywordNormalization> {
+  if (!row.completed_at) {
+    throw new NormalizationJobError('Completed AI analysis has no completion timestamp.');
+  }
   return {
     output,
     providerId: row.provider_id,
@@ -212,59 +215,113 @@ async function loadExistingAnalysis(
   return analysisResult(data, output.data);
 }
 
-async function persistAnalysis(
+
+interface AnalysisClaim {
+  readonly analysisId: string;
+  readonly status: 'claimed' | 'completed' | 'busy';
+  readonly completed: AiProviderResult<KeywordNormalization> | null;
+}
+
+class AnalysisClaimBusyError extends Error {
+  readonly retryable = true;
+
+  constructor() {
+    super('AI analysis is already leased by another worker.');
+    this.name = 'AnalysisClaimBusyError';
+  }
+}
+
+async function claimAnalysis(
   client: QueueDatabaseClient,
   candidate: CandidateRow,
-  result: AiProviderResult<KeywordNormalization>,
+  hash: string,
   locale: Locale,
+  dependencies: NormalizeJobDependencies,
   promptVersion: string
-): Promise<void> {
-  const { data, error } = await client
-    .from('ai_analyses')
-    .upsert(
-      {
-        provider_id: result.providerId,
-        model_id: result.modelId,
-        role: result.role,
-        locale,
-        entity_type: 'candidate',
-        entity_id: candidate.id,
-        input_hash: result.inputHash,
-        input_payload: asJson({
-          keyword: candidate.keyword,
-          normalizedExactKeyword: candidate.normalized_exact_keyword
-        }),
-        output: asJson(result.output),
-        usage: asJson(result.usage),
-        cost_class: result.costClass,
-        prompt_version: promptVersion,
-        started_at: result.startedAt,
-        completed_at: result.completedAt
-      },
-      { onConflict: 'role,input_hash' }
-    )
-    .select('id')
-    .single();
-  if (error || !data) {
-    throw new NormalizationJobError('persist AI analysis.', error);
+): Promise<AnalysisClaim> {
+  const workerId = dependencies.workerId ?? `normalizer-${process.pid}`;
+  const { data, error } = await client.rpc('claim_ai_analysis', {
+    analysis_role: 'niche_normalization',
+    analysis_input_hash: hash,
+    worker_id: workerId,
+    lease_seconds: 120,
+    provider_id: dependencies.provider.id,
+    model_id: dependencies.modelId,
+    analysis_locale: locale,
+    prompt_version: promptVersion,
+    input_payload: asJson({
+      keyword: candidate.keyword,
+      normalizedExactKeyword: candidate.normalized_exact_keyword
+    })
+  });
+  const claim = data?.[0];
+  if (error || !claim) {
+    throw new NormalizationJobError('claim AI analysis.', error);
   }
+  if (claim.claim_status === 'busy') {
+    return { analysisId: claim.analysis_id, status: 'busy', completed: null };
+  }
+  if (claim.claim_status === 'completed') {
+    const existing = await loadExistingAnalysis(client, hash);
+    if (!existing) {
+      throw new NormalizationJobError('Completed analysis could not be loaded.');
+    }
+    return {
+      analysisId: claim.analysis_id,
+      status: 'completed',
+      completed: existing
+    };
+  }
+  return { analysisId: claim.analysis_id, status: 'claimed', completed: null };
+}
 
-  const { error: usageError } = await client.from('ai_usage').upsert(
-    {
-      analysis_id: data.id,
-      provider_id: result.providerId,
-      model_id: result.modelId,
-      role: result.role,
-      input_hash: result.inputHash,
-      usage: asJson(result.usage),
-      cost_class: result.costClass,
-      started_at: result.startedAt,
-      completed_at: result.completedAt
-    },
-    { onConflict: 'analysis_id' }
-  );
-  if (usageError) {
-    throw new NormalizationJobError('persist AI usage.', usageError);
+async function linkAnalysisEntity(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  candidateId: string
+): Promise<void> {
+  const { error } = await client.from('ai_analysis_entities').upsert({
+    analysis_id: analysisId,
+    entity_type: 'candidate',
+    entity_id: candidateId
+  });
+  if (error) {
+    throw new NormalizationJobError('link AI analysis to candidate.', error);
+  }
+}
+
+async function completeAnalysis(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string,
+  result: AiProviderResult<KeywordNormalization>
+): Promise<void> {
+  const { data, error } = await client.rpc('complete_ai_analysis', {
+    analysis_id: analysisId,
+    worker_id: workerId,
+    analysis_output: asJson(result.output),
+    analysis_usage: asJson(result.usage),
+    cost_class: result.costClass,
+    completed_at: result.completedAt
+  });
+  if (error || !data) {
+    throw new NormalizationJobError('complete AI analysis.', error);
+  }
+}
+
+async function failAnalysis(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string
+): Promise<void> {
+  const { error } = await client.rpc('fail_ai_analysis', {
+    analysis_id: analysisId,
+    worker_id: workerId,
+    error_code: 'provider_execution_failed',
+    retry_at: new Date(Date.now() + 60_000).toISOString()
+  });
+  if (error) {
+    throw new NormalizationJobError('fail AI analysis.', error);
   }
 }
 
@@ -275,53 +332,18 @@ async function upsertCluster(
   if (!output.canonicalNiche) {
     throw new NormalizationJobError('A clusterable output needs a canonical niche.');
   }
-  const { data: existing, error: existingError } = await client
-    .from('niche_clusters')
-    .select('id,aliases,catalog_phrases,canonical_english')
-    .eq('canonical_name', output.canonicalNiche)
-    .maybeSingle();
-  if (existingError) {
-    throw new NormalizationJobError('load niche cluster.', existingError);
-  }
-
-  const aliases = mergeStrings(
-    stringArray(existing?.aliases),
-    output.aliases
-  );
-  const catalogPhrases = mergeStrings(
-    stringArray(existing?.catalog_phrases),
-    output.catalogPhrases
-  );
-  const values = {
+  const { data, error } = await client.rpc('upsert_niche_cluster', {
+    canonical_key: canonicalKey(output.canonicalNiche),
     canonical_name: output.canonicalNiche,
-    canonical_english: output.canonicalEnglish ?? existing?.canonical_english ?? null,
-    catalog_phrases: asJson(catalogPhrases),
-    aliases: asJson(aliases),
-    state: 'Ready for API Validation'
-  };
-
-  if (existing) {
-    const { data, error } = await client
-      .from('niche_clusters')
-      .update(values)
-      .eq('id', existing.id)
-      .select('id')
-      .single();
-    if (error || !data) {
-      throw new NormalizationJobError('update niche cluster.', error);
-    }
-    return data.id;
-  }
-
-  const { data, error } = await client
-    .from('niche_clusters')
-    .insert(values)
-    .select('id')
-    .single();
+    canonical_english: output.canonicalEnglish,
+    aliases: asJson(output.aliases),
+    catalog_phrases: asJson(output.catalogPhrases),
+    cluster_state: 'Ready for API Validation'
+  });
   if (error || !data) {
-    throw new NormalizationJobError('create niche cluster.', error);
+    throw new NormalizationJobError('upsert niche cluster.', error);
   }
-  return data.id;
+  return data;
 }
 
 async function persistDecision(
@@ -329,7 +351,7 @@ async function persistDecision(
   candidate: CandidateRow,
   state: CandidateState,
   reasons: readonly DecisionReason[],
-  hash: string,
+  analysisId: string,
   clusterId: string | null,
   promptVersion: string
 ): Promise<void> {
@@ -354,7 +376,7 @@ async function persistDecision(
         to_state: state,
         reasons: asJson(reasons),
         decided_by: promptVersion,
-        idempotency_key: `ai-normalization:${hash}:${state}`
+        idempotency_key: `ai-normalization:${candidate.id}:${analysisId}:${state}`
       },
       { onConflict: 'idempotency_key' }
     );
@@ -383,7 +405,7 @@ async function persistClusterLink(
 async function deferForCapacity(
   client: QueueDatabaseClient,
   candidate: CandidateRow,
-  hash: string,
+  analysisId: string,
   promptVersion: string
 ): Promise<void> {
   const reasons = [
@@ -398,7 +420,7 @@ async function deferForCapacity(
     candidate,
     'Waiting for AI Capacity',
     reasons,
-    hash,
+    analysisId,
     null,
     promptVersion
   );
@@ -410,16 +432,25 @@ async function normalizeCandidate(
   candidate: CandidateRow,
   promptVersion: string
 ): Promise<{ clustered: boolean; rejected: boolean; needsReview: boolean; deferred: boolean; reused: boolean }> {
-  const hash = inputHash(candidate.keyword, promptVersion);
-  const existing = await loadExistingAnalysis(dependencies.client, hash);
-  let result: AiProviderResult<KeywordNormalization>;
-  let reused = false;
-  if (existing) {
-    result = existing;
-    reused = true;
-  } else {
+  const locale = LocaleSchema.parse(input.locale);
+  const hash = inputHash(candidate.keyword, promptVersion, locale);
+  const workerId = dependencies.workerId ?? `normalizer-${process.pid}`;
+  const claim = await claimAnalysis(
+    dependencies.client,
+    candidate,
+    hash,
+    locale,
+    dependencies,
+    promptVersion
+  );
+  if (claim.status === 'busy') {
+    throw new AnalysisClaimBusyError();
+  }
+
+  let result = claim.completed;
+  const reused = result !== null;
+  if (!result) {
     try {
-      const locale = LocaleSchema.parse(input.locale);
       result = await dependencies.provider.runStructured({
         role: 'niche_normalization',
         modelId: dependencies.modelId,
@@ -428,27 +459,38 @@ async function normalizeCandidate(
         inputHash: hash,
         schema: KeywordNormalizationSchema
       });
-      await persistAnalysis(
+      await completeAnalysis(
         dependencies.client,
-        candidate,
-        result,
-        locale,
-        promptVersion
+        claim.analysisId,
+        workerId,
+        result
       );
     } catch (error) {
+      await failAnalysis(dependencies.client, claim.analysisId, workerId);
       if (!isCapacityError(error)) {
         throw error;
       }
       await deferForCapacity(
         dependencies.client,
         candidate,
-        hash,
+        claim.analysisId,
         promptVersion
       );
-      return { clustered: false, rejected: false, needsReview: false, deferred: true, reused: false };
+      return {
+        clustered: false,
+        rejected: false,
+        needsReview: false,
+        deferred: true,
+        reused: false
+      };
     }
   }
 
+  await linkAnalysisEntity(
+    dependencies.client,
+    claim.analysisId,
+    candidate.id
+  );
   const output = KeywordNormalizationSchema.parse(result.output);
   const state = targetState(output);
   const reasons = [...currentReasons(candidate.rule_reasons), aiReason(output)];
@@ -460,11 +502,17 @@ async function normalizeCandidate(
       candidate,
       state,
       reasons,
-      hash,
+      claim.analysisId,
       clusterId,
       promptVersion
     );
-    return { clustered: true, rejected: false, needsReview: false, deferred: false, reused };
+    return {
+      clustered: true,
+      rejected: false,
+      needsReview: false,
+      deferred: false,
+      reused
+    };
   }
 
   await persistDecision(
@@ -472,7 +520,7 @@ async function normalizeCandidate(
     candidate,
     state,
     reasons,
-    hash,
+    claim.analysisId,
     null,
     promptVersion
   );

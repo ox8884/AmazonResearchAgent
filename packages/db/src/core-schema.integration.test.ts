@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -21,7 +22,6 @@ describe('core research schema', () => {
 
   afterAll(async () => {
     await sql`delete from jobs where idempotency_key like 'db-it-%'`;
-    await sql.end();
   });
 
   // Break: two workers can claim the same queued job concurrently.
@@ -146,5 +146,155 @@ describe('core research schema', () => {
       last_error: 'fixture failure',
       checkpoint: { phase: 'parsed' }
     });
+  });
+});
+
+describe('AI analysis and cluster hardening RPCs', () => {
+  beforeEach(async () => {
+    await sql`delete from ai_usage where provider_id like 'db-it-ai-%'`;
+    await sql`delete from ai_analyses where provider_id like 'db-it-ai-%'`;
+    await sql`delete from ai_providers where id like 'db-it-ai-%'`;
+    await sql`delete from niche_clusters where canonical_key like 'db-it-cluster-%'`;
+  });
+
+  afterAll(async () => {
+    await sql`delete from ai_usage where provider_id like 'db-it-ai-%'`;
+    await sql`delete from ai_analyses where provider_id like 'db-it-ai-%'`;
+    await sql`delete from ai_providers where id like 'db-it-ai-%'`;
+    await sql`delete from niche_clusters where canonical_key like 'db-it-cluster-%'`;
+    await sql.end();
+  });
+
+  async function seedProvider(): Promise<string> {
+    const providerId = `db-it-ai-${randomUUID()}`;
+    await sql`
+      insert into ai_providers (id, name, kind, billing_type, enabled, config)
+      values (${providerId}, ${providerId}, 'command', 'free', true, '{}'::jsonb)
+    `;
+    return providerId;
+  }
+
+  // Break: two workers can run the same analysis, or a failed analysis is retried before available_at.
+  it('leases an analysis once and keeps failed rows busy until they are available', async () => {
+    const providerId = await seedProvider();
+    const hash = 'a'.repeat(64);
+
+    const first = await sql<{ analysis_id: string; claim_status: string }[]>`
+      select analysis_id, claim_status from claim_ai_analysis(
+        'niche_normalization',
+        ${hash},
+        'worker-a',
+        60,
+        ${providerId},
+        'model-1',
+        'ko',
+        'v1',
+        '{}'::jsonb
+      )
+    `;
+    const busy = await sql<{ claim_status: string }[]>`
+      select claim_status from claim_ai_analysis(
+        'niche_normalization',
+        ${hash},
+        'worker-b',
+        60,
+        ${providerId},
+        'model-1',
+        'ko',
+        'v1',
+        '{}'::jsonb
+      )
+    `;
+
+    expect(first[0]?.claim_status).toBe('claimed');
+    expect(busy[0]?.claim_status).toBe('busy');
+
+    const analysisId = first[0]?.analysis_id;
+    if (!analysisId) {
+      throw new Error('Expected a claimed analysis id');
+    }
+
+    await sql`
+      select fail_ai_analysis(
+        ${analysisId}::uuid,
+        'worker-a',
+        'provider_execution_failed',
+        now() + interval '2 minutes'
+      )
+    `;
+    const retryBusy = await sql<{ claim_status: string }[]>`
+      select claim_status from claim_ai_analysis(
+        'niche_normalization',
+        ${hash},
+        'worker-b',
+        60,
+        ${providerId},
+        'model-1',
+        'ko',
+        'v1',
+        '{}'::jsonb
+      )
+    `;
+    expect(retryBusy[0]?.claim_status).toBe('busy');
+
+    await sql`
+      update ai_analyses
+      set available_at = now() - interval '1 second'
+      where id = ${analysisId}::uuid
+    `;
+    const reclaimed = await sql<{ claim_status: string }[]>`
+      select claim_status from claim_ai_analysis(
+        'niche_normalization',
+        ${hash},
+        'worker-b',
+        60,
+        ${providerId},
+        'model-1',
+        'ko',
+        'v1',
+        '{}'::jsonb
+      )
+    `;
+    expect(reclaimed[0]?.claim_status).toBe('claimed');
+  });
+
+  // Break: concurrent cluster upserts create duplicates or drop aliases.
+  it('upserts one canonical cluster and unions aliases concurrently', async () => {
+    const canonicalKey = `db-it-cluster-${randomUUID()}`;
+
+    await Promise.all([
+      sql`
+        select upsert_niche_cluster(
+          ${canonicalKey},
+          'Batter / Pancake Dispenser',
+          'Batter / Pancake Dispenser',
+          ${sql.json(['alpha'])},
+          ${sql.json(['phrase-a'])},
+          'Ready for API Validation'
+        )
+      `,
+      sql`
+        select upsert_niche_cluster(
+          ${canonicalKey},
+          'Batter / Pancake Dispenser',
+          'Batter / Pancake Dispenser',
+          ${sql.json(['beta'])},
+          ${sql.json(['phrase-b'])},
+          'Ready for API Validation'
+        )
+      `
+    ]);
+
+    const rows = await sql<{ aliases: unknown; catalog_phrases: unknown }[]>`
+      select aliases, catalog_phrases
+      from niche_clusters
+      where canonical_key = ${canonicalKey}
+    `;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aliases).toEqual(expect.arrayContaining(['alpha', 'beta']));
+    expect(rows[0]?.catalog_phrases).toEqual(
+      expect.arrayContaining(['phrase-a', 'phrase-b'])
+    );
   });
 });
