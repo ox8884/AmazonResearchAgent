@@ -23,7 +23,40 @@ export type CopyKey =
   | 'scoreLabel'
   | 'decisionReasonLabel'
   | 'languageKorean'
-  | 'languageEnglish';
+  | 'languageEnglish'
+  | 'totalImports'
+  | 'totalCandidates'
+  | 'acceptedLabel'
+  | 'rejectedLabel'
+  | 'uniqueKeywords'
+  | 'duplicateKeywords'
+  | 'recentCandidates'
+  | 'recentImports'
+  | 'noImports'
+  | 'noCandidates'
+  | 'fileCount'
+  | 'rowCount'
+  | 'createdAt'
+  | 'statusLabel'
+  | 'selectedFiles'
+  | 'uploadingFiles'
+  | 'uploadSuccess'
+  | 'uploadError'
+  | 'returnToImports'
+  | 'importIdLabel'
+  | 'privacyNote'
+  | 'viewAllImports'
+  | 'skipToContent'
+  | 'technicalDetails'
+  | 'showcaseTitle'
+  | 'dataUnavailable'
+  | 'showcaseActions'
+  | 'showcaseStatus'
+  | 'showcaseMetrics'
+  | 'showcaseStates'
+  | 'uploadTooMany'
+  | 'uploadTooLarge'
+  | 'uploadInvalidFile';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -49,7 +82,40 @@ export const COPY = {
     scoreLabel: 'Preliminary Score',
     decisionReasonLabel: '결정 사유',
     languageKorean: '한국어',
-    languageEnglish: 'English'
+    languageEnglish: 'English',
+    totalImports: '전체 가져오기',
+    totalCandidates: '전체 후보',
+    acceptedLabel: 'AI Screening 대상',
+    rejectedLabel: 'Reject',
+    uniqueKeywords: '고유 키워드',
+    duplicateKeywords: '중복 키워드',
+    recentCandidates: '최근 후보',
+    recentImports: '최근 가져오기',
+    noImports: '아직 가져온 파일이 없습니다.',
+    noCandidates: '아직 평가된 후보가 없습니다.',
+    fileCount: '파일',
+    rowCount: '원본 행',
+    createdAt: '생성 시각',
+    statusLabel: '상태',
+    selectedFiles: '선택한 파일',
+    uploadingFiles: '파일을 업로드하고 작업을 등록합니다…',
+    uploadSuccess: '가져오기가 등록되었습니다. Worker가 백그라운드에서 처리합니다.',
+    uploadError: '가져오기를 등록하지 못했습니다. 파일을 확인하고 다시 시도하세요.',
+    returnToImports: '가져오기 목록으로 돌아가기',
+    importIdLabel: 'Import run ID',
+    privacyNote: '파일은 private Storage에 저장하며 서버 자격 증명은 브라우저에 노출하지 않습니다.',
+    viewAllImports: '모든 가져오기 보기',
+    skipToContent: '본문으로 건너뛰기',
+    technicalDetails: '기술 세부 정보',
+    showcaseTitle: 'UI primitive 검증',
+    dataUnavailable: '데이터베이스 연결이 아직 설정되지 않아 빈 대시보드를 표시합니다.',
+    showcaseActions: '동작',
+    showcaseStatus: '상태',
+    showcaseMetrics: '지표',
+    showcaseStates: '폼 / 빈 상태 / 오류',
+    uploadTooMany: 'CSV 파일은 최대 20개까지만 선택하세요.',
+    uploadTooLarge: '각 CSV 파일은 10 MB 이하여야 합니다.',
+    uploadInvalidFile: '비어 있지 않은 CSV 파일만 선택할 수 있습니다.'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -72,7 +138,40 @@ export const COPY = {
     scoreLabel: 'Preliminary Score',
     decisionReasonLabel: 'Decision reason',
     languageKorean: '한국어',
-    languageEnglish: 'English'
+    languageEnglish: 'English',
+    totalImports: 'Total imports',
+    totalCandidates: 'Total candidates',
+    acceptedLabel: 'Accepted for AI Screening',
+    rejectedLabel: 'Reject',
+    uniqueKeywords: 'Unique keywords',
+    duplicateKeywords: 'Duplicate keywords',
+    recentCandidates: 'Recent candidates',
+    recentImports: 'Recent imports',
+    noImports: 'No files have been imported yet.',
+    noCandidates: 'No candidates have been evaluated yet.',
+    fileCount: 'Files',
+    rowCount: 'Raw rows',
+    createdAt: 'Created',
+    statusLabel: 'Status',
+    selectedFiles: 'Selected files',
+    uploadingFiles: 'Securely uploading files and enqueueing the job…',
+    uploadSuccess: 'Import queued. The worker will process it in the background.',
+    uploadError: 'The import could not be queued. Check the files and try again.',
+    returnToImports: 'Return to imports',
+    importIdLabel: 'Import run ID',
+    privacyNote: 'Files are stored in private Storage; server credentials are never exposed to the browser.',
+    viewAllImports: 'View all imports',
+    skipToContent: 'Skip to content',
+    technicalDetails: 'Technical details',
+    showcaseTitle: 'UI primitive verification',
+    dataUnavailable: 'The database connection is not configured yet, so the dashboard is shown empty.',
+    showcaseActions: 'Actions',
+    showcaseStatus: 'Status',
+    showcaseMetrics: 'Metrics',
+    showcaseStates: 'Form / empty / error',
+    uploadTooMany: 'Choose no more than 20 CSV files.',
+    uploadTooLarge: 'Each CSV file must be no larger than 10 MB.',
+    uploadInvalidFile: 'Choose non-empty CSV files only.'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 
