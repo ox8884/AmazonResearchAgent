@@ -1,0 +1,19 @@
+{
+  "name": "@ara/queue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@ara/db": "workspace:*",
+    "@ara/shared": "workspace:*"
+  }
+}
