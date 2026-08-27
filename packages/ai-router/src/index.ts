@@ -28,3 +28,12 @@ export type {
   CommandPromptMode,
   CommandProviderConfig
 } from './providers/command';
+
+export { routeAiRequest } from './router';
+export type {
+  ProviderCatalog,
+  ProviderCatalogEntry,
+  RouteDecision,
+  RouteDeferral,
+  RouteSelection
+} from './router';
