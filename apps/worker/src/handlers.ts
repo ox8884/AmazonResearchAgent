@@ -22,6 +22,12 @@ import {
 import { runProviderConnectionTest } from './jobs/test-ai-provider';
 import { runMarketProbe } from './jobs/market-probe';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
+import { PostgresApiBudget } from './jobs/postgres-api-budget';
+import {
+  createJungleScoutProductDatabaseQuery,
+  readApiBudgetLimits,
+  readJungleScoutEnv
+} from './jungle-scout-runtime';
 import type { ApiBudget } from '@ara/api-budget';
 import type { ProductDatabasePage } from '@ara/jungle-scout';
 
@@ -217,22 +223,25 @@ export function createJobHandlers(
       return checkpoint;
     };
   }
-  const apiBudget = options.apiBudget;
-  const queryProductDatabase = options.queryProductDatabase;
-  if (apiBudget && queryProductDatabase) {
-    handlers.MARKET_PROBE = async (job, context) => {
-      const payload = MarketProbeJobPayloadSchema.parse(job.payload);
-      const result = await runMarketProbe(
-        { candidateId: payload.candidateId, locale: payload.locale },
-        {
-          client,
-          budget: apiBudget,
-          queryProductDatabase,
-          onCheckpoint: (value) => context.saveCheckpoint(value)
-        }
-      );
-      return result.checkpoint;
-    };
-  }
+  handlers.MARKET_PROBE = async (job, context) => {
+    const payload = MarketProbeJobPayloadSchema.parse(job.payload);
+    const queryProductDatabase =
+      options.queryProductDatabase ?? createJungleScoutProductDatabaseQuery();
+    if (!options.queryProductDatabase) {
+      readJungleScoutEnv();
+    }
+    const apiBudget =
+      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    const result = await runMarketProbe(
+      { candidateId: payload.candidateId, locale: payload.locale },
+      {
+        client,
+        budget: apiBudget,
+        queryProductDatabase,
+        onCheckpoint: (value) => context.saveCheckpoint(value)
+      }
+    );
+    return result.checkpoint;
+  };
   return handlers;
 }
