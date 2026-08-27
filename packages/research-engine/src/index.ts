@@ -29,3 +29,5 @@ export {
   NORMALIZATION_PROMPT_VERSION
 } from './ai/normalization-schema';
 export type { KeywordNormalization } from './ai/normalization-schema';
+export { groupProductFamilies } from './product-family';
+export type { CatalogProduct, ProductFamily } from './product-family';
