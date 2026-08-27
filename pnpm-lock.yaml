@@ -98,6 +98,15 @@ importers:
         specifier: 4.23.12
         version: 4.23.12
 
+  packages/ai-router:
+    dependencies:
+      '@ara/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/db:
     dependencies:
       '@ara/shared':
@@ -133,6 +142,8 @@ importers:
       '@ara/shared':
         specifier: workspace:*
         version: link:../shared
+
+  packages/secret-store: {}
 
   packages/shared:
     dependencies:
