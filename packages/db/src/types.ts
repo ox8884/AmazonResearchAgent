@@ -34,6 +34,214 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_analyses: {
+        Row: {
+          completed_at: string
+          cost_class: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          input_hash: string
+          input_payload: Json
+          locale: string
+          model_id: string
+          output: Json
+          prompt_version: string
+          provider_id: string
+          role: string
+          started_at: string
+          usage: Json
+        }
+        Insert: {
+          completed_at: string
+          cost_class: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          input_hash: string
+          input_payload?: Json
+          locale: string
+          model_id: string
+          output: Json
+          prompt_version: string
+          provider_id: string
+          role: string
+          started_at: string
+          usage?: Json
+        }
+        Update: {
+          completed_at?: string
+          cost_class?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          input_hash?: string
+          input_payload?: Json
+          locale?: string
+          model_id?: string
+          output?: Json
+          prompt_version?: string
+          provider_id?: string
+          role?: string
+          started_at?: string
+          usage?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_analyses_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_models: {
+        Row: {
+          billing_type: string
+          capabilities: Json
+          created_at: string
+          display_name: string
+          enabled: boolean
+          id: string
+          model_id: string
+          priority: number
+          provider_id: string
+          quality_rank: number
+          updated_at: string
+        }
+        Insert: {
+          billing_type: string
+          capabilities?: Json
+          created_at?: string
+          display_name: string
+          enabled?: boolean
+          id?: string
+          model_id: string
+          priority?: number
+          provider_id: string
+          quality_rank?: number
+          updated_at?: string
+        }
+        Update: {
+          billing_type?: string
+          capabilities?: Json
+          created_at?: string
+          display_name?: string
+          enabled?: boolean
+          id?: string
+          model_id?: string
+          priority?: number
+          provider_id?: string
+          quality_rank?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_models_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_providers: {
+        Row: {
+          billing_type: string
+          config: Json
+          created_at: string
+          enabled: boolean
+          id: string
+          kind: string
+          name: string
+          priority: number
+          updated_at: string
+        }
+        Insert: {
+          billing_type: string
+          config?: Json
+          created_at?: string
+          enabled?: boolean
+          id: string
+          kind: string
+          name: string
+          priority?: number
+          updated_at?: string
+        }
+        Update: {
+          billing_type?: string
+          config?: Json
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          kind?: string
+          name?: string
+          priority?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_usage: {
+        Row: {
+          analysis_id: string
+          completed_at: string
+          cost_class: string
+          created_at: string
+          id: string
+          input_hash: string
+          model_id: string
+          provider_id: string
+          role: string
+          started_at: string
+          usage: Json
+        }
+        Insert: {
+          analysis_id: string
+          completed_at: string
+          cost_class: string
+          created_at?: string
+          id?: string
+          input_hash: string
+          model_id: string
+          provider_id: string
+          role: string
+          started_at: string
+          usage?: Json
+        }
+        Update: {
+          analysis_id?: string
+          completed_at?: string
+          cost_class?: string
+          created_at?: string
+          id?: string
+          input_hash?: string
+          model_id?: string
+          provider_id?: string
+          role?: string
+          started_at?: string
+          usage?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_analysis_id_fkey"
+            columns: ["analysis_id"]
+            isOneToOne: true
+            referencedRelation: "ai_analyses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_events: {
         Row: {
           actor_type: string
@@ -344,21 +552,30 @@ export type Database = {
       }
       niche_clusters: {
         Row: {
+          aliases: Json
+          canonical_english: string | null
           canonical_name: string
+          catalog_phrases: Json
           created_at: string
           id: string
           state: string
           updated_at: string
         }
         Insert: {
+          aliases?: Json
+          canonical_english?: string | null
           canonical_name: string
+          catalog_phrases?: Json
           created_at?: string
           id?: string
           state?: string
           updated_at?: string
         }
         Update: {
+          aliases?: Json
+          canonical_english?: string | null
           canonical_name?: string
+          catalog_phrases?: Json
           created_at?: string
           id?: string
           state?: string

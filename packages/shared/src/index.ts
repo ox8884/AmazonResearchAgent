@@ -26,3 +26,27 @@ export type {
 } from './domain';
 export { COPY, DEFAULT_LOCALE, getCopy } from './i18n';
 export type { CopyKey } from './i18n';
+
+export {
+  AiModelDescriptorSchema,
+  AiProviderConfigSchema,
+  AiRequestSchema,
+  AiRoleSchema,
+  AiUsageSchema,
+  BillingTypeSchema,
+  ProviderCapabilitySchema,
+  ProviderKindSchema,
+  RouterModeSchema
+} from './ai';
+export type {
+  AiModelDescriptor,
+  AiProviderConfig,
+  AiRequest,
+  AiResult,
+  AiRole,
+  AiUsage,
+  BillingType,
+  ProviderCapability,
+  ProviderKind,
+  RouterMode
+} from './ai';
