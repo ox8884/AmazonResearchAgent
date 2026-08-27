@@ -4,7 +4,7 @@ import {
   type Json
 } from '@ara/db';
 
-export type JobType = 'IMPORT_OPPORTUNITY_CSV';
+export type JobType = 'IMPORT_OPPORTUNITY_CSV' | 'NORMALIZE_OPPORTUNITIES';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type QueueDatabaseClient = ReturnType<typeof createServerDatabaseClient>;
 

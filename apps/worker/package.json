@@ -12,6 +12,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@ara/ai-router": "workspace:*",
     "@ara/db": "workspace:*",
     "@ara/jungle-scout": "workspace:*",
     "@ara/queue": "workspace:*",

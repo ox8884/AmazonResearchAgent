@@ -34,11 +34,13 @@ export {
   AiRoleSchema,
   AiUsageSchema,
   BillingTypeSchema,
+  NormalizeOpportunitiesJobPayloadSchema,
   ProviderCapabilitySchema,
   ProviderKindSchema,
   RouterModeSchema
 } from './ai';
 export type {
+  NormalizeOpportunitiesJobPayload,
   AiModelDescriptor,
   AiProviderConfig,
   AiRequest,

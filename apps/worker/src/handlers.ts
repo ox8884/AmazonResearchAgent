@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
-import { ImportOpportunityCsvJobPayloadSchema } from '@ara/shared';
+import {
+  NormalizeOpportunitiesJobPayloadSchema,
+  ImportOpportunityCsvJobPayloadSchema
+} from '@ara/shared';
+import type { AiProvider } from '@ara/ai-router';
 import type { Job, JobType, QueueDatabaseClient } from '@ara/queue';
 import {
   runImportJob,
   type ImportSourceFile
 } from './jobs/import-opportunity-csv';
+import { runNormalizeJob } from './jobs/normalize-opportunities';
 
 export interface JobExecutionContext {
   signal: AbortSignal;
@@ -18,6 +23,10 @@ export type JobHandler = (
   context: JobExecutionContext
 ) => Promise<unknown>;
 
+
+export interface JobHandlerOptions {
+  readonly normalizationProvider?: AiProvider;
+}
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
 export class UnsupportedJobTypeError extends Error {
@@ -74,8 +83,11 @@ async function downloadImportFiles(
   return sources;
 }
 
-export function createJobHandlers(client: QueueDatabaseClient): JobHandlers {
-  return {
+export function createJobHandlers(
+  client: QueueDatabaseClient,
+  options: JobHandlerOptions = {}
+): JobHandlers {
+  const handlers: JobHandlers = {
     IMPORT_OPPORTUNITY_CSV: async (job, context) => {
       const payload = ImportOpportunityCsvJobPayloadSchema.parse(job.payload);
       const files = await downloadImportFiles(
@@ -95,4 +107,25 @@ export function createJobHandlers(client: QueueDatabaseClient): JobHandlers {
       return result.checkpoint;
     }
   };
+
+  if (options.normalizationProvider) {
+    handlers.NORMALIZE_OPPORTUNITIES = async (job, context) => {
+      const payload = NormalizeOpportunitiesJobPayloadSchema.parse(job.payload);
+      if (payload.providerId !== options.normalizationProvider?.id) {
+        throw new Error('Normalization provider does not match the job payload.');
+      }
+      const result = await runNormalizeJob(
+        { candidateIds: payload.candidateIds, locale: payload.locale },
+        {
+          client,
+          provider: options.normalizationProvider,
+          modelId: payload.modelId,
+          promptVersion: payload.promptVersion,
+          onCheckpoint: (value) => context.saveCheckpoint(value)
+        }
+      );
+      return result.checkpoint;
+    };
+  }
+  return handlers;
 }

@@ -78,6 +78,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@ara/ai-router':
+        specifier: workspace:*
+        version: link:../../packages/ai-router
       '@ara/db':
         specifier: workspace:*
         version: link:../../packages/db
