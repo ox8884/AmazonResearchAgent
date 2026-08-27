@@ -70,7 +70,7 @@ interface CommandExecutionResult {
 function allowedEnvironment(
   environmentAllowlist: readonly string[]
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
+  const environment: NodeJS.ProcessEnv = { NODE_ENV: 'production' };
   for (const name of environmentAllowlist) {
     const value = process.env[name];
     if (value !== undefined) {
@@ -88,7 +88,7 @@ function executeCommand(
   const child = spawn(options.executable, [...options.args], {
     shell: false,
     env: allowedEnvironment(options.environmentAllowlist),
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: 'pipe',
     windowsHide: true
   });
   let stdout = '';
