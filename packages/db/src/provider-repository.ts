@@ -24,6 +24,11 @@ export interface ProviderRepository {
   upsertProvider(input: ProviderInsert): Promise<ProviderRow>;
   upsertModel(input: ModelInsert): Promise<ModelRow>;
   upsertSecret(input: ProviderSecretInsert): Promise<ProviderSecretRow>;
+  saveSettings(input: {
+    readonly provider: ProviderInsert;
+    readonly secret: ProviderSecretInsert | null;
+    readonly model: ModelInsert | null;
+  }): Promise<ProviderRow>;
 }
 
 export function createProviderRepository(
@@ -125,6 +130,26 @@ export function createProviderRepository(
         .single();
       if (error || !data) {
         throw new ProviderRepositoryError('save provider secret metadata', error);
+      }
+      return data;
+    },
+
+    async saveSettings(input) {
+      const { error } = await client.rpc('save_ai_provider_settings', {
+        provider_row: input.provider,
+        secret_row: input.secret,
+        model_row: input.model
+      });
+      if (error) {
+        throw new ProviderRepositoryError('save provider settings atomically', error);
+      }
+      const { data, error: loadError } = await client
+        .from('ai_providers')
+        .select('*')
+        .eq('id', input.provider.id)
+        .single();
+      if (loadError || !data) {
+        throw new ProviderRepositoryError('load saved provider settings', loadError);
       }
       return data;
     }

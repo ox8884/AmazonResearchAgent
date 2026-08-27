@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixtures = vi.hoisted(() => {
-  const upsertProvider = vi.fn();
-  const upsertSecret = vi.fn();
-  const upsertModel = vi.fn();
+  const saveSettings = vi.fn();
   const findSecret = vi.fn();
   const listModels = vi.fn();
   return {
-    upsertProvider,
-    upsertSecret,
-    upsertModel,
+    saveSettings,
     findSecret,
     listModels
   };
@@ -47,8 +43,8 @@ import { POST } from './route';
 describe('provider settings route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fixtures.upsertProvider.mockImplementation(async (input: { id: string }) => ({
-      id: input.id,
+    fixtures.saveSettings.mockImplementation(async (input: { provider: { id: string } }) => ({
+      id: input.provider.id,
       name: 'Safe provider',
       kind: 'command',
       billing_type: 'free',
@@ -83,24 +79,26 @@ describe('provider settings route', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(fixtures.upsertProvider).toHaveBeenCalledWith(
+    expect(fixtures.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: 'command',
-        config: {
-          commandProfileId: 'fake-command',
-          modelId: 'fake-model',
-          roles: ['niche_normalization']
-        }
+        provider: expect.objectContaining({
+          kind: 'command',
+          config: {
+            commandProfileId: 'fake-command',
+            modelId: 'fake-model',
+            roles: ['niche_normalization']
+          }
+        }),
+        secret: null
       })
     );
-    expect(JSON.stringify(fixtures.upsertProvider.mock.calls)).not.toContain('powershell.exe');
-    expect(fixtures.upsertSecret).not.toHaveBeenCalled();
+    expect(JSON.stringify(fixtures.saveSettings.mock.calls)).not.toContain('powershell.exe');
   });
 
   // Break: a blank key overwrites the stored secret during edit.
   it('preserves an existing secret when the replacement key is blank', async () => {
-    fixtures.upsertProvider.mockImplementation(async (input: { id: string }) => ({
-      id: input.id,
+    fixtures.saveSettings.mockImplementation(async (input: { provider: { id: string } }) => ({
+      id: input.provider.id,
       name: 'HTTP provider',
       kind: 'openai_http',
       billing_type: 'subscription',
@@ -129,16 +127,18 @@ describe('provider settings route', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(fixtures.upsertProvider).toHaveBeenCalledWith(
+    expect(fixtures.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: 'provider-existing',
-        config: expect.objectContaining({
-          baseUrl: 'https://provider.example/v1',
-          networkScope: 'public',
-          modelDiscovery: 'enabled'
-        })
+        provider: expect.objectContaining({
+          id: 'provider-existing',
+          config: expect.objectContaining({
+            baseUrl: 'https://provider.example/v1',
+            networkScope: 'public',
+            modelDiscovery: 'enabled'
+          })
+        }),
+        secret: null
       })
     );
-    expect(fixtures.upsertSecret).not.toHaveBeenCalled();
   });
 });

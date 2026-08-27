@@ -297,4 +297,59 @@ describe('AI analysis and cluster hardening RPCs', () => {
       expect.arrayContaining(['phrase-a', 'phrase-b'])
     );
   });
+
+  it('rolls back provider config and secret when a later model write fails', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      insert into provider_secrets (provider_id, ciphertext, iv, auth_tag, last4)
+      values (${providerId}, 'old-cipher', 'old-iv', 'old-tag', 'old4')
+    `;
+    await sql`
+      update ai_providers
+      set config = '{"baseUrl":"https://old.example/v1"}'::jsonb
+      where id = ${providerId}
+    `;
+
+    await expect(
+      sql`
+        select save_ai_provider_settings(
+          jsonb_build_object(
+            'id', ${providerId},
+            'name', ${providerId},
+            'kind', 'openai_http',
+            'billing_type', 'subscription',
+            'enabled', true,
+            'priority', 10,
+            'config', jsonb_build_object('baseUrl', 'https://new.example/v1')
+          ),
+          jsonb_build_object(
+            'ciphertext', 'new-cipher',
+            'iv', 'new-iv',
+            'auth_tag', 'new-tag',
+            'last4', 'new4'
+          ),
+          jsonb_build_object(
+            'model_id', 'broken-model',
+            'display_name', 'broken-model',
+            'capabilities', '[]'::jsonb,
+            'billing_type', 'not-a-billing-type'
+          )
+        )
+      `
+    ).rejects.toThrow();
+
+    const [provider] = await sql<{ config: unknown }[]>`
+      select config from ai_providers where id = ${providerId}
+    `;
+    const [secret] = await sql<{ ciphertext: string; last4: string }[]>`
+      select ciphertext, last4 from provider_secrets where provider_id = ${providerId}
+    `;
+    const models = await sql<{ model_id: string }[]>`
+      select model_id from ai_models where provider_id = ${providerId}
+    `;
+
+    expect(provider?.config).toEqual({ baseUrl: 'https://old.example/v1' });
+    expect(secret).toEqual({ ciphertext: 'old-cipher', last4: 'old4' });
+    expect(models).toEqual([]);
+  });
 });

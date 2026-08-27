@@ -5,6 +5,7 @@ import ky from 'ky';
 import { useId, useState, type FormEvent } from 'react';
 import { z } from 'zod';
 import { MAX_FILE_BYTES, MAX_FILE_COUNT } from '../lib/import-upload-limits';
+import { adminCsrfHeaders } from '../lib/admin-csrf';
 import { StatusBadge } from './ui';
 
 const ImportResponseSchema = z.object({
@@ -39,7 +40,13 @@ export function ImportUploadForm({ locale }: { locale: Locale }) {
 
     try {
       const result = ImportResponseSchema.parse(
-        await ky.post('/api/imports', { body }).json<unknown>()
+        await ky
+          .post('/api/imports', {
+            body,
+            headers: adminCsrfHeaders(),
+            credentials: 'same-origin'
+          })
+          .json<unknown>()
       );
       setSubmission({ kind: 'queued', importRunId: result.import_run_id });
     } catch (error) {

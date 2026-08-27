@@ -236,36 +236,37 @@ export async function POST(request: Request): Promise<NextResponse> {
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const providerId = input.id ?? `provider-${randomUUID()}`;
-    const provider = await repository.upsertProvider({
-      id: providerId,
-      name: input.name,
-      kind: input.kind,
-      billing_type: input.billingType,
-      enabled: input.enabled,
-      priority: input.priority,
-      config: providerConfig(input)
-    });
-
-    if (encrypted) {
-      await repository.upsertSecret({
-        provider_id: provider.id,
-        ciphertext: encrypted.ciphertext,
-        iv: encrypted.iv,
-        auth_tag: encrypted.authTag,
-        last4: encrypted.last4
-      });
-    }
-    if (input.modelId) {
-      await repository.upsertModel({
-        provider_id: provider.id,
-        model_id: input.modelId,
-        display_name: input.modelId,
-        capabilities: [...MODEL_CAPABILITIES],
+    const provider = await repository.saveSettings({
+      provider: {
+        id: providerId,
+        name: input.name,
+        kind: input.kind,
         billing_type: input.billingType,
-        quality_rank: 100,
-        enabled: true
-      });
-    }
+        enabled: input.enabled,
+        priority: input.priority,
+        config: providerConfig(input)
+      },
+      secret: encrypted
+        ? {
+            provider_id: providerId,
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            auth_tag: encrypted.authTag,
+            last4: encrypted.last4
+          }
+        : null,
+      model: input.modelId
+        ? {
+            provider_id: providerId,
+            model_id: input.modelId,
+            display_name: input.modelId,
+            capabilities: [...MODEL_CAPABILITIES],
+            billing_type: input.billingType,
+            quality_rank: 100,
+            enabled: true
+          }
+        : null
+    });
 
     const [secret, models] = await Promise.all([
       repository.findSecret(provider.id),

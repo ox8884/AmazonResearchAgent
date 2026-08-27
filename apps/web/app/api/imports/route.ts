@@ -3,23 +3,43 @@ import { NextResponse } from 'next/server';
 import { prepareUploadFiles, UploadValidationError } from '../../../lib/import-upload';
 import { ServerConfigurationError } from '../../../lib/server/database';
 import { enqueueImport, ImportEnqueueError } from '../../../lib/server/enqueue-import';
+import {
+  adminAuthErrorResponse,
+  requireAdminMutation
+} from '../../../lib/server/api-auth';
+import { AdminAuthError } from '../../../lib/server/admin-session';
+import {
+  AbuseGuardError,
+  importConcurrencyGate,
+  importRateLimit
+} from '../../../lib/server/abuse-guard';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    const formData = await request.formData();
-    const localeResult = LocaleSchema.safeParse(formData.get('locale'));
-    if (!localeResult.success) {
-      return NextResponse.json({ error: 'invalid_upload' }, { status: 400 });
-    }
-    const files = formData
-      .getAll('files')
-      .filter((value): value is File => value instanceof File);
-    const prepared = await prepareUploadFiles(files);
-    const importRunId = await enqueueImport(prepared, localeResult.data);
-    return NextResponse.json({ import_run_id: importRunId }, { status: 202 });
+    const session = requireAdminMutation(request);
+    importRateLimit.consume(session.csrfToken);
+    return await importConcurrencyGate.run(session.csrfToken, async () => {
+      const formData = await request.formData();
+      const localeResult = LocaleSchema.safeParse(formData.get('locale'));
+      if (!localeResult.success) {
+        return NextResponse.json({ error: 'invalid_upload' }, { status: 400 });
+      }
+      const files = formData
+        .getAll('files')
+        .filter((value): value is File => value instanceof File);
+      const prepared = await prepareUploadFiles(files);
+      const importRunId = await enqueueImport(prepared, localeResult.data);
+      return NextResponse.json({ import_run_id: importRunId }, { status: 202 });
+    });
   } catch (error) {
+    if (error instanceof AdminAuthError) {
+      return adminAuthErrorResponse(error);
+    }
+    if (error instanceof AbuseGuardError) {
+      return NextResponse.json({ error: 'too_many_requests' }, { status: 429 });
+    }
     if (error instanceof UploadValidationError) {
       return NextResponse.json({ error: 'invalid_upload' }, { status: 400 });
     }

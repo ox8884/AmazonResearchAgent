@@ -836,6 +836,14 @@ export type Database = {
         }
         Returns: string
       }
+      save_ai_provider_settings: {
+        Args: {
+          provider_row: Json
+          secret_row: Json | null
+          model_row: Json | null
+        }
+        Returns: Json
+      }
       checkpoint_job: {
         Args: {
           checkpoint: Json
