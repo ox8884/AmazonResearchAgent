@@ -54,3 +54,17 @@ export type {
   RouterMode,
   TestAiProviderConnectionJobPayload
 } from './ai';
+
+export {
+  ApiCacheKeyInputSchema,
+  ApiCallPurposeSchema,
+  JungleScoutEndpointSchema,
+  MarketSnapshotSchema,
+  makeApiCacheKey
+} from './jungle-scout';
+export type {
+  ApiCacheKeyInput,
+  ApiCallPurpose,
+  JungleScoutEndpoint,
+  MarketSnapshot
+} from './jungle-scout';

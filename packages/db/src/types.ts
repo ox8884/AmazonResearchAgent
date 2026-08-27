@@ -333,6 +333,117 @@ export type Database = {
           },
         ]
       }
+      api_budget_daily: {
+        Row: {
+          budget_date: string
+          created_at: string
+          daily_limit: number
+          reserved_limit: number
+          reserved_used_count: number
+          updated_at: string
+          used_count: number
+        }
+        Insert: {
+          budget_date: string
+          created_at?: string
+          daily_limit: number
+          reserved_limit: number
+          reserved_used_count?: number
+          updated_at?: string
+          used_count?: number
+        }
+        Update: {
+          budget_date?: string
+          created_at?: string
+          daily_limit?: number
+          reserved_limit?: number
+          reserved_used_count?: number
+          updated_at?: string
+          used_count?: number
+        }
+        Relationships: []
+      }
+      api_cache: {
+        Row: {
+          cache_key: string
+          captured_at: string
+          endpoint: string
+          expires_at: string
+          response: Json
+        }
+        Insert: {
+          cache_key: string
+          captured_at?: string
+          endpoint: string
+          expires_at: string
+          response: Json
+        }
+        Update: {
+          cache_key?: string
+          captured_at?: string
+          endpoint?: string
+          expires_at?: string
+          response?: Json
+        }
+        Relationships: []
+      }
+      api_usage: {
+        Row: {
+          budget_date: string
+          cache_key: string
+          cached: boolean
+          call_count: number
+          candidate_id: string | null
+          completed_at: string | null
+          created_at: string
+          endpoint: string
+          error_code: string | null
+          http_status: number | null
+          id: string
+          niche_cluster_id: string | null
+          purpose: string
+          retry_count: number
+          started_at: string
+          success: boolean | null
+        }
+        Insert: {
+          budget_date?: string
+          cache_key: string
+          cached?: boolean
+          call_count?: number
+          candidate_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          endpoint: string
+          error_code?: string | null
+          http_status?: number | null
+          id?: string
+          niche_cluster_id?: string | null
+          purpose: string
+          retry_count?: number
+          started_at?: string
+          success?: boolean | null
+        }
+        Update: {
+          budget_date?: string
+          cache_key?: string
+          cached?: boolean
+          call_count?: number
+          candidate_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          endpoint?: string
+          error_code?: string | null
+          http_status?: number | null
+          id?: string
+          niche_cluster_id?: string | null
+          purpose?: string
+          retry_count?: number
+          started_at?: string
+          success?: boolean | null
+        }
+        Relationships: []
+      }
       candidates: {
         Row: {
           created_at: string
@@ -780,6 +891,180 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      candidate_evidence: {
+        Row: {
+          candidate_id: string
+          created_at: string
+          id: string
+          kind: string
+          payload: Json
+        }
+        Insert: {
+          candidate_id: string
+          created_at?: string
+          id?: string
+          kind: string
+          payload?: Json
+        }
+        Update: {
+          candidate_id?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          payload?: Json
+        }
+        Relationships: []
+      }
+      market_snapshots: {
+        Row: {
+          candidate_id: string | null
+          captured_at: string
+          confidence: number
+          created_at: string
+          estimated_market_sales: number | null
+          id: string
+          metrics: Json
+          niche_cluster_id: string | null
+          observed_sample_sales: number
+          sample_product_family_count: number
+          source_endpoint_set: Json
+        }
+        Insert: {
+          candidate_id?: string | null
+          captured_at?: string
+          confidence?: number
+          created_at?: string
+          estimated_market_sales?: number | null
+          id?: string
+          metrics?: Json
+          niche_cluster_id?: string | null
+          observed_sample_sales?: number
+          sample_product_family_count?: number
+          source_endpoint_set?: Json
+        }
+        Update: {
+          candidate_id?: string | null
+          captured_at?: string
+          confidence?: number
+          created_at?: string
+          estimated_market_sales?: number | null
+          id?: string
+          metrics?: Json
+          niche_cluster_id?: string | null
+          observed_sample_sales?: number
+          sample_product_family_count?: number
+          source_endpoint_set?: Json
+        }
+        Relationships: []
+      }
+      product_families: {
+        Row: {
+          created_at: string
+          id: string
+          niche_cluster_id: string | null
+          observed_monthly_revenue: number | null
+          observed_monthly_units: number | null
+          parent_key: string
+          quality_notes: Json
+          updated_at: string
+          variant_count: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          observed_monthly_revenue?: number | null
+          observed_monthly_units?: number | null
+          parent_key: string
+          quality_notes?: Json
+          updated_at?: string
+          variant_count?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          observed_monthly_revenue?: number | null
+          observed_monthly_units?: number | null
+          parent_key?: string
+          quality_notes?: Json
+          updated_at?: string
+          variant_count?: number
+        }
+        Relationships: []
+      }
+      products: {
+        Row: {
+          asin: string
+          attributes: Json
+          brand: string | null
+          created_at: string
+          id: string
+          niche_cluster_id: string | null
+          parent_asin: string | null
+          price: number | null
+          product_family_id: string
+          rating: number | null
+          reviews: number | null
+          seller_type: string | null
+          title: string | null
+        }
+        Insert: {
+          asin: string
+          attributes?: Json
+          brand?: string | null
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          parent_asin?: string | null
+          price?: number | null
+          product_family_id: string
+          rating?: number | null
+          reviews?: number | null
+          seller_type?: string | null
+          title?: string | null
+        }
+        Update: {
+          asin?: string
+          attributes?: Json
+          brand?: string | null
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          parent_asin?: string | null
+          price?: number | null
+          product_family_id?: string
+          rating?: number | null
+          reviews?: number | null
+          seller_type?: string | null
+          title?: string | null
+        }
+        Relationships: []
+      }
+      risks: {
+        Row: {
+          candidate_id: string
+          code: string
+          created_at: string
+          detail: string
+          id: string
+        }
+        Insert: {
+          candidate_id: string
+          code: string
+          created_at?: string
+          detail: string
+          id?: string
+        }
+        Update: {
+          candidate_id?: string
+          code?: string
+          created_at?: string
+          detail?: string
+          id?: string
+        }
+        Relationships: []
       }
     }
     Views: {
