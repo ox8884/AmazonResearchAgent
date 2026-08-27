@@ -176,7 +176,7 @@ describe('OpenAI-compatible HTTP provider', () => {
   });
 
   it('probes models for health when a secret is present', async () => {
-    let paths: string[] = [];
+    const paths: string[] = [];
     const mock = await startMockServer((incoming, response) => {
       paths.push(incoming.url ?? '');
       response.statusCode = 401;

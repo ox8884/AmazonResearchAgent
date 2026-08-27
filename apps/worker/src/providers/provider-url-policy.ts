@@ -1,6 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { Agent } from 'undici';
+import { Agent, type Dispatcher } from 'undici';
 
 export type ProviderNetworkScope = 'public' | 'private' | 'loopback';
 type AddressCategory = ProviderNetworkScope | 'blocked';
@@ -251,16 +251,16 @@ export function createPinnedProviderFetch(
       agents.set(pin.tlsServername, dispatcher);
     }
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    const body =
-      init?.body ?? (input instanceof Request && method !== 'GET' && method !== 'HEAD' ? input.body : undefined);
-    const requested = await dispatcher.request({
+    const requestInit: Dispatcher.RequestOptions = {
       origin,
       path: `${original.pathname}${original.search}`,
       method,
-      headers,
-      body,
-      maxRedirections: 0
-    });
+      headers
+    };
+    if (typeof init?.body === 'string' || init?.body instanceof Uint8Array) {
+      requestInit.body = init.body;
+    }
+    const requested = await dispatcher.request(requestInit);
     const responseHeaders = new Headers();
     for (const [key, value] of Object.entries(requested.headers)) {
       if (typeof value === 'string') {
@@ -271,7 +271,8 @@ export function createPinnedProviderFetch(
         }
       }
     }
-    return new Response(requested.body, {
+    const payload = Buffer.from(await requested.body.arrayBuffer());
+    return new Response(payload, {
       status: requested.statusCode,
       headers: responseHeaders
     });

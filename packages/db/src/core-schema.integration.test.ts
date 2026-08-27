@@ -288,7 +288,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
     const rows = await sql<{ aliases: unknown; catalog_phrases: unknown }[]>`
       select aliases, catalog_phrases
       from niche_clusters
-      where canonical_key = ${canonicalKey}
+      where canonical_key = public.canonical_niche_key(${canonicalKey})
     `;
 
     expect(rows).toHaveLength(1);
@@ -391,15 +391,15 @@ describe('AI analysis and cluster hardening RPCs', () => {
     await sql`
       select save_ai_provider_settings(
         jsonb_build_object(
-          'id', ${providerId},
-          'name', ${providerId},
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
           'kind', 'command',
           'billing_type', 'free',
           'enabled', true,
           'priority', 7,
           'config', '{}'::jsonb
         ),
-        null,
+        null::jsonb,
         jsonb_build_array(
           jsonb_build_object(
             'model_id', 'old-model',
@@ -411,21 +411,21 @@ describe('AI analysis and cluster hardening RPCs', () => {
             'origin', 'manual'
           )
         ),
-        'manual'
+        'manual'::text
       )
     `;
     await sql`
       select save_ai_provider_settings(
         jsonb_build_object(
-          'id', ${providerId},
-          'name', ${providerId},
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
           'kind', 'command',
           'billing_type', 'free',
           'enabled', true,
           'priority', 7,
           'config', '{}'::jsonb
         ),
-        null,
+        null::jsonb,
         jsonb_build_array(
           jsonb_build_object(
             'model_id', 'new-model',
@@ -437,7 +437,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
             'origin', 'manual'
           )
         ),
-        'manual'
+        'manual'::text
       )
     `;
     const models = await sql<{ model_id: string; enabled: boolean; priority: number }[]>`
