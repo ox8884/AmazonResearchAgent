@@ -76,7 +76,12 @@ export type CopyKey =
   | 'connectionUnavailable'
   | 'noProviders'
   | 'roleAssignments'
-  | 'providerEnabled';
+  | 'providerEnabled'
+  | 'adminLoginTitle'
+  | 'adminPassword'
+  | 'adminLogin'
+  | 'adminLogout'
+  | 'invalidLogin';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -155,7 +160,12 @@ export const COPY = {
     connectionUnavailable: 'Provider 연결 불가',
     noProviders: '저장된 provider가 없습니다.',
     roleAssignments: 'Role assignments',
-    providerEnabled: 'Provider enabled'
+    providerEnabled: 'Provider enabled',
+    adminLoginTitle: '관리자 로그인',
+    adminPassword: '관리자 비밀번호',
+    adminLogin: '로그인',
+    adminLogout: '로그아웃',
+    invalidLogin: '로그인 정보가 올바르지 않습니다.'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -231,7 +241,12 @@ export const COPY = {
     connectionUnavailable: 'Provider unavailable',
     noProviders: 'No providers have been saved.',
     roleAssignments: 'Role assignments',
-    providerEnabled: 'Provider enabled'
+    providerEnabled: 'Provider enabled',
+    adminLoginTitle: 'Admin login',
+    adminPassword: 'Admin password',
+    adminLogin: 'Log in',
+    adminLogout: 'Log out',
+    invalidLogin: 'The login credentials are invalid.'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

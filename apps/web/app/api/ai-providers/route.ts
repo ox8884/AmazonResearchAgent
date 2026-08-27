@@ -22,6 +22,12 @@ import {
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerDatabaseContext, ServerConfigurationError } from '../../../lib/server/database';
+import {
+  adminAuthErrorResponse,
+  requireAdminMutation,
+  requireAdminRead
+} from '../../../lib/server/api-auth';
+import { AdminAuthError } from '../../../lib/server/admin-session';
 
 export const runtime = 'nodejs';
 
@@ -156,8 +162,9 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   try {
+    requireAdminRead(request);
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const [providers, models, secrets] = await Promise.all([
@@ -182,6 +189,9 @@ export async function GET(): Promise<NextResponse> {
       )
     });
   } catch (error) {
+    if (error instanceof AdminAuthError) {
+      return adminAuthErrorResponse(error);
+    }
     if (
       error instanceof ServerConfigurationError ||
       error instanceof ProviderRepositoryError
@@ -194,6 +204,7 @@ export async function GET(): Promise<NextResponse> {
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
+    requireAdminMutation(request);
     const parsed = ProviderInputSchema.safeParse(await readJson(request));
     if (!parsed.success) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
@@ -245,6 +256,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 201 }
     );
   } catch (error) {
+    if (error instanceof AdminAuthError) {
+      return adminAuthErrorResponse(error);
+    }
     if (error instanceof ProviderConfigurationError || error instanceof z.ZodError) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }

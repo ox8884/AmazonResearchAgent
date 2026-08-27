@@ -9,6 +9,7 @@ import {
 } from '@ara/shared';
 import ky from 'ky';
 import { useState, type FormEvent } from 'react';
+import { adminCsrfHeaders } from '../lib/admin-csrf';
 import { z } from 'zod';
 
 const ProviderModelSchema = z.object({
@@ -101,7 +102,11 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
 
     try {
       const result = ProviderResponseSchema.parse(
-        await ky.post('/api/ai-providers', { json: body }).json<unknown>()
+        await ky.post('/api/ai-providers', {
+          json: body,
+          headers: adminCsrfHeaders(),
+          credentials: 'same-origin'
+        }).json<unknown>()
       );
       setSaved(result.provider);
       setStatus({ kind: 'saved' });
@@ -123,7 +128,11 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
     try {
       const result = ConnectionResponseSchema.parse(
         await ky
-          .post('/api/ai-providers/test', { json: { providerId: saved.id } })
+          .post('/api/ai-providers/test', {
+            json: { providerId: saved.id },
+            headers: adminCsrfHeaders(),
+            credentials: 'same-origin'
+          })
           .json<unknown>()
       );
       setStatus({
