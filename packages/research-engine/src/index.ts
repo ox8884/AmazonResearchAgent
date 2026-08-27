@@ -40,3 +40,5 @@ export { calculateMarketMetrics } from './market-metrics';
 export type { MarketMetrics } from './market-metrics';
 export { scoreMarketOpportunity } from './scoring/market-score';
 export type { MarketScoreResult } from './scoring/market-score';
+export { calculateAllowableLandedCost } from './economics';
+export type { AllowableLandedCost } from './economics';

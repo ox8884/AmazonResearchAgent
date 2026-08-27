@@ -26,3 +26,5 @@ export type {
   ProductDatabaseProduct,
   ProductDatabaseQueryInput
 } from './product-database';
+export { buildKeywordRequest, queryKeywordMetrics } from './keywords';
+export type { KeywordMetrics, KeywordQueryInput } from './keywords';
