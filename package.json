@@ -8,6 +8,7 @@
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:integration": "node -e \"const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'TEST_DATABASE_URL']; const missing = required.filter((key) => !process.env[key]); if (missing.length > 0) { console.error('Local Supabase integration tests require: ' + missing.join(', ')); process.exit(1); }\" && pnpm --filter @ara/db exec vitest run src/core-schema.integration.test.ts && pnpm --filter @ara/queue exec vitest run src/queue.integration.test.ts && pnpm --filter @ara/worker exec vitest run src/jobs/import-opportunity-csv.integration.test.ts",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint"
   },
