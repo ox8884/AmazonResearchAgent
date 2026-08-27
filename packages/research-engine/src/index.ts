@@ -15,3 +15,10 @@ export {
   IRRELEVANT_SUBDOMAIN_TERMS,
   SEASONAL_EVENT_TERMS
 } from './rules/lexicons';
+
+export { scorePreliminaryOpportunity } from './scoring/preliminary-score';
+export type {
+  PreliminaryComponentName,
+  PreliminaryScore,
+  PreliminaryScoreComponent
+} from './scoring/preliminary-score';
