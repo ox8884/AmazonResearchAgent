@@ -16,3 +16,7 @@ supabase/.temp/
 Thumbs.db
 
 *.tsbuildinfo
+
+# Next.js `next dev` writes these agent stubs; they are not project source.
+apps/web/AGENTS.md
+apps/web/CLAUDE.md
