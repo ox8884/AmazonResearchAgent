@@ -13,6 +13,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@ara/shared": "workspace:*"
+    "@ara/shared": "workspace:*",
+    "zod": "4.4.3"
   }
 }
