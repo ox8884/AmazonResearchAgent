@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
 import { Agent, type Dispatcher } from 'undici';
 
 export type ProviderNetworkScope = 'public' | 'private' | 'loopback';
@@ -210,6 +211,31 @@ export async function pinProviderDestination(
     tlsServername: hostname
   };
 }
+function nodeReadableToWebStream(source: Readable): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      source.on('data', (chunk: Buffer | string) => {
+        const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        controller.enqueue(new Uint8Array(bytes));
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+          source.pause();
+        }
+      });
+      source.once('end', () => {
+        controller.close();
+      });
+      source.once('error', (error: Error) => {
+        controller.error(error);
+      });
+    },
+    pull() {
+      source.resume();
+    },
+    cancel() {
+      source.destroy();
+    }
+  });
+}
 
 export function createPinnedProviderFetch(
   scope: ProviderNetworkScope,
@@ -271,8 +297,7 @@ export function createPinnedProviderFetch(
         }
       }
     }
-    const payload = Buffer.from(await requested.body.arrayBuffer());
-    return new Response(payload, {
+    return new Response(nodeReadableToWebStream(requested.body), {
       status: requested.statusCode,
       headers: responseHeaders
     });
