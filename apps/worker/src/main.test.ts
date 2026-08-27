@@ -1,0 +1,192 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Job } from '@ara/queue';
+import {
+  redactSecrets,
+  retryDelayMilliseconds,
+  runJob,
+  runWorkerLoop,
+  type WorkerLogger,
+  type WorkerQueue
+} from './main';
+
+function makeJob(overrides: Partial<Job> = {}): Job {
+  return {
+    id: 'job-1',
+    type: 'IMPORT_OPPORTUNITY_CSV',
+    payload: {},
+    status: 'running',
+    priority: 100,
+    availableAt: '2026-08-27T00:00:00.000Z',
+    leasedUntil: '2026-08-27T00:02:00.000Z',
+    leasedBy: 'worker-a',
+    attempts: 1,
+    maxAttempts: 5,
+    idempotencyKey: 'fixture',
+    checkpoint: {},
+    lastError: null,
+    createdAt: '2026-08-27T00:00:00.000Z',
+    updatedAt: '2026-08-27T00:00:00.000Z',
+    ...overrides
+  };
+}
+
+class FakeWorkerQueue implements WorkerQueue {
+  completed: unknown[][] = [];
+  failed: unknown[][] = [];
+  heartbeats: unknown[][] = [];
+
+  async claimJobs(): Promise<Job[]> {
+    return [];
+  }
+
+  async completeJob(...args: [string, string, unknown]): Promise<void> {
+    this.completed.push(args);
+  }
+
+  async failJob(
+    ...args: [string, string, string, string, unknown]
+  ): Promise<void> {
+    this.failed.push(args);
+  }
+
+  async heartbeatJob(...args: [string, string, number]): Promise<void> {
+    this.heartbeats.push(args);
+  }
+}
+
+const silentLogger: WorkerLogger = {
+  info() {},
+  error() {}
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('worker job execution', () => {
+  // Break: retry scheduling does not follow the approved 1m/5m/30m/2h sequence.
+  it('uses the exponential retry schedule', () => {
+    expect([1, 2, 3, 4, 5].map(retryDelayMilliseconds)).toEqual([
+      60_000,
+      300_000,
+      1_800_000,
+      7_200_000,
+      0
+    ]);
+  });
+
+  // Break: a successful handler loses its final checkpoint or is marked failed.
+  it('completes a successful job with its latest checkpoint', async () => {
+    const queue = new FakeWorkerQueue();
+    const controller = new AbortController();
+
+    await runJob(makeJob(), {
+      queue,
+      handlers: {
+        IMPORT_OPPORTUNITY_CSV: async (_job, context) => {
+          context.setCheckpoint({ phase: 'parsed' });
+          return { phase: 'completed' };
+        }
+      },
+      workerId: 'worker-a',
+      signal: controller.signal,
+      logger: silentLogger
+    });
+
+    expect(queue.completed).toEqual([
+      ['job-1', 'worker-a', { phase: 'completed' }]
+    ]);
+    expect(queue.failed).toEqual([]);
+  });
+
+  // Break: a handler failure stores secrets or uses the wrong retry delay/checkpoint.
+  it('redacts errors and schedules a failed second attempt five minutes later', async () => {
+    const queue = new FakeWorkerQueue();
+    const controller = new AbortController();
+
+    await runJob(makeJob({ attempts: 2 }), {
+      queue,
+      handlers: {
+        IMPORT_OPPORTUNITY_CSV: async (_job, context) => {
+          context.setCheckpoint({ phase: 'persisted_raw' });
+          throw new Error('request used sb_secret_do-not-log');
+        }
+      },
+      workerId: 'worker-a',
+      signal: controller.signal,
+      now: () => new Date('2026-08-27T00:00:00.000Z'),
+      logger: silentLogger
+    });
+
+    expect(queue.failed).toEqual([
+      [
+        'job-1',
+        'worker-a',
+        'request used [REDACTED]',
+        '2026-08-27T00:05:00.000Z',
+        { phase: 'persisted_raw' }
+      ]
+    ]);
+    expect(queue.completed).toEqual([]);
+  });
+
+  // Break: long-running handlers do not renew their database lease every 30 seconds.
+  it('heartbeats while a handler remains in progress', async () => {
+    vi.useFakeTimers();
+    const queue = new FakeWorkerQueue();
+    const controller = new AbortController();
+    let finish: (() => void) | undefined;
+
+    const running = runJob(makeJob(), {
+      queue,
+      handlers: {
+        IMPORT_OPPORTUNITY_CSV: async () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      },
+      workerId: 'worker-a',
+      signal: controller.signal,
+      heartbeatIntervalMs: 30_000,
+      logger: silentLogger
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(queue.heartbeats).toEqual([['job-1', 'worker-a', 120]]);
+    if (!finish) {
+      throw new Error('Expected the fixture handler to be waiting');
+    }
+    finish();
+    await running;
+  });
+
+  // Break: an idle worker busy-loops or ignores cancellation instead of waiting two seconds.
+  it('polls four jobs and waits when the queue is empty', async () => {
+    const queue = new FakeWorkerQueue();
+    const claim = vi.spyOn(queue, 'claimJobs');
+    const controller = new AbortController();
+    const sleeper = vi.fn(async (milliseconds: number) => {
+      expect(milliseconds).toBe(2_000);
+      controller.abort();
+    });
+
+    await runWorkerLoop({
+      queue,
+      handlers: {},
+      workerId: 'worker-a',
+      signal: controller.signal,
+      sleep: sleeper,
+      logger: silentLogger
+    });
+
+    expect(claim).toHaveBeenCalledWith('worker-a', 4, 120);
+    expect(sleeper).toHaveBeenCalledOnce();
+  });
+
+  // Break: known token formats pass through the worker logger unchanged.
+  it('redacts supported secret formats', () => {
+    expect(redactSecrets('Bearer abc sk-secret sb_secret_value')).toBe(
+      'Bearer [REDACTED] [REDACTED] [REDACTED]'
+    );
+  });
+});

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit",
+    "dev": "tsx src/main.ts",
+    "start": "tsx src/main.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
@@ -15,5 +17,8 @@
     "@ara/queue": "workspace:*",
     "@ara/research-engine": "workspace:*",
     "@ara/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.23.12"
   }
 }

@@ -16,10 +16,11 @@ function requireJobId(row: { id: string } | undefined): string {
 
 describe('core research schema', () => {
   beforeEach(async () => {
-    await sql`truncate table jobs restart identity cascade`;
+    await sql`delete from jobs where idempotency_key like 'db-it-%'`;
   });
 
   afterAll(async () => {
+    await sql`delete from jobs where idempotency_key like 'db-it-%'`;
     await sql.end();
   });
 
@@ -27,7 +28,7 @@ describe('core research schema', () => {
   it('claims a queued job exactly once', async () => {
     const [created] = await sql<{ id: string }[]>`
       insert into jobs (type, status, idempotency_key)
-      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'fixture-1')
+      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'db-it-fixture-1')
       returning id
     `;
 
@@ -46,7 +47,7 @@ describe('core research schema', () => {
   it('allows only the lease owner to heartbeat and complete a job', async () => {
     const [created] = await sql<{ id: string }[]>`
       insert into jobs (type, status, idempotency_key)
-      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'owned-job')
+      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'db-it-owned-job')
       returning id
     `;
     const jobId = requireJobId(created);
@@ -89,7 +90,7 @@ describe('core research schema', () => {
       values (
         'IMPORT_OPPORTUNITY_CSV',
         'queued',
-        'expired-lease',
+        'db-it-expired-lease',
         '{"phase":"parsed"}'::jsonb
       )
       returning id
@@ -120,7 +121,7 @@ describe('core research schema', () => {
   it('marks a job failed when the final attempt fails', async () => {
     const [created] = await sql<{ id: string }[]>`
       insert into jobs (type, status, idempotency_key, max_attempts)
-      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'terminal-failure', 1)
+      values ('IMPORT_OPPORTUNITY_CSV', 'queued', 'db-it-terminal-failure', 1)
       returning id
     `;
     const jobId = requireJobId(created);

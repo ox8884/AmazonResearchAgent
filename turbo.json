@@ -6,6 +6,11 @@
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "test": {
+      "env": [
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "TEST_DATABASE_URL"
+      ],
       "outputs": []
     },
     "typecheck": {
