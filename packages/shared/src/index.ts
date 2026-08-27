@@ -1,6 +1,8 @@
 export { APP_NAME } from './version';
 export {
   CandidateStateSchema,
+  ImportFileReferenceSchema,
+  ImportOpportunityCsvJobPayloadSchema,
   ImportRunStatusSchema,
   LocaleSchema,
   OpportunityCsvRowSchema,
@@ -11,6 +13,8 @@ export {
 } from './domain';
 export type {
   CandidateState,
+  ImportFileReference,
+  ImportOpportunityCsvJobPayload,
   ImportRunStatus,
   Locale,
   OpportunityCsvRow,

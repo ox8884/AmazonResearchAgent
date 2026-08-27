@@ -68,6 +68,29 @@ export const OpportunityCsvRowSchema = z.object({
 export type OpportunityCsvRow = z.infer<typeof OpportunityCsvRowSchema>;
 export type OpportunityCsvRowInput = z.input<typeof OpportunityCsvRowSchema>;
 
+export const ImportFileReferenceSchema = z.object({
+  sourceFileName: z.string().trim().min(1),
+  storagePath: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (path) => !path.startsWith('/') && !path.split('/').includes('..'),
+      'storagePath must be a relative private object path'
+    ),
+  contentSha256: z.string().regex(/^[a-f0-9]{64}$/)
+});
+export type ImportFileReference = z.infer<typeof ImportFileReferenceSchema>;
+
+export const ImportOpportunityCsvJobPayloadSchema = z.object({
+  importRunId: z.uuid(),
+  storageBucket: z.string().trim().min(1),
+  files: z.array(ImportFileReferenceSchema).min(1).max(20)
+});
+export type ImportOpportunityCsvJobPayload = z.infer<
+  typeof ImportOpportunityCsvJobPayloadSchema
+>;
+
 export const RuleReasonSchema = z.object({
   code: RuleCodeSchema,
   detail: z.string().min(1)

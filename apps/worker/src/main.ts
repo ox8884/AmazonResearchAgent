@@ -7,7 +7,7 @@ import {
   type Job
 } from '@ara/queue';
 import {
-  handlers as defaultHandlers,
+  createJobHandlers,
   resolveJobHandler,
   type JobHandlers
 } from './handlers';
@@ -25,6 +25,12 @@ export interface WorkerQueue {
     checkpoint: unknown
   ): Promise<void>;
   heartbeatJob(jobId: string, workerId: string, leaseSeconds: number): Promise<void>;
+  checkpointJob(
+    jobId: string,
+    workerId: string,
+    checkpoint: unknown,
+    leaseSeconds: number
+  ): Promise<void>;
 }
 
 export interface WorkerLogger {
@@ -131,6 +137,15 @@ export async function runJob(job: Job, options: RunJobOptions): Promise<void> {
       checkpoint,
       setCheckpoint(nextCheckpoint) {
         checkpoint = nextCheckpoint;
+      },
+      async saveCheckpoint(nextCheckpoint) {
+        await options.queue.checkpointJob(
+          job.id,
+          options.workerId,
+          nextCheckpoint,
+          leaseSeconds
+        );
+        checkpoint = nextCheckpoint;
       }
     });
     if (result !== undefined) {
@@ -222,7 +237,7 @@ export async function main(): Promise<void> {
   try {
     await runWorkerLoop({
       queue,
-      handlers: defaultHandlers,
+      handlers: createJobHandlers(client),
       workerId: process.env.WORKER_ID ?? `${hostname()}-${process.pid}`,
       signal: controller.signal
     });

@@ -1,5 +1,6 @@
 export {
   claimJobs,
+  checkpointJob,
   completeJob,
   configureQueue,
   createQueue,

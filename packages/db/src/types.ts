@@ -42,6 +42,8 @@ export type Database = {
           entity_type: string
           event_type: string
           id: string
+          idempotency_key: string | null
+          import_run_id: string | null
           metadata: Json
         }
         Insert: {
@@ -51,6 +53,8 @@ export type Database = {
           entity_type: string
           event_type: string
           id?: string
+          idempotency_key?: string | null
+          import_run_id?: string | null
           metadata?: Json
         }
         Update: {
@@ -60,9 +64,19 @@ export type Database = {
           entity_type?: string
           event_type?: string
           id?: string
+          idempotency_key?: string | null
+          import_run_id?: string | null
           metadata?: Json
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "audit_events_import_run_id_fkey"
+            columns: ["import_run_id"]
+            isOneToOne: false
+            referencedRelation: "import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       candidates: {
         Row: {
@@ -148,6 +162,7 @@ export type Database = {
           decided_by: string
           from_state: string | null
           id: string
+          idempotency_key: string | null
           reasons: Json
           to_state: string
         }
@@ -158,6 +173,7 @@ export type Database = {
           decided_by?: string
           from_state?: string | null
           id?: string
+          idempotency_key?: string | null
           reasons?: Json
           to_state: string
         }
@@ -168,6 +184,7 @@ export type Database = {
           decided_by?: string
           from_state?: string | null
           id?: string
+          idempotency_key?: string | null
           reasons?: Json
           to_state?: string
         }
@@ -424,6 +441,7 @@ export type Database = {
           components: Json
           created_at: string
           id: string
+          idempotency_key: string | null
           score: number
           score_type: string
           source_data_timestamp: string | null
@@ -433,6 +451,7 @@ export type Database = {
           components: Json
           created_at?: string
           id?: string
+          idempotency_key?: string | null
           score: number
           score_type: string
           source_data_timestamp?: string | null
@@ -442,6 +461,7 @@ export type Database = {
           components?: Json
           created_at?: string
           id?: string
+          idempotency_key?: string | null
           score?: number
           score_type?: string
           source_data_timestamp?: string | null
@@ -461,6 +481,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      checkpoint_job: {
+        Args: {
+          checkpoint: Json
+          job_id: string
+          lease_seconds: number
+          worker_id: string
+        }
+        Returns: boolean
+      }
       claim_jobs: {
         Args: { job_limit: number; lease_seconds: number; worker_id: string }
         Returns: {

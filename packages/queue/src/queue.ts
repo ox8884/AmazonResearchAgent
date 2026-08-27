@@ -65,6 +65,12 @@ export interface QueueRepository {
     workerId: string,
     leaseSeconds: number
   ): Promise<boolean>;
+  checkpointJob(
+    jobId: string,
+    workerId: string,
+    checkpoint: Json,
+    leaseSeconds: number
+  ): Promise<boolean>;
 }
 
 export class DuplicateJobError extends Error {
@@ -240,6 +246,24 @@ export class SupabaseQueueRepository implements QueueRepository {
     }
     return data;
   }
+
+  async checkpointJob(
+    jobId: string,
+    workerId: string,
+    checkpoint: Json,
+    leaseSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('checkpoint_job', {
+      job_id: jobId,
+      worker_id: workerId,
+      checkpoint,
+      lease_seconds: leaseSeconds
+    });
+    if (error) {
+      throw new QueueOperationError('checkpoint job', error.code, error.message);
+    }
+    return data;
+  }
 }
 
 export class DurableQueue {
@@ -337,6 +361,23 @@ export class DurableQueue {
       throw new JobLeaseLostError(jobId, 'heartbeat');
     }
   }
+
+  async checkpointJob(
+    jobId: string,
+    workerId: string,
+    checkpoint: unknown,
+    leaseSeconds: number
+  ): Promise<void> {
+    const checkpointed = await this.repository.checkpointJob(
+      jobId,
+      workerId,
+      asJson(checkpoint),
+      leaseSeconds
+    );
+    if (!checkpointed) {
+      throw new JobLeaseLostError(jobId, 'checkpoint');
+    }
+  }
 }
 
 export function createQueue(client: QueueDatabaseClient): DurableQueue {
@@ -399,4 +440,19 @@ export function heartbeatJob(
   leaseSeconds: number
 ): Promise<void> {
   return getConfiguredQueue().heartbeatJob(jobId, workerId, leaseSeconds);
+}
+
+
+export function checkpointJob(
+  jobId: string,
+  workerId: string,
+  checkpoint: unknown,
+  leaseSeconds: number
+): Promise<void> {
+  return getConfiguredQueue().checkpointJob(
+    jobId,
+    workerId,
+    checkpoint,
+    leaseSeconds
+  );
 }

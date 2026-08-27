@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { COPY, DEFAULT_LOCALE } from './i18n';
 import {
   CandidateStateSchema,
+  ImportOpportunityCsvJobPayloadSchema,
   ImportRunStatusSchema,
   LocaleSchema,
   OpportunityCsvRowSchema,
@@ -86,6 +87,29 @@ describe('domain schemas', () => {
     expect(candidate.preliminaryScore).toBe(81.5);
     expect(() =>
       PreliminaryCandidateSchema.parse({ ...candidate, preliminaryScore: 101 })
+    ).toThrow();
+  });
+
+  // Break: import jobs accept inline bytes, path traversal, or unverified Storage objects.
+  it('accepts only hashed private Storage file references', () => {
+    const payload = {
+      importRunId: '7a985480-7a5d-4ef1-9648-2f443468e2fe',
+      storageBucket: 'opportunity-imports',
+      files: [
+        {
+          sourceFileName: 'page-1.csv',
+          storagePath: '7a985480/page-1.csv',
+          contentSha256: 'a'.repeat(64)
+        }
+      ]
+    };
+
+    expect(ImportOpportunityCsvJobPayloadSchema.parse(payload)).toEqual(payload);
+    expect(() =>
+      ImportOpportunityCsvJobPayloadSchema.parse({
+        ...payload,
+        files: [{ ...payload.files[0], storagePath: '../page-1.csv' }]
+      })
     ).toThrow();
   });
 });

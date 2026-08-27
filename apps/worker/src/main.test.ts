@@ -34,6 +34,7 @@ class FakeWorkerQueue implements WorkerQueue {
   completed: unknown[][] = [];
   failed: unknown[][] = [];
   heartbeats: unknown[][] = [];
+  checkpoints: unknown[][] = [];
 
   async claimJobs(): Promise<Job[]> {
     return [];
@@ -51,6 +52,12 @@ class FakeWorkerQueue implements WorkerQueue {
 
   async heartbeatJob(...args: [string, string, number]): Promise<void> {
     this.heartbeats.push(args);
+  }
+
+  async checkpointJob(
+    ...args: [string, string, unknown, number]
+  ): Promise<void> {
+    this.checkpoints.push(args);
   }
 }
 
@@ -84,7 +91,7 @@ describe('worker job execution', () => {
       queue,
       handlers: {
         IMPORT_OPPORTUNITY_CSV: async (_job, context) => {
-          context.setCheckpoint({ phase: 'parsed' });
+          await context.saveCheckpoint({ phase: 'parsed' });
           return { phase: 'completed' };
         }
       },
@@ -93,6 +100,9 @@ describe('worker job execution', () => {
       logger: silentLogger
     });
 
+    expect(queue.checkpoints).toEqual([
+      ['job-1', 'worker-a', { phase: 'parsed' }, 120]
+    ]);
     expect(queue.completed).toEqual([
       ['job-1', 'worker-a', { phase: 'completed' }]
     ]);

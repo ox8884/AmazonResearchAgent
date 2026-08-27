@@ -63,4 +63,35 @@ integration('Supabase queue adapter', () => {
 
     expect(claimed.map((job) => job.id)).toEqual([jobId]);
   });
+
+  // Break: a running owner cannot durably persist a phase checkpoint.
+  it('persists a checkpoint only through the active lease owner', async () => {
+    const key = `queue-it-checkpoint-${crypto.randomUUID()}`;
+    const jobId = await queue.enqueueJob({
+      type: 'IMPORT_OPPORTUNITY_CSV',
+      payload: {},
+      idempotencyKey: key
+    });
+    await queue.claimJobs('integration-worker-a', 1, 60);
+
+    await queue.checkpointJob(
+      jobId,
+      'integration-worker-a',
+      { phase: 'persisted_raw' },
+      60
+    );
+    const { data, error } = await client
+      .from('jobs')
+      .select('checkpoint, leased_by')
+      .eq('id', jobId)
+      .single();
+    if (error) {
+      throw error;
+    }
+
+    expect(data).toMatchObject({
+      checkpoint: { phase: 'persisted_raw' },
+      leased_by: 'integration-worker-a'
+    });
+  });
 });

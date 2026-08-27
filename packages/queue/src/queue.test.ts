@@ -58,6 +58,10 @@ class InMemoryQueueRepository implements QueueRepository {
   async heartbeatJob(): Promise<boolean> {
     return true;
   }
+
+  async checkpointJob(): Promise<boolean> {
+    return true;
+  }
 }
 
 describe('durable queue', () => {
