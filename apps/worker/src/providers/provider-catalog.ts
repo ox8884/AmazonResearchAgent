@@ -1,6 +1,7 @@
 import {
   CommandProvider,
   OpenAiHttpProvider,
+  TEST_CONNECTION_REQUIRED,
   type AiProvider,
   type ProviderCatalog,
   type ProviderCatalogEntry
@@ -235,9 +236,31 @@ async function catalogEntry(
   options: PersistedProviderCatalogOptions
 ): Promise<ProviderCatalogEntry> {
   const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
-  const health = await adapter.health();
+  const liveHealth = await adapter.health();
+  const config = configRecord(provider.config);
+  const probe = config.executionProbe;
+  const probeAvailable =
+    typeof probe === 'object' &&
+    probe !== null &&
+    !Array.isArray(probe) &&
+    probe['available'] === true;
+  const health =
+    liveHealth.reason === TEST_CONNECTION_REQUIRED && probeAvailable
+      ? {
+          available: true as const,
+          checkedAt:
+            typeof probe === 'object' &&
+            probe !== null &&
+            !Array.isArray(probe) &&
+            typeof probe['checkedAt'] === 'string'
+              ? probe['checkedAt']
+              : liveHealth.checkedAt,
+          reason: null,
+          retryAfterSeconds: null
+        }
+      : liveHealth;
   const persistedModels = models.filter((model) => model.enabled).map(modelFromRow);
-  const roles = configRoles(configRecord(provider.config));
+  const roles = configRoles(config);
   return {
     provider: adapter,
     enabled: provider.enabled,

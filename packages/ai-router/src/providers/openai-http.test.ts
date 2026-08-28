@@ -175,12 +175,12 @@ describe('OpenAI-compatible HTTP provider', () => {
     });
   });
 
-  it('probes models for health when a secret is present', async () => {
+  it('does not probe /models for health when discovery is disabled', async () => {
     const paths: string[] = [];
     const mock = await startMockServer((incoming, response) => {
       paths.push(incoming.url ?? '');
-      response.statusCode = 401;
-      response.end('nope');
+      response.statusCode = 200;
+      response.end('{"data":[{"id":"x"}]}');
     });
     server = mock.server;
     const health = await new OpenAiHttpProvider({
@@ -192,6 +192,43 @@ describe('OpenAI-compatible HTTP provider', () => {
       modelDiscovery: 'disabled'
     }).health();
     expect(health.available).toBe(false);
-    expect(paths.some((path) => path.includes('models'))).toBe(true);
+    expect(health.reason).toBe('Explicit Test Connection is required.');
+    expect(paths).toEqual([]);
+  });
+
+  it('does not treat unsupported /models as healthy when a manual model exists', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 404;
+      response.end('missing');
+    });
+    server = mock.server;
+    const health = await new OpenAiHttpProvider({
+      id: 'manual-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'subscription',
+      apiKey: 'test-key',
+      manualModelId: 'manual-model'
+    }).health();
+    expect(health.available).toBe(false);
+    expect(health.reason).toBe('Explicit Test Connection is required.');
+  });
+
+  it('rejects an oversized body when Content-Length exceeds the cap', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 200;
+      response.setHeader('content-length', String(MODEL_LIST_MAX_BYTES + 1));
+      response.end('{"data":[]}');
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'huge-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'free',
+      requiresSecret: false
+    });
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      message: 'Provider response exceeded the size limit.'
+    });
   });
 });

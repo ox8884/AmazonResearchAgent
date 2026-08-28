@@ -7,6 +7,7 @@ import { createServerDatabaseClient } from '@ara/db';
 import { routeAiRequest } from '@ara/ai-router';
 import { AiRequestSchema } from '@ara/shared';
 import { runNormalizeJob } from '../../../../worker/src/jobs/normalize-opportunities';
+import { runProviderConnectionTest } from '../../../../worker/src/jobs/test-ai-provider';
 import { resolvePersistedProviderCatalog } from '../../../../worker/src/providers/provider-catalog';
 import {
   createAdminSession,
@@ -234,7 +235,10 @@ integration('settings API to worker catalog', () => {
       .select('model_id,enabled')
       .eq('provider_id', providerId)
       .single();
-
+    const probed = await runProviderConnectionTest(providerId, client, {
+      encryptionKey
+    });
+    expect(probed.available).toBe(true);
     const catalog = await resolvePersistedProviderCatalog(client, { encryptionKey });
     const decision = routeAiRequest(
       AiRequestSchema.parse({

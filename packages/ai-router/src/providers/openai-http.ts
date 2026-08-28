@@ -54,6 +54,7 @@ const RETRY_STATUS_CODES = [
 
 export const MODEL_LIST_MAX_BYTES = 256_000;
 export const COMPLETION_MAX_BYTES = 1_048_576;
+export const TEST_CONNECTION_REQUIRED = 'Explicit Test Connection is required.';
 
 export interface OpenAiHttpProviderConfig {
   readonly id: string;
@@ -194,6 +195,14 @@ export class OpenAiHttpProvider implements RawAiProvider {
         retryAfterSeconds: null
       };
     }
+    if (this.config.modelDiscovery === 'disabled') {
+      return {
+        available: false,
+        checkedAt: new Date().toISOString(),
+        reason: TEST_CONNECTION_REQUIRED,
+        retryAfterSeconds: null
+      };
+    }
     try {
       const response = await this.http.get('models');
       await readJsonBounded(response, MODEL_LIST_MAX_BYTES);
@@ -205,6 +214,17 @@ export class OpenAiHttpProvider implements RawAiProvider {
       };
     } catch (error) {
       const mapped = mapError(error);
+      if (
+        (mapped.status === 404 || mapped.status === 405) &&
+        this.config.manualModelId
+      ) {
+        return {
+          available: false,
+          checkedAt: new Date().toISOString(),
+          reason: TEST_CONNECTION_REQUIRED,
+          retryAfterSeconds: null
+        };
+      }
       const unauthorized = mapped.status === 401 || mapped.status === 403;
       return {
         available: false,

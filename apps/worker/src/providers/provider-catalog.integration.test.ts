@@ -159,7 +159,12 @@ integration('persisted provider catalog', () => {
         networkScope: 'loopback',
         modelDiscovery: 'disabled',
         manualModelId: 'catalog-model',
-        roles: ['niche_normalization']
+        roles: ['niche_normalization'],
+        executionProbe: {
+          available: true,
+          checkedAt: new Date(0).toISOString(),
+          errorCategory: null
+        }
       }
     });
     await repository.upsertModel({
@@ -242,7 +247,12 @@ integration('persisted provider catalog', () => {
         networkScope: 'loopback',
         modelDiscovery: 'disabled',
         manualModelId: 'enabled-model',
-        roles: ['niche_normalization']
+        roles: ['niche_normalization'],
+        executionProbe: {
+          available: true,
+          checkedAt: new Date(0).toISOString(),
+          errorCategory: null
+        }
       }
     });
     await repository.upsertModel({
