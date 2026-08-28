@@ -16,6 +16,7 @@ export interface SalesEstimatesAnalysis {
   readonly confidence: 'high' | 'low';
   readonly salesStability: number | null;
   readonly priceStability: number | null;
+  readonly sourcePeriod: { readonly from: string | null; readonly to: string | null };
 }
 
 export interface ShareOfVoiceAnalysis {
@@ -25,6 +26,7 @@ export interface ShareOfVoiceAnalysis {
   readonly confidence: 'high' | 'low';
   readonly brandDominance: number | null;
   readonly topBrand: string | null;
+  readonly sourcePeriod: { readonly from: string | null; readonly to: string | null };
 }
 
 function mean(values: readonly number[]): number {
@@ -85,21 +87,36 @@ export function analyzeHistoricalSearchVolume(input: {
 }
 
 export function analyzeSalesEstimates(input: {
-  readonly monthlySales: readonly (number | null)[];
-  readonly prices?: readonly (number | null)[];
+  readonly estimates: readonly {
+    readonly asin: string;
+    readonly estimatedMonthlySales: number | null;
+    readonly dailySales?: readonly number[];
+    readonly prices?: readonly number[];
+  }[];
 }): SalesEstimatesAnalysis {
-  const sales = input.monthlySales.filter((value): value is number => value !== null);
-  const prices = (input.prices ?? []).filter((value): value is number => value !== null);
-  const salesStability = stability(sales);
-  const priceStability = stability(prices);
-  const quality = sales.length >= 2 ? 'ok' : 'insufficient_history';
+  const salesScores = input.estimates
+    .map((estimate) => stability(estimate.dailySales ?? []))
+    .filter((value): value is number => value !== null);
+  const priceScores = input.estimates
+    .map((estimate) => stability(estimate.prices ?? []))
+    .filter((value): value is number => value !== null);
+  const salesStability =
+    salesScores.length === 0
+      ? null
+      : salesScores.reduce((sum, value) => sum + value, 0) / salesScores.length;
+  const priceStability =
+    priceScores.length === 0
+      ? null
+      : priceScores.reduce((sum, value) => sum + value, 0) / priceScores.length;
+  const quality = salesStability === null ? 'insufficient_history' : 'ok';
   return {
     source: 'sales_estimates',
     observedOrEstimated: 'estimated',
     quality,
     confidence: quality === 'ok' ? 'high' : 'low',
     salesStability,
-    priceStability
+    priceStability,
+    sourcePeriod: { from: null, to: null }
   };
 }
 
@@ -129,7 +146,8 @@ export function analyzeShareOfVoice(input: {
       quality: 'insufficient_share',
       confidence: 'low',
       brandDominance: null,
-      topBrand: null
+      topBrand: null,
+      sourcePeriod: { from: null, to: null }
     };
   }
   const ranked = [...brandShares.entries()].sort((left, right) => right[1] - left[1]);
@@ -140,6 +158,7 @@ export function analyzeShareOfVoice(input: {
     quality: mappedShare < totalShare ? 'unmapped_brands' : 'ok',
     confidence: mappedShare < totalShare ? 'low' : 'high',
     brandDominance: topShare / mappedShare,
-    topBrand
+    topBrand,
+    sourcePeriod: { from: null, to: null }
   };
 }

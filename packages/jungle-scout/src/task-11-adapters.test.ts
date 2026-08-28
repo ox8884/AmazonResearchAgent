@@ -71,6 +71,33 @@ describe('Jungle Scout Task 11 adapters', () => {
     ]);
   });
 
+  it('parses Sales Estimates daily sales and price series', async () => {
+    const client = await listen((_request, response) => {
+      response.setHeader('content-type', 'application/vnd.api+json');
+      response.end(
+        JSON.stringify({
+          data: [
+            {
+              id: 'B0ASINTEST',
+              attributes: {
+                estimated_monthly_sales: 400,
+                daily_sales: [10, 12, 9, 11],
+                prices: [19.99, 19.5, 20]
+              }
+            }
+          ]
+        })
+      );
+    });
+    const result = await querySalesEstimates(client, {
+      marketplace: 'us',
+      asins: ['B0ASINTEST']
+    });
+    expect(result.data.estimates[0]?.dailySales).toEqual([10, 12, 9, 11]);
+    expect(result.data.estimates[0]?.prices).toEqual([19.99, 19.5, 20]);
+  });
+
+
   // Break: Share of Voice invents listing_proxy share.
   it('parses Share of Voice rows from the provider body', async () => {
     const client = await listen((_request, response) => {

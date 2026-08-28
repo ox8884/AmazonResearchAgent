@@ -34,13 +34,41 @@ describe('Task 11 derived analyses', () => {
     expect(result.consistency).not.toBeNull();
   });
 
-  it('computes sales stability from monthly estimates and leaves missing prices unknown', () => {
+  it('computes sales stability from daily series and leaves missing prices unknown', () => {
     const result = analyzeSalesEstimates({
-      monthlySales: [100, 110, 90, 100]
+      estimates: [
+        { asin: 'B0A', estimatedMonthlySales: 1000, dailySales: [10, 11, 9, 10] },
+        { asin: 'B0B', estimatedMonthlySales: 10, dailySales: [10, 11, 9, 10] }
+      ]
     });
     expect(result.salesStability).toBeGreaterThan(0.8);
     expect(result.priceStability).toBeNull();
     expect(result.observedOrEstimated).toBe('estimated');
+  });
+
+  it('does not treat cross-ASIN monthly totals as temporal volatility', () => {
+    const swapped = analyzeSalesEstimates({
+      estimates: [
+        { asin: 'B0A', estimatedMonthlySales: 10, dailySales: [10, 11, 9, 10] },
+        { asin: 'B0B', estimatedMonthlySales: 1000, dailySales: [10, 11, 9, 10] }
+      ]
+    });
+    const original = analyzeSalesEstimates({
+      estimates: [
+        { asin: 'B0A', estimatedMonthlySales: 1000, dailySales: [10, 11, 9, 10] },
+        { asin: 'B0B', estimatedMonthlySales: 10, dailySales: [10, 11, 9, 10] }
+      ]
+    });
+    expect(swapped.salesStability).toBe(original.salesStability);
+  });
+
+  it('leaves sales stability unknown without a daily series', () => {
+    const result = analyzeSalesEstimates({
+      estimates: [{ asin: 'B0A', estimatedMonthlySales: 500 }]
+    });
+    expect(result.salesStability).toBeNull();
+    expect(result.priceStability).toBeNull();
+    expect(result.confidence).toBe('low');
   });
 
   it('maps Share of Voice ASINs to brands instead of treating ASIN share as dominance', () => {

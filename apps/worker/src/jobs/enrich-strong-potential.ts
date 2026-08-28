@@ -235,17 +235,20 @@ export async function runEnrichStrongPotential(
     await persistEvidence(client, candidateId, 'sales_estimates', outcome.payload);
     const estimates =
       outcome.payload && typeof outcome.payload === 'object' && 'estimates' in outcome.payload
-        ? (outcome.payload as { estimates: Array<{ estimatedMonthlySales: number | null; prices?: number[] }> })
-            .estimates
+        ? (outcome.payload as {
+            estimates: Array<{
+              asin: string;
+              estimatedMonthlySales: number | null;
+              dailySales?: number[];
+              prices?: number[];
+            }>;
+          }).estimates
         : [];
     await persistEvidence(
       client,
       candidateId,
       'sales_estimates_analysis',
-      analyzeSalesEstimates({
-        monthlySales: estimates.map((row) => row.estimatedMonthlySales),
-        prices: estimates.flatMap((row) => row.prices ?? [])
-      })
+      analyzeSalesEstimates({ estimates })
     );
   }
 
