@@ -15,9 +15,30 @@ export interface MarketMetrics {
   readonly historicalTrendConsistency: number | null;
 }
 
+function isAmazonRetail(sellerType: string | null | undefined): boolean {
+  if (!sellerType) {
+    return false;
+  }
+  const normalized = sellerType.trim().toLocaleLowerCase('en-US');
+  return normalized === 'amz' || normalized === 'amazon' || normalized === 'amazon_retail';
+}
+
+function listingAgeDays(listingDate: string | null | undefined, now: Date): number | null {
+  if (!listingDate) {
+    return null;
+  }
+  const parsed = Date.parse(listingDate);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return (now.getTime() - parsed) / (24 * 60 * 60 * 1000);
+}
+
 export function calculateMarketMetrics(
-  families: readonly ProductFamily[]
+  families: readonly ProductFamily[],
+  options: { readonly now?: Date; readonly historicalTrendConsistency?: number | null } = {}
 ): MarketMetrics {
+  const now = options.now ?? new Date();
   const sales = families
     .map((family) => family.observedMonthlyUnits)
     .sort((left, right) => right - left);
@@ -39,14 +60,12 @@ export function calculateMarketMetrics(
   const brandCounts = new Map<string, number>();
   let amazonRetailPresent = false;
   const familyMedianPrices: number[] = [];
+  let datedFamilies = 0;
+  let newerLowReviewSuccesses = 0;
   for (const family of families) {
     const brand = family.variants[0]?.brand ?? 'unknown';
     brandCounts.set(brand, (brandCounts.get(brand) ?? 0) + family.observedMonthlyUnits);
-    if (
-      family.variants.some((variant) =>
-        (variant.brand ?? '').toLocaleLowerCase('en-US').includes('amazon')
-      )
-    ) {
+    if (family.variants.some((variant) => isAmazonRetail(variant.sellerType))) {
       amazonRetailPresent = true;
     }
     const prices = family.variants
@@ -56,6 +75,20 @@ export function calculateMarketMetrics(
     const priceMid = prices[Math.floor(prices.length / 2)];
     if (priceMid !== undefined) {
       familyMedianPrices.push(priceMid);
+    }
+    const listingDate = family.variants
+      .map((variant) => variant.listingDate)
+      .find((value) => typeof value === 'string' && value.length > 0);
+    const age = listingAgeDays(listingDate, now);
+    if (age !== null) {
+      datedFamilies += 1;
+      const familyReviews = family.variants
+        .map((variant) => variant.reviews)
+        .filter((value): value is number => value !== null);
+      const maxReviews = familyReviews.length === 0 ? null : Math.max(...familyReviews);
+      if (age <= 365 && maxReviews !== null && maxReviews < 100 && family.observedMonthlyUnits > 0) {
+        newerLowReviewSuccesses += 1;
+      }
     }
   }
   const brandSales = [...brandCounts.values()].sort((left, right) => right - left);
@@ -89,7 +122,8 @@ export function calculateMarketMetrics(
     amazonRetailPresent,
     familyCount: families.length,
     priceCompression,
-    newerLowReviewSellerSuccess: null,
-    historicalTrendConsistency: null
+    newerLowReviewSellerSuccess:
+      datedFamilies === 0 ? null : newerLowReviewSuccesses / datedFamilies,
+    historicalTrendConsistency: options.historicalTrendConsistency ?? null
   };
 }

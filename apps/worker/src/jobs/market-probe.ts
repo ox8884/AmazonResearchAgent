@@ -106,7 +106,13 @@ function toCatalog(page: ProductDatabasePage): CatalogProduct[] {
     rating: product.attributes.rating ?? null,
     brand: product.attributes.brand ?? null,
     weight: product.attributes.weight ?? null,
-    updatedAt: product.attributes.updated_at ?? null
+    updatedAt: product.attributes.updated_at ?? null,
+    sellerType: product.attributes.seller_type ?? null,
+    listingDate: product.attributes.listing_date ?? null,
+    dimensions: product.attributes.dimensions ?? null,
+    sellers: product.attributes.sellers ?? null,
+    buyBox: product.attributes.buy_box ?? null,
+    feeBreakdown: product.attributes.fee_breakdown ?? null
   }));
 }
 
@@ -373,6 +379,7 @@ export async function runMarketProbe(
           price: variant.price,
           reviews: variant.reviews,
           rating: variant.rating,
+          seller_type: variant.sellerType ?? null,
           attributes: asJson(variant)
         },
         { onConflict: 'product_family_id,asin' }
@@ -388,6 +395,23 @@ export async function runMarketProbe(
   const relevant = families.filter(
     (family) => classifyProductRelevance(candidate.keyword, family).relevant
   );
+  const relevantAsins = [
+    ...new Set(
+      relevant.flatMap((family) =>
+        family.variants
+          .map((variant) => variant.id)
+          .filter((asin) => asin.length > 0)
+      )
+    )
+  ].sort();
+  const { error: relevantError } = await dependencies.client.from('candidate_evidence').insert({
+    candidate_id: candidate.id,
+    kind: 'relevant_asins',
+    payload: asJson({ asins: relevantAsins, parentKeys: relevant.map((family) => family.parentKey) })
+  });
+  if (relevantError) {
+    throw new Error(`Could not persist relevant ASINs: ${relevantError.message}`);
+  }
   const clusters = clusterMicroNiches(relevant, candidate.keyword);
   await dependencies.onCheckpoint?.({ phase: 'relevance_filtered', cacheKey });
   const { error: evidenceError } = await dependencies.client.from('candidate_evidence').insert({

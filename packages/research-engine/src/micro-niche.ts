@@ -29,65 +29,58 @@ const CLUSTER_RULES = [
   }
 ] as const;
 
-function familyPrices(family: ProductFamily): number[] {
-  return family.variants
+function familyMedianPrice(family: ProductFamily): number | null {
+  const prices = family.variants
     .map((variant) => variant.price)
-    .filter((price): price is number => price !== null);
+    .filter((price): price is number => price !== null)
+    .sort((left, right) => left - right);
+  if (prices.length === 0) {
+    return null;
+  }
+  return prices[Math.floor(prices.length / 2)] ?? null;
 }
 
 export function segmentPrices(families: readonly ProductFamily[]): PriceSegment[] {
-  const prices = families
-    .flatMap(familyPrices)
-    .sort((left, right) => left - right);
-  if (prices.length === 0) {
+  const priced = families
+    .map((family) => ({ family, median: familyMedianPrice(family) }))
+    .filter((row): row is { family: ProductFamily; median: number } => row.median !== null)
+    .sort((left, right) => left.median - right.median);
+  if (priced.length === 0) {
     return [];
   }
-  const mid = Math.floor(prices.length / 2);
-  const median = prices[mid];
-  if (median === undefined || prices.length < 6) {
-    const minPrice = prices[0] ?? 0;
-    const maxPrice = prices[prices.length - 1] ?? minPrice;
-    return [{ label: 'all', minPrice, maxPrice, familyCount: families.length }];
+  const minPrice = priced[0]?.median ?? 0;
+  const maxPrice = priced[priced.length - 1]?.median ?? minPrice;
+  if (priced.length < 6) {
+    return [{ label: 'all', minPrice, maxPrice, familyCount: priced.length }];
   }
-  for (let index = 2; index < prices.length - 2; index += 1) {
-    const current = prices[index];
-    const next = prices[index + 1];
+  for (let index = 2; index <= priced.length - 4; index += 1) {
+    const current = priced[index]?.median;
+    const next = priced[index + 1]?.median;
     if (current === undefined || next === undefined || current === 0) {
       continue;
     }
     if ((next - current) / current >= 0.4) {
-      const lowCount = families.filter((family) =>
-        familyPrices(family).some((price) => price <= current)
-      ).length;
-      const highCount = families.filter((family) =>
-        familyPrices(family).some((price) => price >= next)
-      ).length;
-      if (lowCount >= 3 && highCount >= 3) {
+      const low = priced.slice(0, index + 1);
+      const high = priced.slice(index + 1);
+      if (low.length >= 3 && high.length >= 3) {
         return [
           {
             label: 'value',
-            minPrice: prices[0] ?? current,
+            minPrice: low[0]?.median ?? current,
             maxPrice: current,
-            familyCount: lowCount
+            familyCount: low.length
           },
           {
             label: 'premium',
             minPrice: next,
-            maxPrice: prices[prices.length - 1] ?? next,
-            familyCount: highCount
+            maxPrice: high[high.length - 1]?.median ?? next,
+            familyCount: high.length
           }
         ];
       }
     }
   }
-  return [
-    {
-      label: 'all',
-      minPrice: prices[0] ?? 0,
-      maxPrice: prices[prices.length - 1] ?? 0,
-      familyCount: families.length
-    }
-  ];
+  return [{ label: 'all', minPrice, maxPrice, familyCount: priced.length }];
 }
 
 export function clusterMicroNiches(

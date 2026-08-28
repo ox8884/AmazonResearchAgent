@@ -34,6 +34,18 @@ describe('Jungle Scout Product Database adapter', () => {
     expect(missingPrice?.attributes.parent_asin).toBeNull();
   });
 
+  it('keeps dimensions, sellers, buy box, and fee breakdown from the fixture', () => {
+    const page = ProductDatabasePageSchema.parse(SINK_FIXTURE);
+    const mat = page.data.find((product) => product.id === 'B0SINKMAT1');
+    expect(mat?.attributes.seller_type).toBe('FBA');
+    expect(mat?.attributes.listing_date).toBe('2024-03-01');
+    expect(mat?.attributes.dimensions).toEqual({ length: 5.5, width: 5.5, height: 0.2 });
+    expect(mat?.attributes.sellers).toBe(12);
+    expect(mat?.attributes.buy_box).toEqual({ price: 12.99, seller_type: 'FBA' });
+    expect(mat?.attributes.fee_breakdown).toEqual({ referral: 1.95, fba: 3.22 });
+  });
+
+
   // Break: catalog phrases are sent as customer keyword search instead of an OR query.
   it('builds a US Product Database catalog-phrase OR query', () => {
     const request = buildProductDatabaseRequest({

@@ -10,6 +10,12 @@ export interface CatalogProduct {
   readonly brand: string | null;
   readonly weight: number | null;
   readonly updatedAt: string | null;
+  readonly sellerType?: string | null;
+  readonly listingDate?: string | null;
+  readonly dimensions?: unknown;
+  readonly sellers?: unknown;
+  readonly buyBox?: unknown;
+  readonly feeBreakdown?: unknown;
 }
 
 export interface ProductFamily {

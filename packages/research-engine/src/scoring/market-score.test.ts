@@ -51,4 +51,31 @@ describe('market metrics and scoring', () => {
     expect(result.verdict).toBe('Reject');
     expect(result.total).toBe(0);
   });
+
+  it('detects Amazon retail from seller_type instead of brand text', () => {
+    const amazonBrand = calculateMarketMetrics(
+      groupProductFamilies([{ ...familyProduct('A', 100), brand: 'Amazon Basics' }])
+    );
+    const amazonSeller = calculateMarketMetrics(
+      groupProductFamilies([{ ...familyProduct('B', 100), sellerType: 'AMZ' }])
+    );
+    expect(amazonBrand.amazonRetailPresent).toBe(false);
+    expect(amazonSeller.amazonRetailPresent).toBe(true);
+  });
+
+  it('scores newer low-review seller success only when listing date exists', () => {
+    const now = new Date('2026-08-28T00:00:00.000Z');
+    const metrics = calculateMarketMetrics(
+      groupProductFamilies([
+        { ...familyProduct('NEW', 400, 20), listingDate: '2026-06-01' },
+        { ...familyProduct('OLD', 400, 20), listingDate: '2024-01-01' }
+      ]),
+      { now }
+    );
+    expect(metrics.newerLowReviewSellerSuccess).toBe(0.5);
+    const unknown = calculateMarketMetrics(groupProductFamilies([familyProduct('X', 100)]));
+    expect(unknown.newerLowReviewSellerSuccess).toBeNull();
+    expect(unknown.historicalTrendConsistency).toBeNull();
+  });
+
 });

@@ -17,7 +17,11 @@ export const ProductDatabaseAttributesSchema = z.object({
   listing_date: z.string().nullable().optional(),
   units_sold_30: z.number().nullable().optional(),
   revenue_30: z.number().nullable().optional(),
-  updated_at: z.string().nullable().optional()
+  updated_at: z.string().nullable().optional(),
+  dimensions: z.unknown().nullable().optional(),
+  sellers: z.unknown().nullable().optional(),
+  buy_box: z.unknown().nullable().optional(),
+  fee_breakdown: z.unknown().nullable().optional()
 });
 export type ProductDatabaseAttributes = z.infer<typeof ProductDatabaseAttributesSchema>;
 
