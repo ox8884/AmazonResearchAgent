@@ -1,4 +1,8 @@
-import { createProviderRepository } from '@ara/db';
+import {
+  createProviderRepository,
+  fingerprintFromProviderConfig,
+  secretCipherId
+} from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
 import { assertPersistableModelId, UnsafeModelIdError } from '@ara/shared';
 import { KeywordNormalizationSchema } from '@ara/research-engine';
@@ -12,6 +16,12 @@ import {
   type PersistedProviderCatalogOptions
 } from '../providers/provider-catalog';
 import { decryptSecret, getEncryptionKeyFromEnvironment } from '@ara/secret-store';
+
+
+export interface ProviderTestOptions extends PersistedProviderCatalogOptions {
+  beforePersist?(): Promise<void>;
+}
+
 
 export interface ProviderTestResult {
   readonly providerId: string;
@@ -68,7 +78,7 @@ function executionErrorCategory(error: unknown): string {
 export async function runProviderConnectionTest(
   providerId: string,
   client: QueueDatabaseClient,
-  options: PersistedProviderCatalogOptions = {}
+  options: ProviderTestOptions = {}
 ): Promise<ProviderTestResult> {
   const started = Date.now();
   let adapter;
@@ -103,10 +113,34 @@ export async function runProviderConnectionTest(
       options.encryptionKey ?? getEncryptionKeyFromEnvironment()
     );
   }
+  const fingerprint = fingerprintFromProviderConfig(
+    provider.kind,
+    provider.config,
+    secretCipherId(secretRow)
+  );
+
+  async function persistProbe(
+    available: boolean,
+    errorCategory: string | null
+  ): Promise<void> {
+    await options.beforePersist?.();
+    const checkedAt = new Date().toISOString();
+    await repository.recordExecutionProbe({
+      providerId,
+      expectedFingerprint: fingerprint,
+      probe: {
+        available,
+        checkedAt,
+        errorCategory,
+        fingerprint
+      }
+    });
+  }
 
   const health = await adapter.health();
   const needsExecutionProbe = health.reason === TEST_CONNECTION_REQUIRED;
   if (!health.available && !needsExecutionProbe) {
+    await persistProbe(false, 'provider_unavailable');
     return unavailableResult(providerId, started, 'provider_unavailable');
   }
 
@@ -115,6 +149,7 @@ export async function runProviderConnectionTest(
     discovered = await adapter.listModels();
   } catch (error: unknown) {
     if (error instanceof Error) {
+      await persistProbe(false, 'provider_unavailable');
       return unavailableResult(providerId, started, 'provider_unavailable');
     }
     throw error;
@@ -123,12 +158,15 @@ export async function runProviderConnectionTest(
   const probeModelId = discovered[0]?.id;
   if (needsExecutionProbe) {
     if (!probeModelId) {
+      await persistProbe(false, 'provider_misconfigured');
       return unavailableResult(providerId, started, 'provider_misconfigured');
     }
     try {
       await probeExecution(adapter, probeModelId);
     } catch (error: unknown) {
-      return unavailableResult(providerId, started, executionErrorCategory(error));
+      const category = executionErrorCategory(error);
+      await persistProbe(false, category);
+      return unavailableResult(providerId, started, category);
     }
   }
 
@@ -137,26 +175,11 @@ export async function runProviderConnectionTest(
   const originById = new Map(existing.map((model) => [model.model_id, model.origin]));
   const reconcileMode = needsExecutionProbe ? 'manual' : 'discovery';
   const checkedAt = new Date().toISOString();
-  const config =
-    typeof provider.config === 'object' &&
-    provider.config !== null &&
-    !Array.isArray(provider.config)
-      ? provider.config
-      : {};
 
   try {
+    await persistProbe(true, null);
     await repository.saveSettings({
-      provider: {
-        ...provider,
-        config: {
-          ...config,
-          executionProbe: {
-            available: true,
-            checkedAt,
-            errorCategory: null
-          }
-        }
-      },
+      provider,
       secret: null,
       models: discovered.map((model) => {
         const modelId = assertPersistableModelId(model.id, secretPlaintext);
@@ -172,7 +195,8 @@ export async function runProviderConnectionTest(
           origin: originById.get(modelId) === 'manual' ? 'manual' : reconcileMode === 'manual' ? 'manual' : 'discovered'
         };
       }),
-      reconcileMode
+      reconcileMode,
+      expectedRevision: provider.settings_revision
     });
   } catch (error: unknown) {
     if (error instanceof UnsafeModelIdError || error instanceof Error) {
@@ -191,3 +215,4 @@ export async function runProviderConnectionTest(
     checkedAt
   };
 }
+

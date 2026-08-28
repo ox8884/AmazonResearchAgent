@@ -8,6 +8,8 @@ import {
 } from '@ara/ai-router';
 import {
   createProviderRepository,
+  fingerprintFromProviderConfig,
+  secretCipherId,
   type Json,
   type ModelRow,
   type ProviderRow,
@@ -239,21 +241,25 @@ async function catalogEntry(
   const liveHealth = await adapter.health();
   const config = configRecord(provider.config);
   const probe = config.executionProbe;
+  const currentFingerprint = fingerprintFromProviderConfig(
+    provider.kind,
+    provider.config,
+    secretCipherId(secrets.get(provider.id) ?? null)
+  );
+  const probeRecord =
+    typeof probe === 'object' && probe !== null && !Array.isArray(probe)
+      ? probe
+      : null;
   const probeAvailable =
-    typeof probe === 'object' &&
-    probe !== null &&
-    !Array.isArray(probe) &&
-    probe['available'] === true;
+    probeRecord?.['available'] === true &&
+    probeRecord['fingerprint'] === currentFingerprint;
   const health =
     liveHealth.reason === TEST_CONNECTION_REQUIRED && probeAvailable
       ? {
           available: true as const,
           checkedAt:
-            typeof probe === 'object' &&
-            probe !== null &&
-            !Array.isArray(probe) &&
-            typeof probe['checkedAt'] === 'string'
-              ? probe['checkedAt']
+            typeof probeRecord?.['checkedAt'] === 'string'
+              ? probeRecord['checkedAt']
               : liveHealth.checkedAt,
           reason: null,
           retryAfterSeconds: null

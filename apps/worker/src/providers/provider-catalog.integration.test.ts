@@ -2,7 +2,12 @@ import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
-import { createProviderRepository, createServerDatabaseClient } from '@ara/db';
+import {
+  createProviderRepository,
+  createServerDatabaseClient,
+  fingerprintFromProviderConfig,
+  secretCipherId
+} from '@ara/db';
 import { routeAiRequest } from '@ara/ai-router';
 import { AiRequestSchema } from '@ara/shared';
 import { encryptSecret } from '@ara/secret-store';
@@ -154,18 +159,34 @@ integration('persisted provider catalog', () => {
       billing_type: 'subscription',
       enabled: true,
       priority: 1,
-      config: {
-        baseUrl: mock.baseUrl,
-        networkScope: 'loopback',
-        modelDiscovery: 'disabled',
-        manualModelId: 'catalog-model',
-        roles: ['niche_normalization'],
-        executionProbe: {
-          available: true,
-          checkedAt: new Date(0).toISOString(),
-          errorCategory: null
-        }
-      }
+      config: (() => {
+        const baseConfig = {
+          baseUrl: mock.baseUrl,
+          networkScope: 'loopback',
+          modelDiscovery: 'disabled',
+          manualModelId: 'catalog-model',
+          roles: ['niche_normalization']
+        };
+        const fingerprint = fingerprintFromProviderConfig(
+          'openai_http',
+          baseConfig,
+          secretCipherId({
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag
+          })
+        );
+        return {
+          ...baseConfig,
+          executionIdentity: fingerprint,
+          executionProbe: {
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            errorCategory: null,
+            fingerprint
+          }
+        };
+      })()
     });
     await repository.upsertModel({
       provider_id: providerId,
@@ -242,18 +263,34 @@ integration('persisted provider catalog', () => {
       billing_type: 'subscription',
       enabled: true,
       priority: 1,
-      config: {
-        baseUrl: mock.baseUrl,
-        networkScope: 'loopback',
-        modelDiscovery: 'disabled',
-        manualModelId: 'enabled-model',
-        roles: ['niche_normalization'],
-        executionProbe: {
-          available: true,
-          checkedAt: new Date(0).toISOString(),
-          errorCategory: null
-        }
-      }
+      config: (() => {
+        const baseConfig = {
+          baseUrl: mock.baseUrl,
+          networkScope: 'loopback',
+          modelDiscovery: 'disabled',
+          manualModelId: 'enabled-model',
+          roles: ['niche_normalization']
+        };
+        const fingerprint = fingerprintFromProviderConfig(
+          'openai_http',
+          baseConfig,
+          secretCipherId({
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag
+          })
+        );
+        return {
+          ...baseConfig,
+          executionIdentity: fingerprint,
+          executionProbe: {
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            errorCategory: null,
+            fingerprint
+          }
+        };
+      })()
     });
     await repository.upsertModel({
       provider_id: goodId,
