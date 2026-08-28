@@ -67,4 +67,39 @@ describe('product family dedupe', () => {
     expect(families[0]?.parentKey).toBe('B0STANDALONE');
     expect(families[0]?.observedMonthlyUnits).toBe(80);
   });
+
+  it('does not collapse unrelated products into a blank parent family', () => {
+    const families = groupProductFamilies([
+      {
+        id: 'B0ONE',
+        title: 'One',
+        parentAsin: '   ',
+        unitsSold30: 10,
+        revenue30: 100,
+        price: 10,
+        reviews: 1,
+        rating: 4,
+        brand: 'A',
+        weight: null,
+        updatedAt: null
+      },
+      {
+        id: 'B0TWO',
+        title: 'Two',
+        parentAsin: '',
+        unitsSold30: 20,
+        revenue30: 200,
+        price: 10,
+        reviews: 1,
+        rating: 4,
+        brand: 'B',
+        weight: null,
+        updatedAt: null
+      }
+    ]);
+    expect(families).toHaveLength(2);
+    expect(new Set(families.map((family) => family.parentKey))).toEqual(
+      new Set(['B0ONE', 'B0TWO'])
+    );
+  });
 });

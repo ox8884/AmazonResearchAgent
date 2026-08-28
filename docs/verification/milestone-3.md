@@ -1,14 +1,12 @@
 # Milestone 3 verification
 
-Recorded-shaped fixtures and local Supabase integration cover Jungle Scout validation without live API calls.
+Recorded fixtures (no live Jungle Scout calls):
 
-- Product Database sink fixture: `tests/fixtures/jungle-scout/product-database-sink.json`
-- Cache identity: phrase-order independent `makeApiCacheKey`
-- Budget: normal research cannot consume reserve; manual research can
-- Market probe: one real fixture query, second run is cache_hit
-- Parent/variant: identical parent-level units are not summed
-- Sample vs market: `observed_sample_sales` populated, `estimated_market_sales` null unless a separate estimate exists
-- Level 2: Reject candidates spend zero keyword calls
-- Economics: allowable landed cost is an assumption, not a supplier quote
+- Milk frother parent-family dedupe: `packages/research-engine/src/product-family.test.ts` Zulay variant fixture (`observedMonthlyUnits = 200368`, 5 variants, `VARIANT_SALES_DUPLICATED`).
+- `sink drip tray` literal 0-result: `tests/fixtures/jungle-scout/product-database-sink-zero.json`.
+- Expanded sink phrase metadata (329 results): `tests/fixtures/jungle-scout/product-database-sink-expanded-meta.json` plus top-page `product-database-sink.json`.
+- Opportunity Finder batter-dispenser cluster: `tests/fixtures/opportunity-finder/page-1.csv` / `page-2.csv`.
 
-No real Jungle Scout HTTP calls are made in `pnpm test` or `pnpm test:integration`.
+Budget: `packages/api-budget` and `packages/db/src/api-budget.integration.test.ts` preserve reserve and authorize one of concurrent final slots.
+
+Observed vs estimated: Market Probe snapshots set `observed_sample_sales` from Product Database families and leave `estimated_market_sales` null unless a separate estimation endpoint supplied it.

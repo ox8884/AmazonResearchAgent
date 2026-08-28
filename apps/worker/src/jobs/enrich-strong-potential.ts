@@ -45,16 +45,21 @@ export async function runEnrichStrongPotential(
 
   let asins = options.asins ? [...options.asins] : [];
   if (asins.length === 0 && candidate.niche_cluster_id) {
-    const { data: products } = await client
+    const { data: products, error: productError } = await client
       .from('products')
       .select('asin')
       .eq('niche_cluster_id', candidate.niche_cluster_id)
+      .order('asin', { ascending: true })
       .limit(20);
+    if (productError) {
+      throw new Error(`Could not load Sales Estimates ASINs: ${productError.message}`);
+    }
     asins = (products ?? [])
       .map((product) => product.asin)
       .filter((asin): asin is string => typeof asin === 'string' && asin.length > 0);
   }
   asins = [...new Set(asins)];
+
 
 
 
@@ -94,6 +99,20 @@ export async function runEnrichStrongPotential(
     });
   }
 
+  const { error: economicsError } = await client.from('candidate_evidence').insert({
+    candidate_id: candidateId,
+    kind: 'economics',
+    payload: {
+      economicsSource: 'estimated_assumption',
+      salePrice: null,
+      amazonFees: null,
+      differentiationEvidenceMode: 'missing',
+      note: 'Allowable landed cost is not computed without observed sale price and Amazon fees.'
+    }
+  });
+  if (economicsError) {
+    throw new Error(`Could not persist economics evidence: ${economicsError.message}`);
+  }
 
   return { differentiationMode: 'missing' };
 }

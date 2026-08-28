@@ -287,7 +287,17 @@ export function createJobHandlers(
         .select('state')
         .eq('id', payload.candidateId)
         .maybeSingle();
-      if (probed?.state === 'Watch' || probed?.state === 'Needs Review') {
+      const { data: snapshot } = await client
+        .from('market_snapshots')
+        .select('sample_product_family_count')
+        .eq('candidate_id', payload.candidateId)
+        .order('captured_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (
+        (probed?.state === 'Watch' || probed?.state === 'Needs Review') &&
+        (snapshot?.sample_product_family_count ?? 0) > 0
+      ) {
         await queue.enqueueJob({
           type: 'DEEP_VALIDATION',
           payload: { candidateId: payload.candidateId, locale: payload.locale },

@@ -25,7 +25,9 @@ export function groupProductFamilies(
 ): readonly ProductFamily[] {
   const grouped = new Map<string, CatalogProduct[]>();
   for (const product of products) {
-    const key = product.parentAsin ?? product.id;
+
+    const parent = product.parentAsin?.trim();
+    const key = parent && parent.length > 0 ? parent : product.id;
     const existing = grouped.get(key) ?? [];
     existing.push(product);
     grouped.set(key, existing);

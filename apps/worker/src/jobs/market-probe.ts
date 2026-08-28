@@ -393,8 +393,14 @@ export async function runMarketProbe(
   const { error: evidenceError } = await dependencies.client.from('candidate_evidence').insert({
     candidate_id: candidate.id,
     kind: 'micro_niches',
-    payload: asJson(clusters.map((cluster) => cluster.name))
+    payload: asJson(
+      clusters.map((cluster) => ({
+        name: cluster.name,
+        priceSegments: cluster.priceSegments
+      }))
+    )
   });
+
   if (evidenceError) {
     throw new Error(`Could not persist micro-niche evidence: ${evidenceError.message}`);
   }
