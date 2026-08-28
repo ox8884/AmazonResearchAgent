@@ -177,7 +177,6 @@ export async function runProviderConnectionTest(
   const checkedAt = new Date().toISOString();
 
   try {
-    await persistProbe(true, null);
     await repository.saveSettings({
       provider,
       secret: null,
@@ -198,7 +197,9 @@ export async function runProviderConnectionTest(
       reconcileMode,
       expectedRevision: provider.settings_revision
     });
+    await persistProbe(true, null);
   } catch (error: unknown) {
+
     if (error instanceof UnsafeModelIdError || error instanceof Error) {
       return unavailableResult(providerId, started, 'provider_misconfigured');
     }
