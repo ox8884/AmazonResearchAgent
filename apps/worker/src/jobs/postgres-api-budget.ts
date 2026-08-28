@@ -6,6 +6,7 @@ import type {
   AuthorizeApiCallInput
 } from '@ara/api-budget';
 
+const CLAIM_LEASE_SECONDS = 120;
 
 type AuthorizationRow = {
   decision_kind: string;
@@ -18,10 +19,12 @@ type ClaimRow = {
   claimed_cache_key: string;
 };
 
-type ClaimState = {
-  reserved: boolean | null;
-  budget_date: string | null;
-};
+export class ApiCallOwnershipError extends Error {
+  constructor(cacheKey: string) {
+    super(`API call ownership was lost for ${cacheKey}.`);
+    this.name = 'ApiCallOwnershipError';
+  }
+}
 
 export class PostgresApiBudget implements ApiBudget {
   constructor(
@@ -37,7 +40,7 @@ export class PostgresApiBudget implements ApiBudget {
     const { data: claimData, error: claimError } = await this.client.rpc('claim_api_call', {
       request_cache_key: input.cacheKey,
       claim_owner: this.owner,
-      lease_seconds: 60
+      lease_seconds: CLAIM_LEASE_SECONDS
     });
     if (claimError) {
       throw new Error(`Could not claim API call: ${claimError.message}`);
@@ -60,27 +63,11 @@ export class PostgresApiBudget implements ApiBudget {
       };
     }
 
-    const { data: claimState, error: stateError } = await this.client
-      .from('api_call_claims')
-      .select('reserved,budget_date')
-      .eq('cache_key', input.cacheKey)
-      .maybeSingle();
-    if (stateError) {
-      throw new Error(`Could not read API call claim: ${stateError.message}`);
-    }
-    const state = claimState as ClaimState | null;
-    if (state?.reserved) {
-      return {
-        kind: 'allowed',
-        cacheKey: input.cacheKey,
-        remaining: this.limits.dailyLimit
-      };
-    }
-
-    const { data, error } = await this.client.rpc('authorize_api_call', {
+    const { data, error } = await this.client.rpc('authorize_owned_api_call', {
+      request_cache_key: input.cacheKey,
+      claim_owner: this.owner,
       purpose: input.purpose,
       estimated_calls: input.estimatedCalls,
-      request_cache_key: input.cacheKey,
       endpoint: input.endpoint,
       daily_limit: this.limits.dailyLimit,
       reserved_limit: this.limits.reservedLimit
@@ -92,37 +79,33 @@ export class PostgresApiBudget implements ApiBudget {
     if (!row) {
       throw new Error('Could not authorize API call: empty decision');
     }
-    const decision = mapDecision(row as AuthorizationRow);
-    if (decision.kind === 'allowed') {
-      const { error: reservedError } = await this.client.rpc('mark_api_call_reserved', {
-        request_cache_key: input.cacheKey,
-        request_budget_date: new Date().toISOString().slice(0, 10)
-      });
-      if (reservedError) {
-        throw new Error(`Could not mark API call reserved: ${reservedError.message}`);
-      }
-    }
-    return decision;
+    return mapDecision(row as AuthorizationRow);
   }
 
   async complete(cacheKey: string): Promise<void> {
-    const { error } = await this.client.rpc('complete_api_call_claim', {
+    const { data, error } = await this.client.rpc('complete_api_call_claim', {
       request_cache_key: cacheKey,
       claim_owner: this.owner
     });
     if (error) {
       throw new Error(`Could not complete API call claim: ${error.message}`);
     }
+    if (data !== true) {
+      throw new ApiCallOwnershipError(cacheKey);
+    }
   }
 
   async stage(cacheKey: string, response: unknown): Promise<void> {
-    const { error } = await this.client.rpc('stage_api_call_response', {
+    const { data, error } = await this.client.rpc('stage_api_call_response', {
       request_cache_key: cacheKey,
       claim_owner: this.owner,
       response: asJson(response)
     });
     if (error) {
       throw new Error(`Could not stage API call response: ${error.message}`);
+    }
+    if (data !== true) {
+      throw new ApiCallOwnershipError(cacheKey);
     }
   }
 
@@ -168,4 +151,3 @@ function mapDecision(row: AuthorizationRow): ApiAuthorizationDecision {
 function asJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
 }
-

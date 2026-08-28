@@ -154,4 +154,66 @@ describe('api_call_claims RPC', () => {
     `;
     expect(row?.decision_kind).toBe('cache_hit');
   });
+
+  it('does not inherit reserved or staged state after a completed generation', async () => {
+    const cacheKey = `db-it-claim-${randomUUID()}`;
+    await sql`select claim_api_call(${cacheKey}, 'worker-a', 60)`;
+    await sql`select mark_api_call_reserved(${cacheKey}, ${BUDGET_DATE}::date)`;
+    await sql`
+      select stage_api_call_response(
+        ${cacheKey},
+        'worker-a',
+        ${sql.json({ page: { data: ['stale'] }, status: 200, httpAttempts: 1 })}
+      )
+    `;
+    await sql`select complete_api_call_claim(${cacheKey}, 'worker-a')`;
+    await sql`delete from api_cache where cache_key = ${cacheKey}`;
+    const [second] = await sql<ClaimRow[]>`
+      select decision_kind from claim_api_call(${cacheKey}, 'worker-b', 60)
+    `;
+    const [row] = await sql<
+      {
+        reserved: boolean;
+        staged_response: unknown;
+        completed_at: string | null;
+        owner: string;
+      }[]
+    >`
+      select reserved, staged_response, completed_at, owner
+      from api_call_claims
+      where cache_key = ${cacheKey}
+    `;
+    expect(second?.decision_kind).toBe('claimed');
+    expect(row?.owner).toBe('worker-b');
+    expect(row?.completed_at).toBeNull();
+    expect(row?.reserved).toBe(false);
+    expect(row?.staged_response).toBeNull();
+  });
+
+  it('rejects stage and complete from a worker that lost the claim', async () => {
+    const cacheKey = `db-it-claim-${randomUUID()}`;
+    await sql`select claim_api_call(${cacheKey}, 'worker-a', 60)`;
+    await sql`
+      update api_call_claims
+      set claimed_until = now() - interval '1 second'
+      where cache_key = ${cacheKey}
+    `;
+    await sql`select claim_api_call(${cacheKey}, 'worker-b', 60)`;
+    const [staged] = await sql<{ stage_api_call_response: boolean }[]>`
+      select stage_api_call_response(
+        ${cacheKey},
+        'worker-a',
+        ${sql.json({ page: { data: [] } })}
+      )
+    `;
+    const [completed] = await sql<{ complete_api_call_claim: boolean }[]>`
+      select complete_api_call_claim(${cacheKey}, 'worker-a')
+    `;
+    const [row] = await sql<{ owner: string }[]>`
+      select owner from api_call_claims where cache_key = ${cacheKey}
+    `;
+    expect(staged?.stage_api_call_response).toBe(false);
+    expect(completed?.complete_api_call_claim).toBe(false);
+    expect(row?.owner).toBe('worker-b');
+  });
 });

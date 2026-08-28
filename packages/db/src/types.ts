@@ -1124,7 +1124,25 @@ export type Database = {
           remaining: number | null
         }[]
       }
+      authorize_owned_api_call: {
+        Args: {
+          request_cache_key: string
+          claim_owner: string
+          purpose: string
+          estimated_calls: number
+          endpoint: string
+          daily_limit: number
+          reserved_limit: number
+          request_budget_date?: string
+        }
+        Returns: {
+          decision_kind: string
+          cache_key: string
+          remaining: number | null
+        }[]
+      }
       claim_api_call: {
+
         Args: {
           request_cache_key: string
           claim_owner: string
