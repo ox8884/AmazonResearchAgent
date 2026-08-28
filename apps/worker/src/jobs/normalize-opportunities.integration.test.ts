@@ -322,6 +322,65 @@ integration('opportunity normalization job', () => {
     expect(new Set(analyses?.map((analysis) => analysis.locale))).toEqual(new Set(['ko', 'en']));
   });
 
+  it('does not duplicate AI reasons when a completed analysis is reused', async () => {
+    const provider = new FakeNormalizationProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) {
+      throw providerError;
+    }
+    const fixture = await seedCandidates(client, ['batter squeeze bottle']);
+    importRuns.push(fixture.importRunId);
+    const promptVersion = `it-${randomUUID()}`;
+    const input = { candidateIds: fixture.candidateIds, locale: 'ko' as const };
+    await runNormalizeJob(input, {
+      client,
+      provider,
+      modelId: 'fake-normalizer-model',
+      promptVersion
+    });
+    const { data: first } = await client
+      .from('candidates')
+      .select('state,rule_reasons')
+      .eq('id', fixture.candidateIds[0] ?? '')
+      .single();
+    await runNormalizeJob(input, {
+      client,
+      provider,
+      modelId: 'fake-normalizer-model',
+      promptVersion
+    });
+    const { data: second } = await client
+      .from('candidates')
+      .select('state,rule_reasons')
+      .eq('id', fixture.candidateIds[0] ?? '')
+      .single();
+    const { data: decisions } = await client
+      .from('decision_history')
+      .select('id')
+      .eq('candidate_id', fixture.candidateIds[0] ?? '');
+    const codes = Array.isArray(second?.rule_reasons)
+      ? second.rule_reasons.map((reason) =>
+          typeof reason === 'object' && reason !== null && 'code' in reason
+            ? reason.code
+            : null
+        )
+      : [];
+    expect(provider.calls).toBe(1);
+    expect(second?.state).toBe(first?.state);
+    expect(second?.rule_reasons).toEqual(first?.rule_reasons);
+    expect(codes.filter((code) => code === 'AI_PRODUCT_NICHE')).toHaveLength(1);
+    expect(decisions).toHaveLength(1);
+  });
+
+
   it('keeps candidate decisions distinct while claiming the same analysis once', async () => {
     const provider = new FakeNormalizationProvider();
     providers.push(provider.id);

@@ -153,6 +153,19 @@ function currentReasons(value: Json): DecisionReason[] {
   });
 }
 
+function mergeReasons(
+  current: readonly DecisionReason[],
+  extra: readonly DecisionReason[]
+): DecisionReason[] {
+  const merged = [...current];
+  for (const reason of extra) {
+    if (!merged.some((item) => item.code === reason.code)) {
+      merged.push(reason);
+    }
+  }
+  return merged;
+}
+
 function analysisResult(
   row: AnalysisRow,
   output: KeywordNormalization
@@ -469,13 +482,12 @@ async function deferForCapacity(
   analysisId: string,
   promptVersion: string
 ): Promise<void> {
-  const reasons = [
-    ...currentReasons(candidate.rule_reasons),
+  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [
     {
       code: 'AI_PROVIDER_UNAVAILABLE',
       detail: 'The configured AI provider is unavailable; retry when capacity returns.'
     }
-  ];
+  ]);
   await persistDecision(
     client,
     candidate,
@@ -486,6 +498,7 @@ async function deferForCapacity(
     promptVersion
   );
 }
+
 
 async function normalizeCandidate(
   input: NormalizeJobInput,
@@ -582,7 +595,7 @@ async function normalizeCandidate(
   );
   const output = KeywordNormalizationSchema.parse(result.output);
   const state = targetState(output);
-  const reasons = [...currentReasons(candidate.rule_reasons), aiReason(output)];
+  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [aiReason(output)]);
   if (state === 'Ready for API Validation') {
     const clusterId = await upsertCluster(dependencies.client, output);
     await persistClusterLink(dependencies.client, candidate, clusterId);
