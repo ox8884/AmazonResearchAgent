@@ -14,10 +14,12 @@ export type {
 } from './provider';
 
 export {
+  MODEL_LIST_MAX_BYTES,
+  COMPLETION_MAX_BYTES,
+  TEST_CONNECTION_REQUIRED,
   OpenAiHttpError,
   OpenAiHttpProvider
 } from './providers/openai-http';
-export type { OpenAiHttpProviderConfig } from './providers/openai-http';
 export {
   CommandProvider,
   CommandProviderError

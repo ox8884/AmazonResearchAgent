@@ -209,6 +209,9 @@ export function createJobHandlers(
           onCheckpoint: (value) => context.saveCheckpoint(value)
         }
       );
+      if (result.deferredCount > 0) {
+        throw new DeferredAiCapacityError();
+      }
       return result.checkpoint;
     };
   }

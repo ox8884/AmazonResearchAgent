@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  InvalidStructuredOutputError,
   type AiProvider,
   type AiProviderResult
 } from '@ara/ai-router';
@@ -31,6 +32,8 @@ export interface NormalizeJobDependencies {
   readonly modelId: string;
   readonly workerId?: string;
   readonly promptVersion?: string;
+  readonly leaseSeconds?: number;
+  readonly heartbeatMs?: number;
   onCheckpoint?(checkpoint: NormalizeCheckpoint): Promise<void>;
 }
 
@@ -96,9 +99,9 @@ function canonicalKey(value: string): string {
   return value
     .normalize('NFKC')
     .toLocaleLowerCase('en-US')
-    .trim()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function isCapacityError(error: unknown): boolean {
@@ -148,6 +151,19 @@ function currentReasons(value: Json): DecisionReason[] {
     }
     return [{ code: item.code, detail: item.detail }];
   });
+}
+
+function mergeReasons(
+  current: readonly DecisionReason[],
+  extra: readonly DecisionReason[]
+): DecisionReason[] {
+  const merged = [...current];
+  for (const reason of extra) {
+    if (!merged.some((item) => item.code === reason.code)) {
+      merged.push(reason);
+    }
+  }
+  return merged;
 }
 
 function analysisResult(
@@ -244,7 +260,7 @@ async function claimAnalysis(
     analysis_role: 'niche_normalization',
     analysis_input_hash: hash,
     worker_id: workerId,
-    lease_seconds: 120,
+    lease_seconds: dependencies.leaseSeconds ?? 120,
     provider_id: dependencies.provider.id,
     model_id: dependencies.modelId,
     analysis_locale: locale,
@@ -304,16 +320,74 @@ async function completeAnalysis(
     cost_class: result.costClass,
     completed_at: result.completedAt
   });
-  if (error || !data) {
+  if (error) {
     throw new NormalizationJobError('complete AI analysis.', error);
+  }
+  if (!data) {
+    throw new AnalysisClaimBusyError();
+  }
+}
+
+async function renewAnalysisLease(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string,
+  leaseSeconds: number
+): Promise<boolean> {
+  const { data, error } = await client.rpc('renew_ai_analysis_lease', {
+    analysis_id: analysisId,
+    worker_id: workerId,
+    lease_seconds: leaseSeconds
+  });
+  if (error) {
+    throw new NormalizationJobError('renew AI analysis lease.', error);
+  }
+  return Boolean(data);
+}
+
+async function withAnalysisHeartbeat<T>(
+  client: QueueDatabaseClient,
+  analysisId: string,
+  workerId: string,
+  leaseSeconds: number,
+  heartbeatMs: number,
+  work: () => Promise<T>
+): Promise<T> {
+  const timer = setInterval(() => {
+    void renewAnalysisLease(client, analysisId, workerId, leaseSeconds).then((owned) => {
+      if (!owned) {
+        clearInterval(timer);
+      }
+    });
+  }, heartbeatMs);
+  try {
+    const result = await work();
+    const owned = await renewAnalysisLease(client, analysisId, workerId, leaseSeconds);
+    if (!owned) {
+      throw new AnalysisClaimBusyError();
+    }
+    return result;
+  } finally {
+    clearInterval(timer);
   }
 }
 
 async function failAnalysis(
   client: QueueDatabaseClient,
   analysisId: string,
-  workerId: string
+  workerId: string,
+  usage: Json | null
 ): Promise<void> {
+  if (usage) {
+    const { error: usageError } = await client.rpc('record_failed_ai_usage', {
+      analysis_id: analysisId,
+      worker_id: workerId,
+      analysis_usage: usage
+    });
+    if (usageError) {
+      throw new NormalizationJobError('record failed AI usage.', usageError);
+    }
+  }
   const { error } = await client.rpc('fail_ai_analysis', {
     analysis_id: analysisId,
     worker_id: workerId,
@@ -378,7 +452,7 @@ async function persistDecision(
         decided_by: promptVersion,
         idempotency_key: `ai-normalization:${candidate.id}:${analysisId}:${state}`
       },
-      { onConflict: 'idempotency_key' }
+      { onConflict: 'idempotency_key', ignoreDuplicates: true }
     );
   if (decisionError) {
     throw new NormalizationJobError('persist normalized decision.', decisionError);
@@ -408,13 +482,12 @@ async function deferForCapacity(
   analysisId: string,
   promptVersion: string
 ): Promise<void> {
-  const reasons = [
-    ...currentReasons(candidate.rule_reasons),
+  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [
     {
       code: 'AI_PROVIDER_UNAVAILABLE',
       detail: 'The configured AI provider is unavailable; retry when capacity returns.'
     }
-  ];
+  ]);
   await persistDecision(
     client,
     candidate,
@@ -425,6 +498,7 @@ async function deferForCapacity(
     promptVersion
   );
 }
+
 
 async function normalizeCandidate(
   input: NormalizeJobInput,
@@ -451,14 +525,22 @@ async function normalizeCandidate(
   const reused = result !== null;
   if (!result) {
     try {
-      result = await dependencies.provider.runStructured({
-        role: 'niche_normalization',
-        modelId: dependencies.modelId,
-        locale,
-        prompt: buildNormalizationPrompt(candidate.keyword, locale),
-        inputHash: hash,
-        schema: KeywordNormalizationSchema
-      });
+      result = await withAnalysisHeartbeat(
+        dependencies.client,
+        claim.analysisId,
+        workerId,
+        dependencies.leaseSeconds ?? 120,
+        dependencies.heartbeatMs ?? 30_000,
+        () =>
+          dependencies.provider.runStructured({
+            role: 'niche_normalization',
+            modelId: dependencies.modelId,
+            locale,
+            prompt: buildNormalizationPrompt(candidate.keyword, locale),
+            inputHash: hash,
+            schema: KeywordNormalizationSchema
+          })
+      );
       await completeAnalysis(
         dependencies.client,
         claim.analysisId,
@@ -466,8 +548,28 @@ async function normalizeCandidate(
         result
       );
     } catch (error) {
-      await failAnalysis(dependencies.client, claim.analysisId, workerId);
-      if (!isCapacityError(error)) {
+      await failAnalysis(
+        dependencies.client,
+        claim.analysisId,
+        workerId,
+        error instanceof InvalidStructuredOutputError
+          ? asJson({
+              ...error.usage,
+              success: false,
+              repairAttempted: error.attempts.length > 1,
+              attempts: error.attempts.map((attempt) => ({
+                providerId: attempt.providerId,
+                modelId: attempt.modelId,
+                role: attempt.role,
+                usage: attempt.usage,
+                costClass: attempt.costClass,
+                startedAt: attempt.startedAt,
+                completedAt: attempt.completedAt
+              }))
+            })
+          : null
+      );
+      if (error instanceof AnalysisClaimBusyError || !isCapacityError(error)) {
         throw error;
       }
       await deferForCapacity(
@@ -493,7 +595,7 @@ async function normalizeCandidate(
   );
   const output = KeywordNormalizationSchema.parse(result.output);
   const state = targetState(output);
-  const reasons = [...currentReasons(candidate.rule_reasons), aiReason(output)];
+  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [aiReason(output)]);
   if (state === 'Ready for API Validation') {
     const clusterId = await upsertCluster(dependencies.client, output);
     await persistClusterLink(dependencies.client, candidate, clusterId);

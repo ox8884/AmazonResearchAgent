@@ -1,12 +1,15 @@
 import {
   CommandProvider,
   OpenAiHttpProvider,
+  TEST_CONNECTION_REQUIRED,
   type AiProvider,
   type ProviderCatalog,
   type ProviderCatalogEntry
 } from '@ara/ai-router';
 import {
   createProviderRepository,
+  fingerprintFromProviderConfig,
+  secretCipherId,
   type Json,
   type ModelRow,
   type ProviderRow,
@@ -24,10 +27,13 @@ import {
   ProviderKindSchema,
   type AiModelDescriptor,
   type AiRole,
+  type BillingType,
   type ProviderCapability
 } from '@ara/shared';
+
 import { resolveApprovedCommandProfile } from './command-profiles';
 import {
+  createPinnedProviderFetch,
   validateProviderBaseUrl
 } from './provider-url-policy';
 
@@ -150,6 +156,8 @@ async function providerFromRow(
       id: row.id,
       baseUrl: validatedUrl.toString(),
       billingType: billingType.data,
+      requiresSecret: true,
+      fetch: createPinnedProviderFetch(networkScope),
       ...(apiKey ? { apiKey } : {}),
       ...(manualModelId ? { manualModelId } : {}),
       ...(modelDiscovery ? { modelDiscovery } : {})
@@ -171,23 +179,55 @@ async function providerFromRow(
   );
 }
 
-export async function instantiatePersistedProvider(
+export interface PersistedProviderSnapshot {
+  readonly adapter: AiProvider;
+  readonly provider: ProviderRow;
+  readonly secret: ProviderSecretRow | null;
+  readonly models: readonly ModelRow[];
+  readonly fingerprint: string;
+}
+
+export async function loadPersistedProviderSnapshot(
   client: QueueDatabaseClient,
   providerId: string,
   options: PersistedProviderCatalogOptions = {}
-): Promise<AiProvider | null> {
+): Promise<PersistedProviderSnapshot | null> {
   const repository = createProviderRepository(client);
   const provider = await repository.findProvider(providerId);
   if (!provider) {
     return null;
   }
-  const secret = await repository.findSecret(providerId);
-  return providerFromRow(provider, secret ?? undefined, options);
+  const secret = (await repository.findSecret(providerId)) ?? null;
+  const models = await repository.listModels(providerId);
+  return {
+    adapter: await providerFromRow(provider, secret ?? undefined, options),
+    provider,
+    secret,
+    models,
+    fingerprint: fingerprintFromProviderConfig(
+      provider.kind,
+      provider.config,
+      secretCipherId(secret)
+    )
+  };
 }
 
-function modelFromRow(model: ModelRow): AiModelDescriptor {
+export async function instantiatePersistedProvider(
+  client: QueueDatabaseClient,
+  providerId: string,
+  options: PersistedProviderCatalogOptions = {}
+): Promise<AiProvider | null> {
+  const snapshot = await loadPersistedProviderSnapshot(client, providerId, options);
+  return snapshot?.adapter ?? null;
+}
+
+
+function modelFromRow(
+  model: ModelRow,
+  providerBilling: BillingType
+): AiModelDescriptor {
   const capabilities = configCapabilities(model.capabilities);
-  const billingType = BillingTypeSchema.safeParse(model.billing_type);
+  const billingType = BillingTypeSchema.safeParse(providerBilling);
   if (capabilities.length === 0 || !billingType.success) {
     throw new ProviderCatalogError('Stored AI model metadata is invalid.');
   }
@@ -200,6 +240,7 @@ function modelFromRow(model: ModelRow): AiModelDescriptor {
     qualityRank: model.quality_rank
   };
 }
+
 
 function indexModels(models: readonly ModelRow[]): ProviderModels {
   const indexed = new Map<string, readonly ModelRow[]>();
@@ -232,9 +273,38 @@ async function catalogEntry(
   options: PersistedProviderCatalogOptions
 ): Promise<ProviderCatalogEntry> {
   const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
-  const health = await adapter.health();
-  const persistedModels = models.map(modelFromRow);
-  const roles = configRoles(configRecord(provider.config));
+  const liveHealth = await adapter.health();
+  const config = configRecord(provider.config);
+  const probe = config.executionProbe;
+  const currentFingerprint = fingerprintFromProviderConfig(
+    provider.kind,
+    provider.config,
+    secretCipherId(secrets.get(provider.id) ?? null)
+  );
+  const probeRecord =
+    typeof probe === 'object' && probe !== null && !Array.isArray(probe)
+      ? probe
+      : null;
+  const probeAvailable =
+    probeRecord?.['available'] === true &&
+    probeRecord['fingerprint'] === currentFingerprint;
+  const health =
+    liveHealth.reason === TEST_CONNECTION_REQUIRED && probeAvailable
+      ? {
+          available: true as const,
+          checkedAt:
+            typeof probeRecord?.['checkedAt'] === 'string'
+              ? probeRecord['checkedAt']
+              : liveHealth.checkedAt,
+          reason: null,
+          retryAfterSeconds: null
+        }
+      : liveHealth;
+  const persistedModels = models
+    .filter((model) => model.enabled)
+    .map((model) => modelFromRow(model, adapter.billingType));
+
+  const roles = configRoles(config);
   return {
     provider: adapter,
     enabled: provider.enabled,

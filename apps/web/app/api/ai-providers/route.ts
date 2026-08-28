@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   createProviderRepository,
+  fingerprintFromProviderConfig,
   ProviderRepositoryError,
+  secretCipherId,
   type Json,
   type ModelRow,
   type ProviderRow,
@@ -9,11 +11,14 @@ import {
 } from '@ara/db';
 import {
   AiRoleSchema,
+  assertPersistableModelId,
   BillingTypeSchema,
   ProviderCapabilitySchema,
-  ProviderKindSchema
+  ProviderKindSchema,
+  UnsafeModelIdError
 } from '@ara/shared';
 import {
+  decryptSecret,
   encryptSecret,
   getEncryptionKeyFromEnvironment,
   SecretStoreError,
@@ -42,10 +47,23 @@ const ProviderInputSchema = z.object({
   networkScope: z.enum(['public', 'private', 'loopback']).default('public'),
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
+  modelDiscovery: z.enum(['enabled', 'disabled']).optional(),
+  modelEnabled: z.boolean().default(true),
+  modelPriority: z.number().int().nonnegative().default(100),
   commandProfileId: z.string().trim().transform((value) => value || undefined).optional(),
   roles: z.array(AiRoleSchema).default([]),
   enabled: z.boolean().default(true),
-  priority: z.number().int().nonnegative().default(100)
+  priority: z.number().int().nonnegative().default(100),
+  settingsRevision: z.number().int().nonnegative().optional(),
+  models: z
+    .array(
+      z.object({
+        modelId: z.string().trim().min(1),
+        enabled: z.boolean(),
+        priority: z.number().int().nonnegative()
+      })
+    )
+    .optional()
 });
 
 type ProviderInput = z.infer<typeof ProviderInputSchema>;
@@ -64,6 +82,8 @@ interface PublicModel {
   readonly capabilities: readonly string[];
   readonly qualityRank: number;
   readonly enabled: boolean;
+  readonly priority: number;
+  readonly origin: string;
 }
 
 interface PublicProvider {
@@ -72,12 +92,15 @@ interface PublicProvider {
   readonly kind: string;
   readonly billingType: string;
   readonly enabled: boolean;
+  readonly priority: number;
   readonly secretLast4: string | null;
   readonly roles: readonly string[];
   readonly baseUrl: string | null;
   readonly networkScope: 'public' | 'private' | 'loopback' | null;
   readonly commandProfileId: string | null;
   readonly modelId: string | null;
+  readonly modelDiscovery: 'enabled' | 'disabled';
+  readonly settingsRevision: number;
   readonly models: readonly PublicModel[];
 }
 
@@ -106,7 +129,9 @@ function publicModel(model: ModelRow): PublicModel {
     billingType: model.billing_type,
     capabilities: jsonStrings(model.capabilities),
     qualityRank: model.quality_rank,
-    enabled: model.enabled
+    enabled: model.enabled,
+    priority: model.priority,
+    origin: model.origin
   };
 }
 
@@ -128,6 +153,7 @@ function publicProvider(
     kind: provider.kind,
     billingType: provider.billing_type,
     enabled: provider.enabled,
+    priority: provider.priority,
     secretLast4: secret?.last4 ? secret.last4 : null,
     roles: jsonStrings(config.roles ?? null),
     baseUrl: jsonString(config.baseUrl),
@@ -138,15 +164,15 @@ function publicProvider(
         ? networkScope
         : null,
     commandProfileId: jsonString(config.commandProfileId),
-    modelId:
-      jsonString(config.manualModelId) ??
-      jsonString(config.modelId) ??
-      models[0]?.model_id ??
-      null,
+    modelId: jsonString(config.manualModelId) ?? jsonString(config.modelId),
+    modelDiscovery: jsonString(config.modelDiscovery) === 'disabled' ? 'disabled' : 'enabled',
+    settingsRevision: provider.settings_revision,
     models: models.map(publicModel)
   };
 }
 function providerConfig(input: ProviderInput): Json {
+  const modelDiscovery =
+    input.modelDiscovery ?? (input.modelId ? 'disabled' : 'enabled');
   if (input.kind === 'openai_http') {
     if (!input.baseUrl) {
       throw new ProviderConfigurationError('Base URL is required for HTTP providers.');
@@ -154,8 +180,10 @@ function providerConfig(input: ProviderInput): Json {
     return {
       baseUrl: input.baseUrl,
       networkScope: input.networkScope,
-      modelDiscovery: input.modelId ? 'disabled' : 'enabled',
-      ...(input.modelId ? { manualModelId: input.modelId } : {}),
+      modelDiscovery,
+      ...(modelDiscovery === 'disabled' && input.modelId
+        ? { manualModelId: input.modelId }
+        : {}),
       roles: input.roles
     };
   }
@@ -170,6 +198,7 @@ function providerConfig(input: ProviderInput): Json {
     roles: input.roles
   };
 }
+
 
 async function readJson(request: Request): Promise<unknown> {
   try {
@@ -230,42 +259,91 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }
     const input = parsed.data;
+    const encryptionKey = getEncryptionKeyFromEnvironment();
     const encrypted: EncryptedSecret | null = input.apiKey?.trim()
-      ? encryptSecret(input.apiKey.trim(), getEncryptionKeyFromEnvironment())
+      ? encryptSecret(input.apiKey.trim(), encryptionKey)
       : null;
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const providerId = input.id ?? `provider-${randomUUID()}`;
-    const provider = await repository.upsertProvider({
-      id: providerId,
-      name: input.name,
-      kind: input.kind,
-      billing_type: input.billingType,
-      enabled: input.enabled,
-      priority: input.priority,
-      config: providerConfig(input)
+    let secretForComparison = input.apiKey?.trim();
+    if (!secretForComparison && input.modelId && input.id) {
+      const existingSecret = await repository.findSecret(input.id);
+      if (existingSecret) {
+        secretForComparison = decryptSecret(
+          {
+            ciphertext: existingSecret.ciphertext,
+            iv: existingSecret.iv,
+            authTag: existingSecret.auth_tag,
+            last4: existingSecret.last4
+          },
+          encryptionKey
+        );
+      }
+    }
+    const modelId = input.modelId
+      ? assertPersistableModelId(input.modelId, secretForComparison)
+      : undefined;
+    const existingSecret = input.id ? await repository.findSecret(input.id) : null;
+    const builtConfig = providerConfig({ ...input, modelId });
+    const nextSecret = encrypted
+      ? {
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          authTag: encrypted.authTag
+        }
+      : existingSecret;
+    const identity = fingerprintFromProviderConfig(
+      input.kind,
+      builtConfig,
+      secretCipherId(nextSecret)
+    );
+    const provider = await repository.saveSettings({
+      provider: {
+        id: providerId,
+        name: input.name,
+        kind: input.kind,
+        billing_type: input.billingType,
+        enabled: input.enabled,
+        priority: input.priority,
+        config: {
+          ...(typeof builtConfig === 'object' &&
+          builtConfig !== null &&
+          !Array.isArray(builtConfig)
+            ? builtConfig
+            : {}),
+          executionIdentity: identity
+        }
+      },
+      secret: encrypted
+        ? {
+            provider_id: providerId,
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            auth_tag: encrypted.authTag,
+            last4: encrypted.last4
+          }
+        : null,
+      models: modelId
+        ? [
+            {
+              provider_id: providerId,
+              model_id: modelId,
+              display_name: modelId,
+              capabilities: [...MODEL_CAPABILITIES],
+              billing_type: input.billingType,
+              quality_rank: 100,
+              enabled: input.modelEnabled,
+              priority: input.modelPriority,
+              origin: 'manual'
+            }
+          ]
+        : [],
+      reconcileMode: modelId ? 'manual' : 'none',
+      modelStatus: input.models ?? [],
+      expectedRevision: input.settingsRevision ?? null
     });
 
-    if (encrypted) {
-      await repository.upsertSecret({
-        provider_id: provider.id,
-        ciphertext: encrypted.ciphertext,
-        iv: encrypted.iv,
-        auth_tag: encrypted.authTag,
-        last4: encrypted.last4
-      });
-    }
-    if (input.modelId) {
-      await repository.upsertModel({
-        provider_id: provider.id,
-        model_id: input.modelId,
-        display_name: input.modelId,
-        capabilities: [...MODEL_CAPABILITIES],
-        billing_type: input.billingType,
-        quality_rank: 100,
-        enabled: true
-      });
-    }
 
     const [secret, models] = await Promise.all([
       repository.findSecret(provider.id),
@@ -279,12 +357,23 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (error instanceof AdminAuthError) {
       return adminAuthErrorResponse(error);
     }
-    if (error instanceof ProviderConfigurationError || error instanceof z.ZodError) {
+    if (
+      error instanceof ProviderConfigurationError ||
+      error instanceof z.ZodError ||
+      error instanceof UnsafeModelIdError
+    ) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
+    }
+    if (error instanceof ProviderRepositoryError) {
+      const detail =
+        error.cause instanceof Error ? error.cause.message : error.message;
+      if (detail.includes('settings_revision_conflict')) {
+        return NextResponse.json({ error: 'settings_conflict' }, { status: 409 });
+      }
+      return NextResponse.json({ error: 'provider_store_unavailable' }, { status: 503 });
     }
     if (
       error instanceof ServerConfigurationError ||
-      error instanceof ProviderRepositoryError ||
       error instanceof SecretStoreError
     ) {
       return NextResponse.json({ error: 'provider_store_unavailable' }, { status: 503 });

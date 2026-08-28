@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { describe, expect, it, afterEach } from 'vitest';
 import { z } from 'zod';
-import { OpenAiHttpProvider, type OpenAiHttpProviderConfig } from './openai-http';
+import { OpenAiHttpProvider, MODEL_LIST_MAX_BYTES, type OpenAiHttpProviderConfig } from './openai-http';
 
 const ClassificationSchema = z.object({
   classification: z.enum(['product_niche', 'brand_ip'])
@@ -142,5 +142,93 @@ describe('OpenAI-compatible HTTP provider', () => {
       retryable: false
     });
     expect(requestCount).toBe(1);
+  });
+
+  it('does not treat a manual model as healthy without a real provider probe', async () => {
+    const health = await new OpenAiHttpProvider({
+      id: 'manual-http',
+      baseUrl: 'http://127.0.0.1:1',
+      billingType: 'subscription',
+      manualModelId: 'manual-model',
+      modelDiscovery: 'disabled'
+    }).health();
+    expect(health.available).toBe(false);
+    expect(health.reason).toMatch(/secret/i);
+  });
+
+  it('rejects an oversized model list even when Content-Length is missing', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 200;
+      response.setHeader('content-type', 'application/json');
+      response.end(`{"data":[{"id":"${'m'.repeat(MODEL_LIST_MAX_BYTES)}"}]}`);
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'huge-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'free',
+      requiresSecret: false
+    });
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      message: 'Provider response exceeded the size limit.'
+    });
+  });
+
+  it('does not probe /models for health when discovery is disabled', async () => {
+    const paths: string[] = [];
+    const mock = await startMockServer((incoming, response) => {
+      paths.push(incoming.url ?? '');
+      response.statusCode = 200;
+      response.end('{"data":[{"id":"x"}]}');
+    });
+    server = mock.server;
+    const health = await new OpenAiHttpProvider({
+      id: 'secret-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'subscription',
+      apiKey: 'test-key',
+      manualModelId: 'manual-model',
+      modelDiscovery: 'disabled'
+    }).health();
+    expect(health.available).toBe(false);
+    expect(health.reason).toBe('Explicit Test Connection is required.');
+    expect(paths).toEqual([]);
+  });
+
+  it('does not treat unsupported /models as healthy when a manual model exists', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 404;
+      response.end('missing');
+    });
+    server = mock.server;
+    const health = await new OpenAiHttpProvider({
+      id: 'manual-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'subscription',
+      apiKey: 'test-key',
+      manualModelId: 'manual-model'
+    }).health();
+    expect(health.available).toBe(false);
+    expect(health.reason).toBe('Explicit Test Connection is required.');
+  });
+
+  it('rejects an oversized body when Content-Length exceeds the cap', async () => {
+    const mock = await startMockServer((_incoming, response) => {
+      response.statusCode = 200;
+      response.setHeader('content-length', String(MODEL_LIST_MAX_BYTES + 1));
+      response.end('{"data":[]}');
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'huge-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'free',
+      requiresSecret: false
+    });
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      message: 'Provider response exceeded the size limit.'
+    });
   });
 });

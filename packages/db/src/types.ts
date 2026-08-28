@@ -155,6 +155,7 @@ export type Database = {
           enabled: boolean
           id: string
           model_id: string
+          origin: string
           priority: number
           provider_id: string
           quality_rank: number
@@ -168,6 +169,7 @@ export type Database = {
           enabled?: boolean
           id?: string
           model_id: string
+          origin?: string
           priority?: number
           provider_id: string
           quality_rank?: number
@@ -206,6 +208,7 @@ export type Database = {
           kind: string
           name: string
           priority: number
+          settings_revision: number
           updated_at: string
         }
         Insert: {
@@ -217,6 +220,7 @@ export type Database = {
           kind: string
           name: string
           priority?: number
+          settings_revision?: number
           updated_at?: string
         }
         Update: {
@@ -228,6 +232,7 @@ export type Database = {
           kind?: string
           name?: string
           priority?: number
+          settings_revision?: number
           updated_at?: string
         }
         Relationships: []
@@ -1126,6 +1131,14 @@ export type Database = {
         }
         Returns: boolean
       }
+      renew_ai_analysis_lease: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          lease_seconds: number
+        }
+        Returns: boolean
+      }
       upsert_niche_cluster: {
         Args: {
           canonical_key: string
@@ -1136,6 +1149,53 @@ export type Database = {
           cluster_state: string
         }
         Returns: string
+      }
+      save_ai_provider_settings: {
+        Args: {
+          provider_row: Json
+          secret_row: Json | null
+          models: Json | null
+          reconcile_mode: string
+          model_status?: Json
+          expected_revision?: number | null
+        }
+        Returns: Json
+      }
+      record_ai_provider_execution_probe: {
+        Args: {
+          provider_id: string
+          expected_fingerprint: string
+          probe: Json
+        }
+        Returns: boolean
+      }
+      consume_admin_login_attempt: {
+        Args: {
+          max_attempts: number
+          window_seconds: number
+        }
+        Returns: boolean
+      }
+      acquire_admin_login_scrypt: {
+        Args: {
+          lock_owner: string
+          lease_seconds: number
+        }
+        Returns: boolean
+      }
+      release_admin_login_scrypt: {
+        Args: {
+          lock_owner: string
+        }
+        Returns: boolean
+      }
+      record_failed_ai_usage: {
+        Args: {
+          analysis_id: string
+          worker_id: string
+          analysis_usage: Json
+        }
+        Returns: boolean
       }
       checkpoint_job: {
         Args: {

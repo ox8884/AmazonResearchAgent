@@ -10,7 +10,9 @@ import {
 import ky from 'ky';
 import { useEffect, useState, type FormEvent } from 'react';
 import { adminCsrfHeaders } from '../lib/admin-csrf';
+import { providerFormKey } from './ai-provider-form-key';
 import { z } from 'zod';
+
 
 const ProviderModelSchema = z.object({
   id: z.string(),
@@ -18,7 +20,9 @@ const ProviderModelSchema = z.object({
   billingType: BillingTypeSchema,
   capabilities: z.array(z.string()),
   qualityRank: z.number(),
-  enabled: z.boolean().default(true)
+  enabled: z.boolean().default(true),
+  priority: z.number().default(100),
+  origin: z.string().default('manual')
 });
 
 const SavedProviderSchema = z.object({
@@ -27,18 +31,23 @@ const SavedProviderSchema = z.object({
   kind: ProviderKindSchema,
   billingType: BillingTypeSchema,
   enabled: z.boolean(),
+  priority: z.number().default(100),
   secretLast4: z.string().nullable(),
   roles: z.array(z.string()).default([]),
   baseUrl: z.string().nullable().optional(),
   networkScope: z.enum(['public', 'private', 'loopback']).nullable().optional(),
   commandProfileId: z.string().nullable().optional(),
   modelId: z.string().nullable().optional(),
+  modelDiscovery: z.enum(['enabled', 'disabled']).default('enabled'),
+  settingsRevision: z.number().default(1),
   models: z.array(ProviderModelSchema)
 });
 
 const ProviderResponseSchema = z.object({
   provider: SavedProviderSchema
 });
+
+
 const ProviderListSchema = z.object({
   providers: z.array(SavedProviderSchema)
 });
@@ -147,6 +156,10 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
     setStatus({ kind: 'saving' });
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const submittedModelId =
+      typeof formData.get('modelId') === 'string' ? String(formData.get('modelId')).trim() : '';
+    const isNewManual =
+      submittedModelId.length > 0 && submittedModelId !== (saved?.modelId ?? '');
     const body = {
       id: formData.get('id') || undefined,
       name: formData.get('name') ?? '',
@@ -155,12 +168,24 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
       baseUrl: formData.get('baseUrl') ?? '',
       networkScope: formData.get('networkScope') ?? 'public',
       apiKey: formData.get('apiKey') ?? '',
-      modelId: formData.get('modelId') ?? '',
+      modelId: submittedModelId,
+      modelDiscovery: isNewManual
+        ? 'disabled'
+        : (saved?.modelDiscovery ?? (submittedModelId ? 'disabled' : 'enabled')),
+      modelEnabled: isNewManual ? true : formData.get('modelEnabled') === 'on',
+      modelPriority: isNewManual ? 100 : Number(formData.get('modelPriority') ?? 100),
       commandProfileId: formData.get('commandProfileId') ?? '',
       roles: formData
         .getAll('roles')
         .filter((value): value is string => typeof value === 'string'),
-      enabled: formData.get('enabled') === 'on'
+      enabled: formData.get('enabled') === 'on',
+      priority: Number(formData.get('priority') ?? 100),
+      settingsRevision: saved?.settingsRevision,
+      models: (saved?.models ?? []).map((model) => ({
+        modelId: model.id,
+        enabled: formData.get(`model-enabled-${model.id}`) === 'on',
+        priority: Number(formData.get(`model-priority-${model.id}`) ?? model.priority)
+      }))
     };
 
     try {
@@ -199,12 +224,20 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
           .json<unknown>()
       );
       const result = await waitForProviderTest(queued.jobId);
+      const listed = ProviderListSchema.parse(
+        await ky.get('/api/ai-providers', { credentials: 'same-origin' }).json<unknown>()
+      );
+      setProviders(listed.providers);
+      const refreshed = listed.providers.find((provider) => provider.id === saved.id);
+      if (refreshed) {
+        setSaved(refreshed);
+      }
       setStatus({
         kind: 'tested',
         available: result.available,
         models: result.models
       });
-      await loadProviders();
+
     } catch (error) {
       if (error instanceof Error) {
         setStatus({ kind: 'error', message: copy.connectionUnavailable });
@@ -244,7 +277,8 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
         )}
       </section>
 
-      <form className="ai-provider-form" onSubmit={submit} key={saved?.id ?? 'new'}>
+      <form className="ai-provider-form" onSubmit={submit} key={providerFormKey(saved)}>
+
         {saved ? <input type="hidden" name="id" value={saved.id} /> : null}
         <div className="form-grid">
           <div className="field-stack">
@@ -285,6 +319,16 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
             <span>{copy.providerEnabled}</span>
           </label>
           <div className="field-stack">
+            <label htmlFor="provider-priority">{copy.providerPriority}</label>
+            <input
+              id="provider-priority"
+              name="priority"
+              type="number"
+              min={0}
+              defaultValue={saved?.priority ?? 100}
+            />
+          </div>
+          <div className="field-stack">
             <label htmlFor="model-id">{copy.modelId}</label>
             <input
               id="model-id"
@@ -293,6 +337,51 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
               defaultValue={saved?.modelId ?? ''}
             />
           </div>
+          {(saved?.models ?? []).map((model) => (
+            <div key={model.id} className="field-stack field-stack--wide">
+              <label className="checkbox-field">
+                <input
+                  name={`model-enabled-${model.id}`}
+                  type="checkbox"
+                  defaultChecked={model.enabled}
+                />
+                <span>
+                  {copy.modelEnabled}: {model.displayName} ({model.origin})
+                </span>
+              </label>
+              <label htmlFor={`model-priority-${model.id}`}>{copy.modelPriority}</label>
+              <input
+                id={`model-priority-${model.id}`}
+                name={`model-priority-${model.id}`}
+                type="number"
+                min={0}
+                defaultValue={model.priority}
+              />
+            </div>
+          ))}
+          {(!saved || saved.models.length === 0) && (
+            <>
+              <label className="checkbox-field">
+                <input
+                  name="modelEnabled"
+                  type="checkbox"
+                  defaultChecked
+                />
+                <span>{copy.modelEnabled}</span>
+              </label>
+              <div className="field-stack">
+                <label htmlFor="model-priority">{copy.modelPriority}</label>
+                <input
+                  id="model-priority"
+                  name="modelPriority"
+                  type="number"
+                  min={0}
+                  defaultValue={100}
+                />
+              </div>
+            </>
+          )}
+
           <div className="field-stack field-stack--wide">
             <label htmlFor="base-url">{copy.baseUrl}</label>
             <input

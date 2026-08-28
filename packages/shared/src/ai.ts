@@ -66,9 +66,42 @@ export const AiProviderConfigSchema = z.object({
 });
 export type AiProviderConfig = z.infer<typeof AiProviderConfigSchema>;
 
+export const ModelIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[\w.:/=+-]+$/u, 'Model ID contains unsupported characters.');
+
+export class UnsafeModelIdError extends Error {
+  constructor(message = 'Model ID is not persistable.') {
+    super(message);
+    this.name = 'UnsafeModelIdError';
+  }
+}
+
+export function assertPersistableModelId(
+  modelId: string,
+  secretPlaintext?: string
+): string {
+  const parsed = ModelIdSchema.parse(modelId);
+  if (secretPlaintext && parsed === secretPlaintext) {
+    throw new UnsafeModelIdError('Model ID must not equal provider secret material.');
+  }
+  if (
+    secretPlaintext &&
+    secretPlaintext.length >= 16 &&
+    parsed.includes(secretPlaintext)
+  ) {
+    throw new UnsafeModelIdError('Model ID must not contain provider secret material.');
+  }
+  return parsed;
+}
+
+
 export const AiModelDescriptorSchema = z.object({
   providerId: z.string().trim().min(1),
-  id: z.string().trim().min(1),
+  id: ModelIdSchema,
   displayName: z.string().trim().min(1),
   capabilities: z.array(ProviderCapabilitySchema).min(1),
   billingType: BillingTypeSchema,

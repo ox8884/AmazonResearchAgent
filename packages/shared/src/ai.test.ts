@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   AiRequestSchema,
   AiRoleSchema,
+  assertPersistableModelId,
   BillingTypeSchema,
+  ModelIdSchema,
   ProviderCapabilitySchema,
   ProviderKindSchema,
-  RouterModeSchema
+  RouterModeSchema,
+  UnsafeModelIdError
 } from './ai';
 
 describe('AI provider schemas', () => {
@@ -42,4 +45,21 @@ describe('AI provider schemas', () => {
     expect(() => AiRoleSchema.parse('unknown_role')).toThrow();
     expect(() => ProviderKindSchema.parse('shell')).toThrow();
   });
+
+  it('rejects control characters, overlong IDs, and secret reflection', () => {
+    expect(ModelIdSchema.parse('gpt-4.1-mini')).toBe('gpt-4.1-mini');
+    expect(() => ModelIdSchema.parse('a'.repeat(201))).toThrow();
+    expect(() => ModelIdSchema.parse('bad\nid')).toThrow();
+    expect(() => assertPersistableModelId('super-secret', 'super-secret')).toThrow(
+      UnsafeModelIdError
+    );
+    expect(() =>
+      assertPersistableModelId(
+        'model-settings-api-secret-value',
+        'settings-api-secret-value'
+      )
+    ).toThrow(UnsafeModelIdError);
+    expect(assertPersistableModelId('model-ab', 'ab')).toBe('model-ab');
+  });
+
 });

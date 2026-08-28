@@ -1,6 +1,11 @@
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   ProviderUrlPolicyError,
+  createPinnedProviderFetch,
+  pinProviderDestination,
   validateProviderBaseUrl,
   type ProviderAddressResolver
 } from './provider-url-policy';
@@ -74,5 +79,43 @@ describe('worker provider URL policy', () => {
     await rejects('http://169.254.169.254/latest', 'private');
     await rejects('http://100.100.100.200/latest', 'private');
     await rejects('http://[fd00:ec2::254]/latest', 'private');
+  });
+
+  it('pins the connect host to the lookup used for validation', async () => {
+    let lookups = 0;
+    const resolve: ProviderAddressResolver = async () => {
+      lookups += 1;
+      return lookups === 1 ? [{ address: '8.8.8.8' }] : [{ address: '127.0.0.1' }];
+    };
+    const pinned = await pinProviderDestination(
+      'https://provider.example/v1',
+      'public',
+      resolve
+    );
+    expect(pinned.connectHost).toBe('8.8.8.8');
+    expect(pinned.tlsServername).toBe('provider.example');
+    expect(pinned.hostnameHeader).toBe('provider.example');
+    expect(lookups).toBe(1);
+  });
+
+  it('connects to the validated IP while sending the original Host header', async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.socket.remoteAddress ?? ''}|${request.headers.host ?? ''}`);
+      response.statusCode = 200;
+      response.end('{"ok":true}');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    const fetchPinned = createPinnedProviderFetch('loopback', async () => [
+      { address: '127.0.0.1' }
+    ]);
+    const response = await fetchPinned(
+      `http://provider.example:${address.port}/v1/models`
+    );
+    server.close();
+    expect(response.status).toBe(200);
+    expect(seen[0]).toContain(`provider.example:${address.port}`);
   });
 });

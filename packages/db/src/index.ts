@@ -14,4 +14,11 @@ export type {
   ProviderSecretInsert,
   ProviderSecretRow
 } from './provider-repository';
+export {
+  fingerprintFromProviderConfig,
+  providerExecutionFingerprint,
+  secretCipherId
+} from './execution-identity';
+
+
 export type { Database, Json } from './types';

@@ -1,5 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
+import { Agent, type Dispatcher } from 'undici';
 
 export type ProviderNetworkScope = 'public' | 'private' | 'loopback';
 type AddressCategory = ProviderNetworkScope | 'blocked';
@@ -128,6 +130,22 @@ export async function validateProviderBaseUrl(
   scope: ProviderNetworkScope,
   resolveAddress: ProviderAddressResolver = resolveAddresses
 ): Promise<URL> {
+  const pinned = await pinProviderDestination(value, scope, resolveAddress);
+  return pinned.url;
+}
+
+export interface PinnedProviderDestination {
+  readonly url: URL;
+  readonly connectHost: string;
+  readonly hostnameHeader: string;
+  readonly tlsServername: string;
+}
+
+export async function pinProviderDestination(
+  value: string,
+  scope: ProviderNetworkScope,
+  resolveAddress: ProviderAddressResolver = resolveAddresses
+): Promise<PinnedProviderDestination> {
   let url: URL;
   try {
     url = new URL(value);
@@ -180,5 +198,108 @@ export async function validateProviderBaseUrl(
       );
     }
   }
-  return url;
+  const chosen = addresses[0];
+  if (!chosen) {
+    throw new ProviderUrlPolicyError('Provider hostname did not resolve.');
+  }
+  const connectHost =
+    isIP(chosen.address) === 6 ? `[${chosen.address}]` : chosen.address;
+  return {
+    url,
+    connectHost,
+    hostnameHeader: url.host,
+    tlsServername: hostname
+  };
+}
+function nodeReadableToWebStream(source: Readable): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      source.on('data', (chunk: Buffer | string) => {
+        const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        controller.enqueue(new Uint8Array(bytes));
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+          source.pause();
+        }
+      });
+      source.once('end', () => {
+        controller.close();
+      });
+      source.once('error', (error: Error) => {
+        controller.error(error);
+      });
+    },
+    pull() {
+      source.resume();
+    },
+    cancel() {
+      source.destroy();
+    }
+  });
+}
+
+export function createPinnedProviderFetch(
+  scope: ProviderNetworkScope,
+  resolveAddress: ProviderAddressResolver = resolveAddresses
+): typeof fetch {
+  const agents = new Map<string, Agent>();
+  return async (input, init) => {
+    const rawUrl =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const pin = await pinProviderDestination(rawUrl, scope, resolveAddress);
+    const original = new URL(rawUrl);
+    const origin = `${original.protocol}//${pin.connectHost}${original.port ? `:${original.port}` : ''}`;
+    const headers: string[] = [];
+    const incoming = new Headers(init?.headers);
+    if (input instanceof Request) {
+      input.headers.forEach((value, key) => {
+        if (!incoming.has(key)) {
+          incoming.set(key, value);
+        }
+      });
+    }
+    incoming.forEach((value, key) => {
+      if (key.toLowerCase() !== 'host') {
+        headers.push(key, value);
+      }
+    });
+    headers.push('host', pin.hostnameHeader);
+    const existing = agents.get(pin.tlsServername);
+    const dispatcher =
+      existing ??
+      new Agent({
+        connect: { servername: pin.tlsServername }
+      });
+    if (!existing) {
+      agents.set(pin.tlsServername, dispatcher);
+    }
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const requestInit: Dispatcher.RequestOptions = {
+      origin,
+      path: `${original.pathname}${original.search}`,
+      method,
+      headers
+    };
+    if (typeof init?.body === 'string' || init?.body instanceof Uint8Array) {
+      requestInit.body = init.body;
+    }
+    const requested = await dispatcher.request(requestInit);
+    const responseHeaders = new Headers();
+    for (const [key, value] of Object.entries(requested.headers)) {
+      if (typeof value === 'string') {
+        responseHeaders.set(key, value);
+      } else if (Array.isArray(value)) {
+        for (const item of value) {
+          responseHeaders.append(key, item);
+        }
+      }
+    }
+    return new Response(nodeReadableToWebStream(requested.body), {
+      status: requested.statusCode,
+      headers: responseHeaders
+    });
+  };
 }

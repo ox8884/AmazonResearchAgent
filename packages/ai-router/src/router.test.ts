@@ -88,6 +88,43 @@ describe('AI routing policy', () => {
     }
   });
 
+  // Break: changing the provider to payg leaves subscription models routable.
+  it('does not route a payg provider whose stored models still say subscription', () => {
+    const converted = provider('converted', 'payg');
+    const blocked = routeAiRequest(
+      request({ allowPaidFallback: false }),
+      catalog([
+        {
+          provider: converted,
+          enabled: true,
+          roles: ['niche_normalization'],
+          priority: 1,
+          health: healthy,
+          models: [model('converted', 'kept-model', 'subscription', 1)]
+        }
+      ])
+    );
+    const allowed = routeAiRequest(
+      request({ allowPaidFallback: true }),
+      catalog([
+        {
+          provider: converted,
+          enabled: true,
+          roles: ['niche_normalization'],
+          priority: 1,
+          health: healthy,
+          models: [model('converted', 'kept-model', 'subscription', 1)]
+        }
+      ])
+    );
+
+    expect(blocked.kind).toBe('defer');
+    expect(allowed.kind).toBe('route');
+    if (allowed.kind === 'route') {
+      expect(allowed.providerId).toBe('converted');
+    }
+  });
+
   it('selects the configured role priority before a lower-cost later provider', () => {
     const preferred = provider('preferred', 'subscription');
     const cheaper = provider('cheaper', 'free');

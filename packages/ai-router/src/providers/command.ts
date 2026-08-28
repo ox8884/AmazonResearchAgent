@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import {
   AiUsageSchema,
   type AiModelDescriptor,
@@ -83,6 +83,34 @@ function allowedEnvironment(
   return environment;
 }
 
+function terminateCommand(child: ChildProcess): void {
+  // Production workers are Oracle Ubuntu ARM64. Windows local runs kill the
+  // immediate child only; command providers are not a Windows production target.
+  if (process.platform === 'win32' || child.pid === undefined) {
+    child.kill();
+    return;
+  }
+  const processGroup = -child.pid;
+  try {
+    process.kill(processGroup, 'SIGTERM');
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      throw error;
+    }
+    child.kill('SIGTERM');
+  }
+  setTimeout(() => {
+    try {
+      process.kill(processGroup, 'SIGKILL');
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      child.kill('SIGKILL');
+    }
+  }, 200).unref();
+}
+
 function executeCommand(
   options: CommandExecutionOptions
 ): Promise<CommandExecutionResult> {
@@ -95,7 +123,8 @@ function executeCommand(
       options.fixedEnvironment
     ),
     stdio: 'pipe',
-    windowsHide: true
+    windowsHide: true,
+    detached: process.platform !== 'win32'
   });
   let stdout = '';
   let stderr = '';
@@ -115,7 +144,7 @@ function executeCommand(
   const append = (current: string, chunk: string): string => {
     const next = current + chunk;
     if (Buffer.byteLength(next, 'utf8') > MAX_OUTPUT_BYTES) {
-      child.kill();
+      terminateCommand(child);
       fail(
         new CommandProviderError(
           'Command output exceeded the limit.',
@@ -128,7 +157,7 @@ function executeCommand(
   };
 
   const timer = setTimeout(() => {
-    child.kill();
+    terminateCommand(child);
     fail(new CommandProviderError('Command provider timed out.', 'timeout', true));
   }, options.timeoutMs);
   child.stdout.setEncoding('utf8');

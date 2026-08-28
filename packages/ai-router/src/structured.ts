@@ -62,10 +62,14 @@ export interface AiProviderResult<T> extends Omit<RawAiProviderResult, 'rawOutpu
 
 export class InvalidStructuredOutputError extends Error {
   readonly code = 'INVALID_STRUCTURED_OUTPUT' as const;
+  readonly usage: AiUsage;
+  readonly attempts: readonly RawAiProviderResult[];
 
-  constructor() {
+  constructor(usage: AiUsage, attempts: readonly RawAiProviderResult[]) {
     super('Provider returned invalid structured output.');
     this.name = 'InvalidStructuredOutputError';
+    this.usage = usage;
+    this.attempts = attempts;
   }
 }
 
@@ -141,7 +145,10 @@ export async function runWithSchema<T>(
   });
   const repairedParsed = schema.safeParse(parseRawOutput(repaired.rawOutput));
   if (!repairedParsed.success) {
-    throw new InvalidStructuredOutputError();
+    throw new InvalidStructuredOutputError(combineUsage(first.usage, repaired.usage), [
+      first,
+      repaired
+    ]);
   }
 
   return {

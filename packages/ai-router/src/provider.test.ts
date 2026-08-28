@@ -65,13 +65,16 @@ function fakeProvider(outputs: readonly unknown[]): RawAiProvider {
 
 describe('structured AI provider guard', () => {
   it('rejects invalid provider JSON instead of coercing it', async () => {
-    await expect(
-      runWithSchema(
-        fakeProvider(['{"classification":"maybe"}', '{"classification":"maybe"}']),
-        ClassificationSchema,
-        request()
-      )
-    ).rejects.toBeInstanceOf(InvalidStructuredOutputError);
+    const error = await runWithSchema(
+      fakeProvider(['{"classification":"maybe"}', '{"classification":"maybe"}']),
+      ClassificationSchema,
+      request()
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(InvalidStructuredOutputError);
+    if (error instanceof InvalidStructuredOutputError) {
+      expect(error.usage.requestCount).toBe(2);
+      expect(error.attempts).toHaveLength(2);
+    }
   });
 
   it('uses at most one repair request for malformed output', async () => {
