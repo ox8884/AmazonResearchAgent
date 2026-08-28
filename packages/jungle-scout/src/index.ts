@@ -29,7 +29,8 @@ export type {
 } from './product-database';
 
 export { buildKeywordRequest, queryKeywordMetrics } from './keywords';
-export type { KeywordMetrics, KeywordQueryInput } from './keywords';
+export type { KeywordMetrics, KeywordQueryInput, KeywordQueryResult } from './keywords';
+
 export {
   buildHistoricalSearchVolumeRequest,
   queryHistoricalSearchVolume

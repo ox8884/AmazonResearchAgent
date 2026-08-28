@@ -56,6 +56,27 @@ describe('Jungle Scout Product Database adapter', () => {
     });
   });
 
+  it('includes optional filters and sort when provided', () => {
+    const request = buildProductDatabaseRequest({
+      marketplace: 'us',
+      phrases: ['faucet mat'],
+      pageSize: 50,
+      filters: { min_price: 10 },
+      sort: 'units_sold_30_desc'
+    });
+    expect(request.json).toMatchObject({
+      data: {
+        attributes: {
+          include_keywords: ['faucet mat'],
+          page_size: 50,
+          filters: { min_price: 10 },
+          sort: 'units_sold_30_desc'
+        }
+      }
+    });
+  });
+
+
   let server: Server | undefined;
   afterEach(() => {
     server?.close();

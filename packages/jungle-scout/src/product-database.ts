@@ -36,7 +36,9 @@ export type ProductDatabasePage = z.infer<typeof ProductDatabasePageSchema>;
 export const ProductDatabaseQueryInputSchema = z.object({
   marketplace: z.literal('us'),
   phrases: z.array(z.string().trim().min(1)).min(1),
-  pageSize: z.number().int().min(1).max(100).default(100)
+  pageSize: z.number().int().min(1).max(100).default(100),
+  filters: z.record(z.string(), z.unknown()).optional(),
+  sort: z.string().trim().min(1).optional()
 });
 export type ProductDatabaseQueryInput = z.input<typeof ProductDatabaseQueryInputSchema>;
 
@@ -55,7 +57,9 @@ export function buildProductDatabaseRequest(input: ProductDatabaseQueryInput): {
         attributes: {
           marketplace: parsed.marketplace,
           include_keywords: parsed.phrases,
-          page_size: parsed.pageSize
+          page_size: parsed.pageSize,
+          ...(parsed.filters ? { filters: parsed.filters } : {}),
+          ...(parsed.sort ? { sort: parsed.sort } : {})
         }
       }
     }

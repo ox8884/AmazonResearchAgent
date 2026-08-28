@@ -79,9 +79,10 @@ export function createJungleScoutProductDatabaseQuery(
 }
 
 export function createJungleScoutKeywordQuery(
-
   env: NodeJS.ProcessEnv = process.env
-): (keyword: string) => Promise<KeywordMetrics> {
+): (
+  keyword: string
+) => Promise<KeywordMetrics & { readonly httpAttempts: number; readonly status: number }> {
   let client: JungleScoutClient | undefined;
   return async (keyword) => {
     if (!client) {
@@ -92,10 +93,15 @@ export function createJungleScoutKeywordQuery(
         baseUrl: config.baseUrl
       });
     }
-    return queryKeywordMetrics(client, {
+    const result = await queryKeywordMetrics(client, {
       marketplace: 'us',
       keyword
     });
+    return {
+      ...result.metrics,
+      httpAttempts: result.httpAttempts,
+      status: result.status
+    };
   };
 }
 
