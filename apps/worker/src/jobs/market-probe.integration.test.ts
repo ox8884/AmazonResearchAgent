@@ -639,7 +639,7 @@ integration('market probe job', () => {
     const { error: cacheError } = await client.from('api_cache').upsert({
       cache_key: expandedKey,
       endpoint: 'product_database',
-      response: fixture,
+      response: JSON.parse(JSON.stringify(fixture)),
       captured_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + DEFAULT_CACHE_TTL_MS.product_database).toISOString()
     });
