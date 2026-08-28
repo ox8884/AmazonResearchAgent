@@ -102,7 +102,9 @@ export function clusterMicroNiches(
 
   for (const rule of CLUSTER_RULES) {
     const matched = relevant.filter((family) => {
-      const title = family.variants.map((variant) => variant.title.toLocaleLowerCase('en-US')).join(' ');
+      const title = family.variants
+        .map((variant) => variant.title.toLocaleLowerCase('en-US'))
+        .join(' ');
       return rule.terms.some((term) => title.includes(term));
     });
     if (matched.length === 0) {
@@ -118,5 +120,15 @@ export function clusterMicroNiches(
     });
   }
 
+  const leftover = relevant.filter((family) => !assigned.has(family.parentKey));
+  if (leftover.length > 0) {
+    clusters.push({
+      name: nicheName,
+      families: leftover,
+      priceSegments: segmentPrices(leftover)
+    });
+  }
+
   return clusters;
 }
+

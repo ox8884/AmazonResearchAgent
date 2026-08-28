@@ -52,4 +52,17 @@ describe('micro-niche clustering', () => {
     );
     expect(titles.join(' ')).not.toMatch(/Rug|Bath Mat|Shower|Cabinet Liner/i);
   });
+
+  it('keeps a non-sink niche together instead of forcing sink cluster names', () => {
+    const result = clusterMicroNiches(
+      families([
+        product('B0CUP1', 'Stainless Milk Frother Whisk', 14.99),
+        product('B0CUP2', 'Electric Milk Frother Handheld', 19.99)
+      ]),
+      'milk frother'
+    );
+    expect(result.map((cluster) => cluster.name)).toEqual(['milk frother']);
+    expect(result[0]?.families).toHaveLength(2);
+  });
 });
+
