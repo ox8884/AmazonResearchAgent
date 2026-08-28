@@ -284,7 +284,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     const modelId = input.modelId
       ? assertPersistableModelId(input.modelId, secretForComparison)
       : undefined;
-    const existing = input.id ? await repository.findProvider(input.id) : null;
     const existingSecret = input.id ? await repository.findSecret(input.id) : null;
     const builtConfig = providerConfig({ ...input, modelId });
     const nextSecret = encrypted
@@ -299,22 +298,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       builtConfig,
       secretCipherId(nextSecret)
     );
-    const previousIdentity = existing
-      ? fingerprintFromProviderConfig(
-          existing.kind,
-          existing.config,
-          secretCipherId(existingSecret)
-        )
-      : null;
-    const previousConfig =
-      existing &&
-      typeof existing.config === 'object' &&
-      existing.config !== null &&
-      !Array.isArray(existing.config)
-        ? existing.config
-        : {};
-    const previousProbe =
-      previousIdentity === identity ? previousConfig.executionProbe : undefined;
     const provider = await repository.saveSettings({
       provider: {
         id: providerId,
@@ -329,8 +312,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           !Array.isArray(builtConfig)
             ? builtConfig
             : {}),
-          executionIdentity: identity,
-          ...(previousProbe !== undefined ? { executionProbe: previousProbe } : {})
+          executionIdentity: identity
         }
       },
       secret: encrypted

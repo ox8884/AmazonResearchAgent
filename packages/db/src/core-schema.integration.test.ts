@@ -749,5 +749,75 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(match?.result).toBe(true);
     expect(stored?.config.executionProbe?.available).toBe(false);
   });
+
+  // Break: an in-flight Settings save replays a stale successful executionProbe.
+  it('keeps the locked-row probe instead of a stale Settings success probe', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      update ai_providers
+      set config = '{
+        "executionIdentity":"fingerprint-a",
+        "executionProbe":{"available":false,"fingerprint":"fingerprint-a"}
+      }'::jsonb
+      where id = ${providerId}
+    `;
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'command',
+          'billing_type', 'free',
+          'enabled', true,
+          'priority', 100,
+          'config', jsonb_build_object(
+            'executionIdentity', 'fingerprint-a',
+            'executionProbe', jsonb_build_object('available', true, 'fingerprint', 'fingerprint-a')
+          )
+        ),
+        null::jsonb,
+        '[]'::jsonb,
+        'none'::text
+      )
+    `;
+    const [stored] = await sql<{ config: { executionProbe?: { available?: boolean } } }[]>`
+      select config from ai_providers where id = ${providerId}
+    `;
+    expect(stored?.config.executionProbe?.available).toBe(false);
+  });
+
+  // Break: identity-changing Settings keeps the previous executionProbe.
+  it('invalidates the execution probe when settings identity changes', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      update ai_providers
+      set config = '{
+        "executionIdentity":"fingerprint-a",
+        "executionProbe":{"available":true,"fingerprint":"fingerprint-a"}
+      }'::jsonb
+      where id = ${providerId}
+    `;
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'command',
+          'billing_type', 'free',
+          'enabled', true,
+          'priority', 100,
+          'config', jsonb_build_object('executionIdentity', 'fingerprint-b')
+        ),
+        null::jsonb,
+        '[]'::jsonb,
+        'none'::text
+      )
+    `;
+    const [stored] = await sql<{ config: { executionProbe?: unknown } }[]>`
+      select config from ai_providers where id = ${providerId}
+    `;
+    expect(stored?.config.executionProbe).toBeUndefined();
+  });
 });
+
 
