@@ -23,6 +23,15 @@ export type {
   PreliminaryScoreComponent
 } from './scoring/preliminary-score';
 
+export { planDailyResearch, ResearchPlanBucket } from './planner';
+export type {
+  DailyResearchAllocation,
+  DailyResearchCandidate,
+  DailyResearchPlanInput,
+  ResearchPlan,
+  ResearchPlanItem
+} from './planner';
+
 export {
   buildNormalizationPrompt,
   KeywordNormalizationSchema,
