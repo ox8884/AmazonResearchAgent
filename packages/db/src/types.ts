@@ -34,6 +34,212 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_settings: {
+        Row: {
+          created_at: string
+          daily_api_budget: number
+          id: boolean
+          locale: string
+          manual_api_reserve: number
+          manual_reserve_enabled: boolean
+          new_freshness_hours: number
+          new_percent: number
+          notification_locale: string | null
+          strong_freshness_hours: number
+          strong_percent: number
+          telegram_chat_id: string | null
+          telegram_enabled: boolean
+          timezone: string
+          updated_at: string
+          watch_freshness_hours: number
+          watch_percent: number
+        }
+        Insert: {
+          created_at?: string
+          daily_api_budget?: number
+          id?: boolean
+          locale?: string
+          manual_api_reserve?: number
+          manual_reserve_enabled?: boolean
+          new_freshness_hours?: number
+          new_percent?: number
+          notification_locale?: string | null
+          strong_freshness_hours?: number
+          strong_percent?: number
+          telegram_chat_id?: string | null
+          telegram_enabled?: boolean
+          timezone?: string
+          updated_at?: string
+          watch_freshness_hours?: number
+          watch_percent?: number
+        }
+        Update: {
+          created_at?: string
+          daily_api_budget?: number
+          id?: boolean
+          locale?: string
+          manual_api_reserve?: number
+          manual_reserve_enabled?: boolean
+          new_freshness_hours?: number
+          new_percent?: number
+          notification_locale?: string | null
+          strong_freshness_hours?: number
+          strong_percent?: number
+          telegram_chat_id?: string | null
+          telegram_enabled?: boolean
+          timezone?: string
+          updated_at?: string
+          watch_freshness_hours?: number
+          watch_percent?: number
+        }
+        Relationships: []
+      }
+      notifications: {
+        Row: {
+          attempts: number
+          candidate_id: string | null
+          created_at: string
+          delivered_at: string | null
+          event_type: string
+          id: string
+          idempotency_key: string
+          last_error: string | null
+          locale: string
+          payload: Json
+          research_run_id: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          event_type: string
+          id?: string
+          idempotency_key: string
+          last_error?: string | null
+          locale?: string
+          payload?: Json
+          research_run_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          event_type?: string
+          id?: string
+          idempotency_key?: string
+          last_error?: string | null
+          locale?: string
+          payload?: Json
+          research_run_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_research_run_id_fkey"
+            columns: ["research_run_id"]
+            isOneToOne: false
+            referencedRelation: "research_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      research_runs: {
+        Row: {
+          checkpoint: Json
+          completed_at: string | null
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          id: string
+          idempotency_key: string
+          locale: string
+          logical_run_date: string
+          mode: string
+          selected_candidate_ids: Json
+          source: string
+          started_at: string | null
+          status: string
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          checkpoint?: Json
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key: string
+          locale?: string
+          logical_run_date: string
+          mode?: string
+          selected_candidate_ids?: Json
+          source: string
+          started_at?: string | null
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Update: {
+          checkpoint?: Json
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key?: string
+          locale?: string
+          logical_run_date?: string
+          mode?: string
+          selected_candidate_ids?: Json
+          source?: string
+          started_at?: string | null
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      scheduled_run_locks: {
+        Row: {
+          created_at: string
+          research_run_id: string
+          run_date: string
+        }
+        Insert: {
+          created_at?: string
+          research_run_id: string
+          run_date: string
+        }
+        Update: {
+          created_at?: string
+          research_run_id?: string
+          run_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scheduled_run_locks_research_run_id_fkey"
+            columns: ["research_run_id"]
+            isOneToOne: true
+            referencedRelation: "research_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_analyses: {
         Row: {
           attempts: number

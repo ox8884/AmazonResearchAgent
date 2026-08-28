@@ -24,6 +24,9 @@ export type {
   RuleReason,
   SearchVolume
 } from './domain';
+
+export { ResearchSettingsSchema } from './settings';
+export type { ResearchSettings, ResearchSettingsInput } from './settings';
 export { COPY, DEFAULT_LOCALE, getCopy } from './i18n';
 export type { CopyKey } from './i18n';
 
