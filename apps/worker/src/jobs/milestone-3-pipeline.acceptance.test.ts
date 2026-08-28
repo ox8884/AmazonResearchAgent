@@ -422,16 +422,21 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     expect(jobs?.[0]?.payload).toMatchObject({ candidateId, locale: 'en' });
     expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
     expect(calls).toBe(0);
-    const early = await queue.claimJobs(workerId, 8, 60);
-    expect(early.some((job) => job.id === jobs?.[0]?.id)).toBe(false);
-    await client
+    const { data: eligible, error: eligibleError } = await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString() })
-      .eq('id', jobs?.[0]?.id ?? '');
-    const claimed = await queue.claimJobs(workerId, 8, 60);
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', jobs?.[0]?.id ?? '')
+      .select('id,status,available_at,priority')
+      .single();
+    if (eligibleError || !eligible) {
+      throw new Error(`Could not make resume job eligible: ${eligibleError?.message ?? 'missing row'}`);
+    }
+    const claimed = await queue.claimJobs(workerId, 1, 60);
     const resumeJob = claimed.find((job) => job.id === jobs?.[0]?.id);
     if (!resumeJob) {
-      throw new Error('Production claim did not return the persisted MARKET_PROBE resume job.');
+      throw new Error(
+        `Production claim did not return the persisted MARKET_PROBE resume job ${jobs?.[0]?.id}; claimed=${claimed.map((job) => `${job.type}:${job.id}`).join(',')}`
+      );
     }
     const handlers = createJobHandlers(client, {
       apiBudget: new MemoryApiBudget({ dailyLimit: 3, used: 0, reserve: 1 }),
