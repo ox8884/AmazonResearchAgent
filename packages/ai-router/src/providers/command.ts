@@ -84,6 +84,8 @@ function allowedEnvironment(
 }
 
 function terminateCommand(child: ChildProcess): void {
+  // Production workers are Oracle Ubuntu ARM64. Windows local runs kill the
+  // immediate child only; command providers are not a Windows production target.
   if (process.platform === 'win32' || child.pid === undefined) {
     child.kill();
     return;

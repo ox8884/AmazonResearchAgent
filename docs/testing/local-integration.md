@@ -53,3 +53,10 @@ The gate executes the dedicated integration files directly:
 The command intentionally selects files, not a fixed test count.
 
 The suites create and remove their local fixture records. A failed run may leave only local test rows; use `pnpm exec supabase db reset` to return to a clean local database.
+
+## Web E2E
+
+`pnpm --filter @ara/web test:e2e` fail-closes login when durable login-guard RPCs cannot reach local Supabase. Inject the same `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` values used for `pnpm test:integration` into the process before running Playwright. Do not weaken fail-closed login to make E2E pass without a database.
+
+Command providers on Windows kill only the immediate child process. Production workers are Oracle Ubuntu ARM64 and use process-group termination.
+
