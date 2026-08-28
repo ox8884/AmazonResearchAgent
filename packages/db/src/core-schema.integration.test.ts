@@ -624,5 +624,130 @@ describe('AI analysis and cluster hardening RPCs', () => {
     ]);
   });
 
+  // Break: a stale settings form overwrites a newer revision.
+  it('rejects a stale settings revision instead of resurrecting disappeared models', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'openai_http',
+          'billing_type', 'subscription',
+          'enabled', true,
+          'priority', 1,
+          'config', '{"modelDiscovery":"enabled"}'::jsonb
+        ),
+        null::jsonb,
+        jsonb_build_array(
+          jsonb_build_object('model_id', 'live-model', 'enabled', true, 'origin', 'discovered'),
+          jsonb_build_object('model_id', 'gone-model', 'enabled', true, 'origin', 'discovered')
+        ),
+        'discovery'::text
+      )
+    `;
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'openai_http',
+          'billing_type', 'subscription',
+          'enabled', true,
+          'priority', 1,
+          'config', '{"modelDiscovery":"enabled"}'::jsonb
+        ),
+        null::jsonb,
+        jsonb_build_array(
+          jsonb_build_object('model_id', 'live-model', 'enabled', true, 'origin', 'discovered')
+        ),
+        'discovery'::text
+      )
+    `;
+    const [revision] = await sql<{ settings_revision: number }[]>`
+      select settings_revision from ai_providers where id = ${providerId}
+    `;
+    await expect(
+      sql`
+        select save_ai_provider_settings(
+          jsonb_build_object(
+            'id', ${providerId}::text,
+            'name', ${providerId}::text,
+            'kind', 'openai_http',
+            'billing_type', 'subscription',
+            'enabled', true,
+            'priority', 1,
+            'config', '{"modelDiscovery":"enabled"}'::jsonb
+          ),
+          null::jsonb,
+          '[]'::jsonb,
+          'none'::text,
+          jsonb_build_array(
+            jsonb_build_object('model_id', 'gone-model', 'enabled', true, 'priority', 1)
+          ),
+          ${(revision?.settings_revision ?? 2) - 1}
+        )
+      `
+    ).rejects.toThrow(/settings_revision_conflict/);
 
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'openai_http',
+          'billing_type', 'subscription',
+          'enabled', true,
+          'priority', 1,
+          'config', '{"modelDiscovery":"enabled"}'::jsonb
+        ),
+        null::jsonb,
+        '[]'::jsonb,
+        'none'::text,
+        jsonb_build_array(
+          jsonb_build_object('model_id', 'missing-model', 'enabled', true, 'priority', 1)
+        ),
+        ${revision?.settings_revision ?? 2}
+      )
+    `;
+    const models = await sql<{ model_id: string; enabled: boolean }[]>`
+      select model_id, enabled from ai_models where provider_id = ${providerId} order by model_id
+    `;
+    expect(models).toEqual([
+      { model_id: 'gone-model', enabled: false },
+      { model_id: 'live-model', enabled: true }
+    ]);
+  });
+
+  // Break: a probe for config A is written onto config B.
+  it('records an execution probe only when the config fingerprint still matches', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      update ai_providers
+      set config = '{"executionIdentity":"fingerprint-a"}'::jsonb
+      where id = ${providerId}
+    `;
+    const [mismatch] = await sql<{ result: boolean }[]>`
+      select record_ai_provider_execution_probe(
+        ${providerId},
+        'fingerprint-b',
+        '{"available":true,"fingerprint":"fingerprint-b"}'::jsonb
+      ) as result
+    `;
+    const [match] = await sql<{ result: boolean }[]>`
+      select record_ai_provider_execution_probe(
+        ${providerId},
+        'fingerprint-a',
+        '{"available":false,"fingerprint":"fingerprint-a"}'::jsonb
+      ) as result
+    `;
+    const [stored] = await sql<{ config: { executionProbe?: { available?: boolean } } }[]>`
+      select config from ai_providers where id = ${providerId}
+    `;
+
+    expect(mismatch?.result).toBe(false);
+    expect(match?.result).toBe(true);
+    expect(stored?.config.executionProbe?.available).toBe(false);
+  });
 });
+

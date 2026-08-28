@@ -6,14 +6,18 @@ import {
   createProviderRepository,
   createServerDatabaseClient,
   fingerprintFromProviderConfig,
-  secretCipherId
+  secretCipherId,
+  type Json
 } from '@ara/db';
+
 import { routeAiRequest } from '@ara/ai-router';
 import { AiRequestSchema } from '@ara/shared';
 import { encryptSecret } from '@ara/secret-store';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runNormalizeJob } from '../jobs/normalize-opportunities';
+import { runProviderConnectionTest } from '../jobs/test-ai-provider';
 import { resolvePersistedProviderCatalog } from './provider-catalog';
+
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -116,6 +120,38 @@ async function seedCandidate(
   if (candidateError) throw candidateError;
   return { importRunId, candidateId };
 }
+
+function probedConfig(
+  baseConfig: Json,
+  encrypted: { ciphertext: string; iv: string; authTag: string },
+  available: boolean
+): Json {
+  const fingerprint = fingerprintFromProviderConfig(
+    'openai_http',
+    baseConfig,
+    secretCipherId({
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag
+    })
+  );
+  const record =
+    typeof baseConfig === 'object' && baseConfig !== null && !Array.isArray(baseConfig)
+      ? baseConfig
+      : {};
+  return {
+    ...record,
+    executionIdentity: fingerprint,
+    executionProbe: {
+      available,
+      checkedAt: new Date(0).toISOString(),
+      errorCategory: available ? null : 'provider_unavailable',
+      fingerprint
+    }
+  };
+}
+
+
 
 integration('persisted provider catalog', () => {
   const database = client();
@@ -324,4 +360,167 @@ integration('persisted provider catalog', () => {
     expect(catalog.entries.map((candidate) => candidate.provider.id)).toEqual([goodId]);
     expect(entry?.models.map((model) => model.id)).toEqual(['enabled-model']);
   });
+
+  // Break: a failed Test Connection keeps a previous success probe routable.
+  it('does not route a provider after a failed execution probe', async () => {
+    mock = await MockOpenAiServer.start();
+    const providerId = `catalog-provider-${randomUUID()}`;
+    providerIds.push(providerId);
+    const key = Buffer.alloc(32, 9);
+    const encrypted = encryptSecret('persisted-secret-value', key);
+    const repository = createProviderRepository(database);
+    const baseConfig = {
+      baseUrl: mock.baseUrl,
+      networkScope: 'loopback',
+      modelDiscovery: 'disabled',
+      manualModelId: 'catalog-model',
+      roles: ['niche_normalization']
+    };
+    await repository.upsertProvider({
+      id: providerId,
+      name: 'Failed probe provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: probedConfig(baseConfig, encrypted, false)
+    });
+    await repository.upsertModel({
+      provider_id: providerId,
+      model_id: 'catalog-model',
+      display_name: 'Catalog model',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 1
+    });
+    await repository.upsertSecret({
+      provider_id: providerId,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      auth_tag: encrypted.authTag,
+      last4: encrypted.last4
+    });
+
+    const catalog = await resolvePersistedProviderCatalog(database, { encryptionKey: key });
+    const decision = routeAiRequest(
+      AiRequestSchema.parse({
+        role: 'niche_normalization',
+        routerMode: 'Balanced',
+        locale: 'ko',
+        payload: { keyword: 'pancake dispenser bottle' }
+      }),
+      catalog
+    );
+    expect(decision.kind).not.toBe('route');
+  });
+
+  // Break: a Test Connection for config A stamps its probe onto concurrent config B.
+  it('rejects a stale execution probe after a concurrent settings change', async () => {
+    mock = await MockOpenAiServer.start();
+    const providerId = `catalog-provider-${randomUUID()}`;
+    providerIds.push(providerId);
+    const key = Buffer.alloc(32, 9);
+    const encrypted = encryptSecret('persisted-secret-value', key);
+    const repository = createProviderRepository(database);
+    const baseConfig = {
+      baseUrl: mock.baseUrl,
+      networkScope: 'loopback',
+      modelDiscovery: 'disabled',
+      manualModelId: 'catalog-model',
+      roles: ['niche_normalization']
+    };
+    await repository.upsertProvider({
+      id: providerId,
+      name: 'Race probe provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: {
+        ...baseConfig,
+        executionIdentity: fingerprintFromProviderConfig(
+          'openai_http',
+          baseConfig,
+          secretCipherId({
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag
+          })
+        )
+      }
+    });
+    await repository.upsertModel({
+      provider_id: providerId,
+      model_id: 'catalog-model',
+      display_name: 'Catalog model',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 1
+    });
+    await repository.upsertSecret({
+      provider_id: providerId,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      auth_tag: encrypted.authTag,
+      last4: encrypted.last4
+    });
+
+    await runProviderConnectionTest(providerId, database, {
+      encryptionKey: key,
+      beforePersist: async () => {
+        const current = await repository.findProvider(providerId);
+        if (!current) {
+          throw new Error('Expected the raced provider to exist.');
+        }
+        const previous =
+          typeof current.config === 'object' &&
+          current.config !== null &&
+          !Array.isArray(current.config)
+            ? current.config
+            : {};
+        await repository.saveSettings({
+          provider: {
+            ...current,
+            config: {
+              ...previous,
+              baseUrl: 'http://127.0.0.1:9/v1',
+              executionIdentity: 'config-b'
+            }
+          },
+          secret: null,
+          models: [],
+          reconcileMode: 'none',
+          expectedRevision: current.settings_revision
+        });
+      }
+    });
+
+    const raced = await repository.findProvider(providerId);
+    const racedConfig =
+      typeof raced?.config === 'object' && raced.config !== null && !Array.isArray(raced.config)
+        ? raced.config
+        : {};
+    const catalog = await resolvePersistedProviderCatalog(database, { encryptionKey: key });
+    const decision = routeAiRequest(
+      AiRequestSchema.parse({
+        role: 'niche_normalization',
+        routerMode: 'Balanced',
+        locale: 'ko',
+        payload: { keyword: 'pancake dispenser bottle' }
+      }),
+      catalog
+    );
+
+    expect(racedConfig.baseUrl).toBe('http://127.0.0.1:9/v1');
+    expect(racedConfig.executionIdentity).toBe('config-b');
+    expect(
+      typeof racedConfig.executionProbe === 'object' &&
+        racedConfig.executionProbe !== null &&
+        !Array.isArray(racedConfig.executionProbe)
+        ? racedConfig.executionProbe['available']
+        : undefined
+    ).not.toBe(true);
+    expect(decision.kind).not.toBe('route');
+  });
 });
+
