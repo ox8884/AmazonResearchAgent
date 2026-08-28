@@ -10,7 +10,9 @@ import {
 import ky from 'ky';
 import { useEffect, useState, type FormEvent } from 'react';
 import { adminCsrfHeaders } from '../lib/admin-csrf';
+import { providerFormKey } from './ai-provider-form-key';
 import { z } from 'zod';
+
 
 const ProviderModelSchema = z.object({
   id: z.string(),
@@ -44,6 +46,8 @@ const SavedProviderSchema = z.object({
 const ProviderResponseSchema = z.object({
   provider: SavedProviderSchema
 });
+
+
 const ProviderListSchema = z.object({
   providers: z.array(SavedProviderSchema)
 });
@@ -273,7 +277,8 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
         )}
       </section>
 
-      <form className="ai-provider-form" onSubmit={submit} key={saved?.id ?? 'new'}>
+      <form className="ai-provider-form" onSubmit={submit} key={providerFormKey(saved)}>
+
         {saved ? <input type="hidden" name="id" value={saved.id} /> : null}
         <div className="form-grid">
           <div className="field-stack">

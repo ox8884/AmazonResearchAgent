@@ -15,6 +15,49 @@ export class ProviderRepositoryError extends Error {
   }
 }
 
+function savedProviderFromRpc(value: Json): ProviderRow {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ProviderRepositoryError('load saved provider settings');
+  }
+  const id = value.id;
+  const name = value.name;
+  const kind = value.kind;
+  const billingType = value.billing_type;
+  const enabled = value.enabled;
+  const priority = value.priority;
+  const config = value.config;
+  const settingsRevision = value.settings_revision;
+  const createdAt = value.created_at;
+  const updatedAt = value.updated_at;
+  if (
+    typeof id !== 'string' ||
+    typeof name !== 'string' ||
+    typeof kind !== 'string' ||
+    typeof billingType !== 'string' ||
+    typeof enabled !== 'boolean' ||
+    typeof priority !== 'number' ||
+    config === undefined ||
+    typeof settingsRevision !== 'number' ||
+    typeof createdAt !== 'string' ||
+    typeof updatedAt !== 'string'
+  ) {
+    throw new ProviderRepositoryError('load saved provider settings');
+  }
+  return {
+    id,
+    name,
+    kind,
+    billing_type: billingType,
+    enabled,
+    priority,
+    config,
+    settings_revision: settingsRevision,
+    created_at: createdAt,
+    updated_at: updatedAt
+  };
+}
+
+
 export interface ProviderRepository {
   listProviders(): Promise<readonly ProviderRow[]>;
   findProvider(id: string): Promise<ProviderRow | null>;
@@ -45,8 +88,9 @@ export interface ProviderRepository {
 }
 
 export function createProviderRepository(
-  client: SupabaseClient<Database>
+  client: Pick<SupabaseClient<Database>, 'rpc' | 'from'>
 ): ProviderRepository {
+
   return {
     async listProviders() {
       const { data, error } = await client
@@ -148,7 +192,7 @@ export function createProviderRepository(
     },
 
     async saveSettings(input) {
-      const { error } = await client.rpc('save_ai_provider_settings', {
+      const { data, error } = await client.rpc('save_ai_provider_settings', {
         provider_row: input.provider,
         secret_row: input.secret,
         models: [...input.models],
@@ -160,19 +204,12 @@ export function createProviderRepository(
         })),
         expected_revision: input.expectedRevision ?? null
       });
-      if (error) {
+      if (error || data === null) {
         throw new ProviderRepositoryError('save provider settings atomically', error);
       }
-      const { data, error: loadError } = await client
-        .from('ai_providers')
-        .select('*')
-        .eq('id', input.provider.id)
-        .single();
-      if (loadError || !data) {
-        throw new ProviderRepositoryError('load saved provider settings', loadError);
-      }
-      return data;
+      return savedProviderFromRpc(data);
     },
+
 
     async recordExecutionProbe(input) {
       const { data, error } = await client.rpc('record_ai_provider_execution_probe', {
