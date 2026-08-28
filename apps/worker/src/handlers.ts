@@ -332,7 +332,10 @@ export function createJobHandlers(
       .select('state')
       .eq('id', payload.candidateId)
       .maybeSingle();
-    if (deep?.state === 'Watch') {
+    if (
+      result.completed &&
+      (deep?.state === 'Watch' || deep?.state === 'Needs Review')
+    ) {
       await queue.enqueueJob({
         type: 'ENRICH_STRONG_POTENTIAL',
         payload: { candidateId: payload.candidateId, locale: payload.locale },
@@ -349,9 +352,18 @@ export function createJobHandlers(
 
     return runEnrichStrongPotential(payload.candidateId, client, {
       budget: apiBudget,
+      locale: payload.locale,
       queryHistoricalSearchVolume: createJungleScoutHistoricalSearchVolumeQuery(),
       querySalesEstimates: createJungleScoutSalesEstimatesQuery(),
-      queryShareOfVoice: createJungleScoutShareOfVoiceQuery()
+      queryShareOfVoice: createJungleScoutShareOfVoiceQuery(),
+      enqueueResume: async (input) => {
+        await queue.enqueueJob({
+          type: 'ENRICH_STRONG_POTENTIAL',
+          payload: { candidateId: input.candidateId, locale: input.locale },
+          idempotencyKey: input.idempotencyKey,
+          availableAt: input.availableAt
+        });
+      }
     });
   };
 
