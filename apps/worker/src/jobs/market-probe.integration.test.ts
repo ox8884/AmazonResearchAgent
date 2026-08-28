@@ -39,6 +39,7 @@ integration('market probe job', () => {
   const clusterIds: string[] = [];
 
   afterEach(async () => {
+    await client.from('jobs').delete().like('idempotency_key', 'market-probe-resume:%');
     for (const importRunId of importRuns.splice(0)) {
       await client.from('import_runs').delete().eq('id', importRunId);
     }
@@ -47,6 +48,7 @@ integration('market probe job', () => {
       await client.from('niche_clusters').delete().eq('id', clusterId);
     }
   });
+
 
   async function seedSinkCandidate(): Promise<{ candidateId: string }> {
     const importRunId = randomUUID();
