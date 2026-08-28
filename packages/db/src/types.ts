@@ -863,11 +863,16 @@ export type Database = {
         Returns: boolean
       }
       acquire_admin_login_scrypt: {
-        Args: Record<string, never>
+        Args: {
+          lock_owner: string
+          lease_seconds: number
+        }
         Returns: boolean
       }
       release_admin_login_scrypt: {
-        Args: Record<string, never>
+        Args: {
+          lock_owner: string
+        }
         Returns: boolean
       }
       record_failed_ai_usage: {

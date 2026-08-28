@@ -469,4 +469,79 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(second[0]?.result).toBe(true);
     expect(blocked[0]?.result).toBe(false);
   });
+
+  // Break: punctuation, full-width, or extra whitespace create extra clusters.
+  it('coalesces equivalent niche names onto one canonical cluster', async () => {
+    const names = ['db-it-cluster-foo', 'db-it-cluster-foo!', '  db-it-cluster-foo  ', 'ｄｂ-ｉｔ-ｃｌｕｓｔｅｒ-ｆｏｏ'];
+    const ids: string[] = [];
+    for (const name of names) {
+      const [row] = await sql<{ id: string }[]>`
+        select upsert_niche_cluster(
+          ${name},
+          ${name},
+          ${name},
+          '[]'::jsonb,
+          '[]'::jsonb,
+          'Ready for API Validation'
+        ) as id
+      `;
+      if (!row?.id) {
+        throw new Error('Expected a cluster id');
+      }
+      ids.push(row.id);
+    }
+    const keys = await sql<{ canonical_key: string }[]>`
+      select distinct canonical_key
+      from niche_clusters
+      where id in ${sql(ids)}
+    `;
+    expect(new Set(ids).size).toBe(1);
+    expect(keys).toEqual([{ canonical_key: 'db it cluster foo' }]);
+  });
+
+  // Break: a crashed scrypt holder permanently blocks later logins.
+  it('reclaims an expired scrypt lease and ignores a stale release', async () => {
+    await sql`
+      update admin_login_guard
+      set
+        attempts = 0,
+        scrypt_inflight = false,
+        scrypt_owner = null,
+        scrypt_leased_until = null,
+        window_started_at = now()
+      where bucket = 'admin-login'
+    `;
+    const [first] = await sql<{ result: boolean }[]>`
+      select acquire_admin_login_scrypt('owner-a', 30) as result
+    `;
+    const [busy] = await sql<{ result: boolean }[]>`
+      select acquire_admin_login_scrypt('owner-b', 30) as result
+    `;
+    expect(first?.result).toBe(true);
+    expect(busy?.result).toBe(false);
+
+    await sql`
+      update admin_login_guard
+      set scrypt_leased_until = now() - interval '1 second'
+      where bucket = 'admin-login'
+    `;
+    const [reclaimed] = await sql<{ result: boolean }[]>`
+      select acquire_admin_login_scrypt('owner-b', 30) as result
+    `;
+    const [staleRelease] = await sql<{ result: boolean }[]>`
+      select release_admin_login_scrypt('owner-a') as result
+    `;
+    const [owner] = await sql<{ scrypt_owner: string | null }[]>`
+      select scrypt_owner from admin_login_guard where bucket = 'admin-login'
+    `;
+    const [ownerRelease] = await sql<{ result: boolean }[]>`
+      select release_admin_login_scrypt('owner-b') as result
+    `;
+
+    expect(reclaimed?.result).toBe(true);
+    expect(staleRelease?.result).toBe(false);
+    expect(owner?.scrypt_owner).toBe('owner-b');
+    expect(ownerRelease?.result).toBe(true);
+  });
+
 });
