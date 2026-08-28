@@ -208,6 +208,7 @@ export type Database = {
           kind: string
           name: string
           priority: number
+          settings_revision: number
           updated_at: string
         }
         Insert: {
@@ -219,6 +220,7 @@ export type Database = {
           kind: string
           name: string
           priority?: number
+          settings_revision?: number
           updated_at?: string
         }
         Update: {
@@ -230,6 +232,7 @@ export type Database = {
           kind?: string
           name?: string
           priority?: number
+          settings_revision?: number
           updated_at?: string
         }
         Relationships: []
@@ -852,8 +855,18 @@ export type Database = {
           secret_row: Json | null
           models: Json | null
           reconcile_mode: string
+          model_status?: Json
+          expected_revision?: number | null
         }
         Returns: Json
+      }
+      record_ai_provider_execution_probe: {
+        Args: {
+          provider_id: string
+          expected_fingerprint: string
+          probe: Json
+        }
+        Returns: boolean
       }
       consume_admin_login_attempt: {
         Args: {

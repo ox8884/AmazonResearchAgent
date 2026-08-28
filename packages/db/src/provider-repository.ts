@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database } from './types';
+import type { Database, Json } from './types';
 
 export type ProviderRow = Database['public']['Tables']['ai_providers']['Row'];
 export type ProviderInsert = Database['public']['Tables']['ai_providers']['Insert'];
@@ -29,7 +29,19 @@ export interface ProviderRepository {
     readonly secret: ProviderSecretInsert | null;
     readonly models: readonly ModelInsert[];
     readonly reconcileMode: 'none' | 'manual' | 'discovery' | 'status';
+    readonly modelStatus?: readonly {
+      readonly modelId: string;
+      readonly enabled: boolean;
+      readonly priority: number;
+    }[];
+    readonly expectedRevision?: number | null;
   }): Promise<ProviderRow>;
+  recordExecutionProbe(input: {
+    readonly providerId: string;
+    readonly expectedFingerprint: string;
+    readonly probe: Json;
+  }): Promise<boolean>;
+
 }
 
 export function createProviderRepository(
@@ -140,7 +152,13 @@ export function createProviderRepository(
         provider_row: input.provider,
         secret_row: input.secret,
         models: [...input.models],
-        reconcile_mode: input.reconcileMode
+        reconcile_mode: input.reconcileMode,
+        model_status: (input.modelStatus ?? []).map((model) => ({
+          model_id: model.modelId,
+          enabled: model.enabled,
+          priority: model.priority
+        })),
+        expected_revision: input.expectedRevision ?? null
       });
       if (error) {
         throw new ProviderRepositoryError('save provider settings atomically', error);
@@ -154,6 +172,19 @@ export function createProviderRepository(
         throw new ProviderRepositoryError('load saved provider settings', loadError);
       }
       return data;
+    },
+
+    async recordExecutionProbe(input) {
+      const { data, error } = await client.rpc('record_ai_provider_execution_probe', {
+        provider_id: input.providerId,
+        expected_fingerprint: input.expectedFingerprint,
+        probe: input.probe
+      });
+      if (error) {
+        throw new ProviderRepositoryError('record provider execution probe', error);
+      }
+      return data === true;
     }
+
   };
 }
