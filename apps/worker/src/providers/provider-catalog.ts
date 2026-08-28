@@ -177,19 +177,48 @@ async function providerFromRow(
   );
 }
 
-export async function instantiatePersistedProvider(
+export interface PersistedProviderSnapshot {
+  readonly adapter: AiProvider;
+  readonly provider: ProviderRow;
+  readonly secret: ProviderSecretRow | null;
+  readonly models: readonly ModelRow[];
+  readonly fingerprint: string;
+}
+
+export async function loadPersistedProviderSnapshot(
   client: QueueDatabaseClient,
   providerId: string,
   options: PersistedProviderCatalogOptions = {}
-): Promise<AiProvider | null> {
+): Promise<PersistedProviderSnapshot | null> {
   const repository = createProviderRepository(client);
   const provider = await repository.findProvider(providerId);
   if (!provider) {
     return null;
   }
-  const secret = await repository.findSecret(providerId);
-  return providerFromRow(provider, secret ?? undefined, options);
+  const secret = (await repository.findSecret(providerId)) ?? null;
+  const models = await repository.listModels(providerId);
+  return {
+    adapter: await providerFromRow(provider, secret ?? undefined, options),
+    provider,
+    secret,
+    models,
+    fingerprint: fingerprintFromProviderConfig(
+      provider.kind,
+      provider.config,
+      secretCipherId(secret)
+    )
+  };
 }
+
+export async function instantiatePersistedProvider(
+  client: QueueDatabaseClient,
+  providerId: string,
+  options: PersistedProviderCatalogOptions = {}
+): Promise<AiProvider | null> {
+  const snapshot = await loadPersistedProviderSnapshot(client, providerId, options);
+  return snapshot?.adapter ?? null;
+}
+
 
 function modelFromRow(model: ModelRow): AiModelDescriptor {
   const capabilities = configCapabilities(model.capabilities);

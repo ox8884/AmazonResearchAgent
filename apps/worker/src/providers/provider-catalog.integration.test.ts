@@ -522,5 +522,132 @@ integration('persisted provider catalog', () => {
     ).not.toBe(true);
     expect(decision.kind).not.toBe('route');
   });
+
+  // Break: adapter A is executed but the later fingerprint/CAS is for concurrent config B.
+  it('does not mark config B tested after executing adapter A', async () => {
+    mock = await MockOpenAiServer.start();
+    const providerId = `catalog-provider-${randomUUID()}`;
+    providerIds.push(providerId);
+    const key = Buffer.alloc(32, 9);
+    const encrypted = encryptSecret('persisted-secret-value', key);
+    const repository = createProviderRepository(database);
+    const baseConfig = {
+      baseUrl: mock.baseUrl,
+      networkScope: 'loopback',
+      modelDiscovery: 'disabled',
+      manualModelId: 'catalog-model',
+      roles: ['niche_normalization']
+    };
+    await repository.upsertProvider({
+      id: providerId,
+      name: 'Adapter race provider',
+      kind: 'openai_http',
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: {
+        ...baseConfig,
+        executionIdentity: fingerprintFromProviderConfig(
+          'openai_http',
+          baseConfig,
+          secretCipherId({
+            ciphertext: encrypted.ciphertext,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag
+          })
+        )
+      }
+    });
+    await repository.upsertModel({
+      provider_id: providerId,
+      model_id: 'catalog-model',
+      display_name: 'Catalog model',
+      capabilities: ['structured_json', 'chat_completions', 'health'],
+      billing_type: 'subscription',
+      quality_rank: 1
+    });
+    await repository.upsertSecret({
+      provider_id: providerId,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      auth_tag: encrypted.authTag,
+      last4: encrypted.last4
+    });
+
+    await runProviderConnectionTest(providerId, database, {
+      encryptionKey: key,
+      afterSnapshot: async () => {
+        const current = await repository.findProvider(providerId);
+        if (!current) {
+          throw new Error('Expected the raced provider to exist.');
+        }
+        const secret = await repository.findSecret(providerId);
+        const nextConfig = {
+          baseUrl: 'http://127.0.0.1:9/v1',
+          networkScope: 'loopback',
+          modelDiscovery: 'disabled',
+          manualModelId: 'catalog-model',
+          roles: ['niche_normalization']
+        };
+        const nextIdentity = fingerprintFromProviderConfig(
+          'openai_http',
+          nextConfig,
+          secretCipherId(secret)
+        );
+        await repository.saveSettings({
+          provider: {
+            ...current,
+            config: {
+              ...nextConfig,
+              executionIdentity: nextIdentity
+            }
+          },
+          secret: null,
+          models: [],
+          reconcileMode: 'none',
+          expectedRevision: current.settings_revision
+        });
+      }
+    });
+
+    const raced = await repository.findProvider(providerId);
+    const racedConfig =
+      typeof raced?.config === 'object' && raced.config !== null && !Array.isArray(raced.config)
+        ? raced.config
+        : {};
+    const catalog = await resolvePersistedProviderCatalog(database, { encryptionKey: key });
+    const decision = routeAiRequest(
+      AiRequestSchema.parse({
+        role: 'niche_normalization',
+        routerMode: 'Balanced',
+        locale: 'ko',
+        payload: { keyword: 'pancake dispenser bottle' }
+      }),
+      catalog
+    );
+
+    expect(racedConfig.baseUrl).toBe('http://127.0.0.1:9/v1');
+    expect(typeof racedConfig.executionIdentity).toBe('string');
+    expect(racedConfig.executionIdentity).not.toBe(
+      fingerprintFromProviderConfig(
+        'openai_http',
+        baseConfig,
+        secretCipherId({
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          authTag: encrypted.authTag
+        })
+      )
+    );
+    expect(
+      typeof racedConfig.executionProbe === 'object' &&
+        racedConfig.executionProbe !== null &&
+        !Array.isArray(racedConfig.executionProbe)
+        ? racedConfig.executionProbe['available']
+        : undefined
+    ).not.toBe(true);
+    expect(decision.kind).not.toBe('route');
+  });
 });
+
 

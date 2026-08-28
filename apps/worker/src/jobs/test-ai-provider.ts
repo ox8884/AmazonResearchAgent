@@ -1,10 +1,7 @@
-import {
-  createProviderRepository,
-  fingerprintFromProviderConfig,
-  secretCipherId
-} from '@ara/db';
+import { createProviderRepository } from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
 import { assertPersistableModelId, UnsafeModelIdError } from '@ara/shared';
+
 import { KeywordNormalizationSchema } from '@ara/research-engine';
 import {
   OpenAiHttpError,
@@ -12,15 +9,18 @@ import {
   type AiProvider
 } from '@ara/ai-router';
 import {
-  instantiatePersistedProvider,
+  loadPersistedProviderSnapshot,
   type PersistedProviderCatalogOptions
 } from '../providers/provider-catalog';
 import { decryptSecret, getEncryptionKeyFromEnvironment } from '@ara/secret-store';
 
 
+
 export interface ProviderTestOptions extends PersistedProviderCatalogOptions {
+  afterSnapshot?(): Promise<void>;
   beforePersist?(): Promise<void>;
 }
+
 
 
 export interface ProviderTestResult {
@@ -81,26 +81,26 @@ export async function runProviderConnectionTest(
   options: ProviderTestOptions = {}
 ): Promise<ProviderTestResult> {
   const started = Date.now();
-  let adapter;
+  let snapshot;
   try {
-    adapter = await instantiatePersistedProvider(client, providerId, options);
+    snapshot = await loadPersistedProviderSnapshot(client, providerId, options);
   } catch (error: unknown) {
     if (error instanceof Error) {
       return unavailableResult(providerId, started, 'provider_misconfigured');
     }
     throw error;
   }
-  if (!adapter) {
+  if (!snapshot) {
     return unavailableResult(providerId, started, 'provider_not_found');
   }
+  await options.afterSnapshot?.();
 
   const repository = createProviderRepository(client);
-  const provider = await repository.findProvider(providerId);
-  if (!provider) {
-    return unavailableResult(providerId, started, 'provider_not_found');
-  }
-  const existing = await repository.listModels(providerId);
-  const secretRow = await repository.findSecret(providerId);
+  const adapter = snapshot.adapter;
+  const provider = snapshot.provider;
+  const existing = snapshot.models;
+  const secretRow = snapshot.secret;
+  const fingerprint = snapshot.fingerprint;
   let secretPlaintext: string | undefined;
   if (secretRow) {
     secretPlaintext = decryptSecret(
@@ -113,11 +113,8 @@ export async function runProviderConnectionTest(
       options.encryptionKey ?? getEncryptionKeyFromEnvironment()
     );
   }
-  const fingerprint = fingerprintFromProviderConfig(
-    provider.kind,
-    provider.config,
-    secretCipherId(secretRow)
-  );
+
+
 
   async function persistProbe(
     available: boolean,
