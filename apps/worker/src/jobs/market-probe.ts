@@ -7,12 +7,15 @@ import {
 } from '@ara/shared';
 import { authorizeApiCall, type ApiBudget } from '@ara/api-budget';
 import {
+  JungleScoutClientError,
   ProductDatabasePageSchema,
   type ProductDatabasePage
 } from '@ara/jungle-scout';
 import {
   calculateMarketMetrics,
+  classifyProductRelevance,
   clusterMicroNiches,
+  evaluateProductDataQuality,
   groupProductFamilies,
   scoreMarketOpportunity,
   type CatalogProduct
@@ -26,7 +29,8 @@ export type MarketProbePhase =
   | 'micro_niches_created'
   | 'metrics_scored'
   | 'completed'
-  | 'deferred_budget';
+  | 'deferred_budget'
+  | 'blocked_policy';
 
 export interface MarketProbeCheckpoint {
   readonly phase: MarketProbePhase;
@@ -38,8 +42,29 @@ export interface MarketProbeDependencies {
   readonly budget: ApiBudget;
   readonly purpose?: ApiCallPurpose;
   readonly queryProductDatabase: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
+  readonly checkpoint?: MarketProbeCheckpoint;
+  enqueueResume?(input: {
+    readonly candidateId: string;
+    readonly locale: Locale;
+    readonly availableAt: string;
+    readonly idempotencyKey: string;
+  }): Promise<void>;
   onCheckpoint?(checkpoint: MarketProbeCheckpoint): Promise<void>;
 }
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled authorization decision: ${JSON.stringify(value)}`);
+}
+
+function nextBudgetResetAt(now = new Date()): string {
+  const reset = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1
+  ));
+  return reset.toISOString();
+}
+
 
 function asJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
@@ -118,69 +143,147 @@ export async function runMarketProbe(
     marketplace: 'us',
     phrases
   });
-  const decision = await authorizeApiCall(dependencies.budget, {
-    purpose,
-    estimatedCalls: 1,
-    cacheKey,
-    endpoint: 'product_database'
-  });
-  if (decision.kind === 'deferred_budget') {
-    await persistDecision(
-      dependencies.client,
-      candidate.id,
-      candidate.state,
-      'Waiting for API Budget',
-      [{ code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }]
-    );
-    const checkpoint = { phase: 'deferred_budget' as const, cacheKey };
-    await dependencies.onCheckpoint?.(checkpoint);
-    return { checkpoint, realCalls: 0 };
-  }
+  const priorPhase = dependencies.checkpoint?.phase;
+  const canReuseFetchedPage =
+    priorPhase === 'api_fetched' ||
+    priorPhase === 'families_persisted' ||
+    priorPhase === 'relevance_filtered' ||
+    priorPhase === 'micro_niches_created' ||
+    priorPhase === 'metrics_scored' ||
+    priorPhase === 'completed';
 
-  await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
-  let page: ProductDatabasePage;
+  let page: ProductDatabasePage | undefined;
   let realCalls = 0;
-  if (decision.kind === 'cache_hit') {
+  if (canReuseFetchedPage) {
     const { data: cached } = await dependencies.client
       .from('api_cache')
       .select('response')
       .eq('cache_key', cacheKey)
       .maybeSingle();
-    page = ProductDatabasePageSchema.parse(cached?.response ?? { data: [] });
-  } else {
-    page = await dependencies.queryProductDatabase(phrases);
-    realCalls = 1;
-    const { error: cacheError } = await dependencies.client.from('api_cache').upsert({
-      cache_key: cacheKey,
-      endpoint: 'product_database',
-      response: asJson(page),
-      captured_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-    });
-    if (cacheError) {
-      throw new Error(`Could not persist API cache: ${cacheError.message}`);
-    }
-    const { error: usageError } = await dependencies.client.from('api_usage').insert({
-      endpoint: 'product_database',
-      cache_key: cacheKey,
-      purpose,
-      http_status: 200,
-      call_count: 1,
-      retry_count: 0,
-      cached: false,
-      success: true,
-      candidate_id: candidate.id,
-      niche_cluster_id: candidate.niche_cluster_id,
-      budget_date: new Date().toISOString().slice(0, 10)
-    });
-    if (usageError) {
-      throw new Error(`Could not persist API usage: ${usageError.message}`);
+    if (cached?.response) {
+      page = ProductDatabasePageSchema.parse(cached.response);
     }
   }
+
+  if (!page) {
+    const decision = await authorizeApiCall(dependencies.budget, {
+      purpose,
+      estimatedCalls: 1,
+      cacheKey,
+      endpoint: 'product_database'
+    });
+    switch (decision.kind) {
+      case 'deferred_budget': {
+        await persistDecision(
+          dependencies.client,
+          candidate.id,
+          candidate.state,
+          'Waiting for API Budget',
+          [{ code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }]
+        );
+        const availableAt = nextBudgetResetAt();
+        await dependencies.enqueueResume?.({
+          candidateId: candidate.id,
+          locale: input.locale,
+          availableAt,
+          idempotencyKey: `market-probe-resume:${candidate.id}:${availableAt.slice(0, 10)}`
+        });
+        const checkpoint = { phase: 'deferred_budget' as const, cacheKey };
+        await dependencies.onCheckpoint?.(checkpoint);
+        return { checkpoint, realCalls: 0 };
+      }
+      case 'blocked_policy': {
+        const checkpoint = { phase: 'blocked_policy' as const, cacheKey };
+        await dependencies.onCheckpoint?.(checkpoint);
+        return { checkpoint, realCalls: 0 };
+      }
+      case 'cache_hit': {
+        await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
+        const { data: cached } = await dependencies.client
+          .from('api_cache')
+          .select('response')
+          .eq('cache_key', cacheKey)
+          .maybeSingle();
+        page = ProductDatabasePageSchema.parse(cached?.response ?? { data: [] });
+        break;
+      }
+      case 'allowed': {
+        await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
+        try {
+          page = await dependencies.queryProductDatabase(phrases);
+          realCalls = 1;
+          const { error: cacheError } = await dependencies.client.from('api_cache').upsert({
+            cache_key: cacheKey,
+            endpoint: 'product_database',
+            response: asJson(page),
+            captured_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          });
+          if (cacheError) {
+            throw new Error(`Could not persist API cache: ${cacheError.message}`);
+          }
+          const { error: usageError } = await dependencies.client.from('api_usage').insert({
+            endpoint: 'product_database',
+            cache_key: cacheKey,
+            purpose,
+            http_status: 200,
+            call_count: 1,
+            retry_count: 0,
+            cached: false,
+            success: true,
+            candidate_id: candidate.id,
+            niche_cluster_id: candidate.niche_cluster_id,
+            budget_date: new Date().toISOString().slice(0, 10)
+          });
+          if (usageError) {
+            throw new Error(`Could not persist API usage: ${usageError.message}`);
+          }
+        } catch (error: unknown) {
+          if (error instanceof JungleScoutClientError) {
+            const { error: usageError } = await dependencies.client.from('api_usage').insert({
+              endpoint: 'product_database',
+              cache_key: cacheKey,
+              purpose,
+              http_status: error.status ?? 0,
+
+              call_count: error.httpAttempts,
+              retry_count: Math.max(0, error.httpAttempts - 1),
+              cached: false,
+              success: false,
+              candidate_id: candidate.id,
+              niche_cluster_id: candidate.niche_cluster_id,
+              budget_date: new Date().toISOString().slice(0, 10)
+            });
+            if (usageError) {
+              throw new Error(`Could not persist API usage: ${usageError.message}`, {
+                cause: error
+              });
+            }
+
+          }
+          throw error;
+        }
+        break;
+      }
+      default:
+        return assertNever(decision);
+    }
+  }
+
   await dependencies.onCheckpoint?.({ phase: 'api_fetched', cacheKey });
 
   const families = groupProductFamilies(toCatalog(page));
   for (const family of families) {
+    const quality = evaluateProductDataQuality({
+      price: family.variants[0]?.price ?? null,
+      units: family.observedMonthlyUnits,
+      revenue: family.observedMonthlyRevenue,
+      reviews: family.variants[0]?.reviews ?? null,
+      rating: family.variants[0]?.rating ?? null,
+      weight: family.variants[0]?.weight ?? null,
+      updatedAt: family.variants[0]?.updatedAt ?? null,
+      variantSalesDuplicated: family.qualityNotes.includes('VARIANT_SALES_DUPLICATED')
+    });
     const { data: familyRow, error: familyError } = await dependencies.client
       .from('product_families')
       .upsert(
@@ -190,7 +293,7 @@ export async function runMarketProbe(
           observed_monthly_units: family.observedMonthlyUnits,
           observed_monthly_revenue: family.observedMonthlyRevenue,
           variant_count: family.variants.length,
-          quality_notes: asJson(family.qualityNotes)
+          quality_notes: asJson([...family.qualityNotes, ...quality.flags])
         },
         { onConflict: 'niche_cluster_id,parent_key' }
       )
@@ -200,32 +303,45 @@ export async function runMarketProbe(
       throw new Error('Could not persist product family.');
     }
     for (const variant of family.variants) {
-      await dependencies.client.from('products').upsert({
-        product_family_id: familyRow.id,
-        niche_cluster_id: candidate.niche_cluster_id,
-        asin: variant.id,
-        parent_asin: variant.parentAsin,
-        title: variant.title,
-        brand: variant.brand,
-        price: variant.price,
-        reviews: variant.reviews,
-        rating: variant.rating,
-        attributes: asJson(variant)
-      });
+      const { error: productError } = await dependencies.client.from('products').upsert(
+        {
+          product_family_id: familyRow.id,
+          niche_cluster_id: candidate.niche_cluster_id,
+          asin: variant.id,
+          parent_asin: variant.parentAsin,
+          title: variant.title,
+          brand: variant.brand,
+          price: variant.price,
+          reviews: variant.reviews,
+          rating: variant.rating,
+          attributes: asJson(variant)
+        },
+        { onConflict: 'product_family_id,asin' }
+      );
+      if (productError) {
+        throw new Error(`Could not persist product: ${productError.message}`);
+      }
     }
   }
+
   await dependencies.onCheckpoint?.({ phase: 'families_persisted', cacheKey });
 
-  const clusters = clusterMicroNiches(families, candidate.keyword);
+  const relevant = families.filter(
+    (family) => classifyProductRelevance(candidate.keyword, family).relevant
+  );
+  const clusters = clusterMicroNiches(relevant, candidate.keyword);
   await dependencies.onCheckpoint?.({ phase: 'relevance_filtered', cacheKey });
-  await dependencies.client.from('candidate_evidence').insert({
+  const { error: evidenceError } = await dependencies.client.from('candidate_evidence').insert({
     candidate_id: candidate.id,
     kind: 'micro_niches',
     payload: asJson(clusters.map((cluster) => cluster.name))
   });
+  if (evidenceError) {
+    throw new Error(`Could not persist micro-niche evidence: ${evidenceError.message}`);
+  }
   await dependencies.onCheckpoint?.({ phase: 'micro_niches_created', cacheKey });
 
-  const metrics = calculateMarketMetrics(families);
+  const metrics = calculateMarketMetrics(relevant);
   const score = scoreMarketOpportunity({
     metrics,
     hardFilterFailed: false,
@@ -233,7 +349,7 @@ export async function runMarketProbe(
     differentiationMode: 'missing',
     ipRisk: false
   });
-  await dependencies.client.from('market_snapshots').insert({
+  const { error: snapshotError } = await dependencies.client.from('market_snapshots').insert({
     niche_cluster_id: candidate.niche_cluster_id,
     candidate_id: candidate.id,
     observed_sample_sales: metrics.observedSampleSales,
@@ -244,6 +360,9 @@ export async function runMarketProbe(
     confidence: 0.7,
     metrics: asJson({ metrics, score })
   });
+  if (snapshotError) {
+    throw new Error(`Could not persist market snapshot: ${snapshotError.message}`);
+  }
   await persistDecision(
     dependencies.client,
     candidate.id,

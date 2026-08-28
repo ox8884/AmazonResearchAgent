@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
 import { ProductDatabasePageSchema } from '@ara/jungle-scout';
+import { createQueue } from '@ara/queue';
 import { runMarketProbe } from './market-probe';
+
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -178,4 +180,79 @@ integration('market probe job', () => {
       .single();
     expect(candidate?.state).toBe('Waiting for API Budget');
   });
+
+  it('never calls Jungle Scout for blocked_policy or deferred_budget', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    let calls = 0;
+    const query = async () => {
+      calls += 1;
+      return fixture;
+    };
+    const blockedBudget = {
+      authorize: async () =>
+        ({
+          kind: 'blocked_policy' as const,
+          cacheKey: 'blocked',
+          reason: 'policy'
+        })
+    };
+    const blocked = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget: blockedBudget, queryProductDatabase: query }
+    );
+    const deferredBudget = new MemoryApiBudget({ dailyLimit: 20, used: 15, reserve: 5 });
+    await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget: deferredBudget, queryProductDatabase: query }
+    );
+    expect(blocked.checkpoint.phase).toBe('blocked_policy');
+    expect(calls).toBe(0);
+  });
+
+  it('enqueues exactly one future MARKET_PROBE when budget is deferred', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    const queue = createQueue(client);
+    const budget = new MemoryApiBudget({ dailyLimit: 20, used: 15, reserve: 5 });
+    await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget,
+        queryProductDatabase: async () => fixture,
+        enqueueResume: async (input) => {
+          await queue.enqueueJob({
+            type: 'MARKET_PROBE',
+            payload: { candidateId: input.candidateId, locale: input.locale },
+            idempotencyKey: input.idempotencyKey,
+            availableAt: input.availableAt
+          });
+        }
+      }
+    );
+    await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget,
+        queryProductDatabase: async () => fixture,
+        enqueueResume: async (input) => {
+          await queue.enqueueJob({
+            type: 'MARKET_PROBE',
+            payload: { candidateId: input.candidateId, locale: input.locale },
+            idempotencyKey: input.idempotencyKey,
+            availableAt: input.availableAt
+          });
+        }
+      }
+    );
+    const { data: jobs } = await client
+      .from('jobs')
+      .select('id,available_at,type')
+      .like('idempotency_key', `market-probe-resume:${candidateId}:%`);
+    expect(jobs).toHaveLength(1);
+    expect(jobs?.[0]?.type).toBe('MARKET_PROBE');
+    expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
+    await client.from('jobs').delete().eq('id', jobs?.[0]?.id ?? '');
+  });
 });
+
