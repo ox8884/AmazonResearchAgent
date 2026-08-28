@@ -17,6 +17,8 @@ import {
 } from '@ara/ai-router';
 import { AiUsageSchema, type AiModelDescriptor } from '@ara/shared';
 import { createQueue } from '@ara/queue';
+import { createJobHandlers } from '../handlers';
+import { runJob } from '../main';
 import { runImportJob } from './import-opportunity-csv';
 import { runNormalizeJob } from './normalize-opportunities';
 import { runMarketProbe } from './market-probe';
@@ -85,9 +87,13 @@ function loadPage(name: string): ProductDatabasePage {
 const sinkPage = loadPage('product-database-sink.json');
 const sinkZero = loadPage('product-database-sink-zero.json');
 const batter = loadPage('product-database-batter-dispenser.json');
+const expandedMeta = JSON.parse(
+  readFileSync(join(jsFixtures, 'product-database-sink-expanded-meta.json'), 'utf8')
+) as { meta: { result_count: number } };
+const recordedExpandedCount = expandedMeta.meta.result_count;
 const expandedSink: ProductDatabasePage = {
   ...sinkPage,
-  meta: { result_count: 329 }
+  meta: { result_count: recordedExpandedCount }
 };
 
 function database() {
@@ -104,6 +110,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
 
   afterEach(async () => {
     await client.from('jobs').delete().like('idempotency_key', 'market-probe-resume:%');
+    await client.from('jobs').delete().like('idempotency_key', 'deep-validation:%');
     for (const importRunId of importRuns.splice(0)) {
       await client.from('import_runs').delete().eq('id', importRunId);
     }
@@ -128,7 +135,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
       id: clusterId,
       canonical_name: keyword,
       canonical_key: `${keyword} ${clusterId}`,
-      catalog_phrases: phrases.map((phrase) => `${phrase} ${clusterId}`),
+      catalog_phrases: [...phrases],
       aliases: [...aliases]
     });
     if (clusterError) throw clusterError;
@@ -265,7 +272,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
         budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
         queryProductDatabase: async (phrases) => {
           queries.push([...phrases]);
-          if (phrases.length === 1) {
+          if (phrases.length === 1 && phrases[0] === 'sink drip tray') {
             return { page: sinkZero, httpAttempts: 1, status: 200 };
           }
           return { page: expandedSink, httpAttempts: 1, status: 200 };
@@ -289,12 +296,45 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
       .select('observed_sample_sales,estimated_market_sales,sample_product_family_count')
       .eq('candidate_id', candidateId)
       .maybeSingle();
-    expect(queries.length).toBe(2);
-    expect(coverage?.payload).toMatchObject({ result_count: 329 });
-    expect(JSON.stringify(niches?.payload)).toMatch(/priceSegments/);
-    expect(snapshot?.observed_sample_sales).toBeGreaterThan(0);
+    const { data: probed } = await client
+      .from('candidates')
+      .select('niche_cluster_id')
+      .eq('id', candidateId)
+      .single();
+    const { data: families } = await client
+      .from('product_families')
+      .select('parent_key,variant_count')
+      .eq('niche_cluster_id', probed?.niche_cluster_id ?? '');
+    expect(queries[0]).toEqual(['sink drip tray']);
+    expect(queries[0]?.some((phrase) => /[0-9a-f]{8}-[0-9a-f]{4}-/u.test(phrase))).toBe(false);
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).toEqual([
+      'sink drip tray',
+      'sink mat',
+      'faucet mat',
+      'sink splash guard'
+    ]);
+    expect(coverage?.payload).toMatchObject({ result_count: recordedExpandedCount });
+    expect(families).toHaveLength(2);
+    expect(families).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ parent_key: 'B0SINKPARENT', variant_count: 1 }),
+        expect.objectContaining({ parent_key: 'B0MISSING1', variant_count: 1 })
+      ])
+    );
+    expect(niches?.payload).toEqual([
+      {
+        name: 'Silicone Faucet Mat / Sink Splash Guard',
+        priceSegments: [{ label: 'all', minPrice: 12.99, maxPrice: 12.99, familyCount: 1 }]
+      },
+      {
+        name: 'sink drip tray',
+        priceSegments: []
+      }
+    ]);
+    expect(snapshot?.observed_sample_sales).toBe(3855);
     expect(snapshot?.estimated_market_sales).toBeNull();
-    expect(snapshot?.sample_product_family_count).toBeGreaterThan(0);
+    expect(snapshot?.sample_product_family_count).toBe(2);
   });
 
   it('allows two normal probes and one manual reserve call at dailyLimit 3 / reserve 1', async () => {
@@ -351,6 +391,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
   it('resumes a deferred Market Probe from the durable queued job', async () => {
     const candidateId = await seedCandidate('sink drip tray', ['sink drip tray']);
     const queue = createQueue(client);
+    const workerId = `m3-resume-${candidateId}`;
     let calls = 0;
     const exhausted = new MemoryApiBudget({ dailyLimit: 3, used: 2, reserve: 1 });
     await runMarketProbe(
@@ -374,25 +415,41 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     );
     const { data: jobs } = await client
       .from('jobs')
-      .select('id,payload,idempotency_key,available_at')
+      .select('id,payload,idempotency_key,available_at,status')
       .like('idempotency_key', `market-probe-resume:${candidateId}:%`);
     expect(jobs).toHaveLength(1);
+    expect(jobs?.[0]?.status).toBe('queued');
+    expect(jobs?.[0]?.payload).toMatchObject({ candidateId, locale: 'en' });
+    expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
     expect(calls).toBe(0);
-    const resume = new MemoryApiBudget({ dailyLimit: 3, used: 0, reserve: 1 });
-    await runMarketProbe(
-      { candidateId, locale: 'en' },
-      {
-        client,
-        budget: resume,
-        queryProductDatabase: async () => {
-          calls += 1;
-          return { page: sinkPage, httpAttempts: 1, status: 200 };
-        }
+    const early = await queue.claimJobs(workerId, 8, 60);
+    expect(early.some((job) => job.id === jobs?.[0]?.id)).toBe(false);
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString() })
+      .eq('id', jobs?.[0]?.id ?? '');
+    const claimed = await queue.claimJobs(workerId, 8, 60);
+    const resumeJob = claimed.find((job) => job.id === jobs?.[0]?.id);
+    if (!resumeJob) {
+      throw new Error('Production claim did not return the persisted MARKET_PROBE resume job.');
+    }
+    const handlers = createJobHandlers(client, {
+      apiBudget: new MemoryApiBudget({ dailyLimit: 3, used: 0, reserve: 1 }),
+      queryProductDatabase: async () => {
+        calls += 1;
+        return { page: sinkPage, httpAttempts: 1, status: 200 };
       }
-    );
+    });
+    await runJob(resumeJob, {
+      queue,
+      handlers,
+      workerId,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
     const { data: candidate } = await client
       .from('candidates')
-      .select('state')
+      .select('id,state')
       .eq('id', candidateId)
       .single();
     const { data: usage } = await client
@@ -400,10 +457,20 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
       .select('id')
       .eq('candidate_id', candidateId)
       .eq('endpoint', 'product_database');
-    expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
+    const { data: evidence } = await client
+      .from('candidate_evidence')
+      .select('id')
+      .eq('candidate_id', candidateId);
+    const { data: finished } = await client
+      .from('jobs')
+      .select('status')
+      .eq('id', jobs?.[0]?.id ?? '')
+      .maybeSingle();
     expect(calls).toBe(1);
     expect(usage).toHaveLength(1);
+    expect(candidate?.id).toBe(candidateId);
     expect(candidate?.state).not.toBe('Waiting for API Budget');
-    await client.from('jobs').delete().eq('id', jobs?.[0]?.id ?? '');
+    expect((evidence ?? []).length).toBeGreaterThan(0);
+    expect(finished?.status).toBe('completed');
   });
 });
