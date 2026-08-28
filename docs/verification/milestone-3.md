@@ -1,12 +1,20 @@
 # Milestone 3 verification
 
-Recorded fixtures (no live Jungle Scout calls):
+Recorded fixtures only. No live Jungle Scout calls.
 
-- Milk frother parent-family dedupe: `packages/research-engine/src/product-family.test.ts` Zulay variant fixture (`observedMonthlyUnits = 200368`, 5 variants, `VARIANT_SALES_DUPLICATED`).
-- `sink drip tray` literal 0-result: `tests/fixtures/jungle-scout/product-database-sink-zero.json`.
-- Expanded sink phrase metadata (329 results): `tests/fixtures/jungle-scout/product-database-sink-expanded-meta.json` plus top-page `product-database-sink.json`.
-- Opportunity Finder batter-dispenser cluster: `tests/fixtures/opportunity-finder/page-1.csv` / `page-2.csv`.
+Command:
 
-Budget: `packages/api-budget` and `packages/db/src/api-budget.integration.test.ts` preserve reserve and authorize one of concurrent final slots.
+```bash
+pnpm --filter @ara/worker exec vitest run src/jobs/milestone-3.acceptance.test.ts
+```
 
-Observed vs estimated: Market Probe snapshots set `observed_sample_sales` from Product Database families and leave `estimated_market_sales` null unless a separate estimation endpoint supplied it.
+Also included in `pnpm test:integration`.
+
+| Fixture | File | Proves |
+| --- | --- | --- |
+| Milk frother / Zulay | `tests/fixtures/jungle-scout/product-database-milk-frother.json` | Parent-family dedupe; `observed_sample_sales=200368`; `estimated_market_sales` null |
+| Sink literal zero | `tests/fixtures/jungle-scout/product-database-sink-zero.json` | Empty page yields zero families and zero sample sales |
+| Expanded sink 329 | `tests/fixtures/jungle-scout/product-database-sink-expanded-meta.json` plus top page `product-database-sink.json` | Metadata result_count 329; top page relevance, seller_type, dimensions |
+| Batter dispenser / OF | `tests/fixtures/opportunity-finder/page-1.csv` keyword `pancake dispenser bottle` with `product-database-batter-dispenser.json` | Relevant ASIN kept; kitchen rug noise excluded |
+| Budget cache | same sink top page | Second Market Probe uses `api_cache`; one `api_usage` row |
+| Exhausted budget | dailyLimit 3 / reserve 1 | Candidate waits at `Waiting for API Budget` with zero HTTP |

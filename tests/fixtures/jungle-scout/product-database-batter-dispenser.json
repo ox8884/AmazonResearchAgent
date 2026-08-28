@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "B0BATTER1",
+      "type": "products",
+      "attributes": {
+        "title": "Pancake Batter Dispenser Bottle",
+        "brand": "KitchenPro",
+        "price": 23.98,
+        "reviews": 80,
+        "rating": 4.3,
+        "parent_asin": "B0BATTERPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2025-02-01",
+        "units_sold_30": 5038,
+        "revenue_30": 120810.44,
+        "weight": 0.6,
+        "updated_at": "2026-08-26T00:00:00Z"
+      }
+    },
+    {
+      "id": "B0RUGNOISE",
+      "type": "products",
+      "attributes": {
+        "title": "Kitchen Rug Runner",
+        "brand": "RugCo",
+        "price": 25,
+        "reviews": 10,
+        "rating": 4,
+        "parent_asin": null,
+        "seller_type": "FBM",
+        "listing_date": "2025-01-01",
+        "units_sold_30": 50,
+        "revenue_30": 1250,
+        "weight": 1,
+        "updated_at": "2026-08-26T00:00:00Z"
+      }
+    }
+  ]
+}

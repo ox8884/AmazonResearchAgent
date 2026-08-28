@@ -1,0 +1,94 @@
+{
+  "data": [
+    {
+      "id": "B0CHILD1",
+      "type": "products",
+      "attributes": {
+        "title": "Zulay Milk Frother Black",
+        "brand": "Zulay",
+        "price": 19.99,
+        "reviews": 100,
+        "rating": 4.5,
+        "parent_asin": "B0ZULAYPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2023-01-01",
+        "units_sold_30": 200368,
+        "revenue_30": 4005352.32,
+        "weight": 0.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    },
+    {
+      "id": "B0CHILD2",
+      "type": "products",
+      "attributes": {
+        "title": "Zulay Milk Frother Red",
+        "brand": "Zulay",
+        "price": 19.99,
+        "reviews": 100,
+        "rating": 4.5,
+        "parent_asin": "B0ZULAYPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2023-01-01",
+        "units_sold_30": 200368,
+        "revenue_30": 4005352.32,
+        "weight": 0.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    },
+    {
+      "id": "B0CHILD3",
+      "type": "products",
+      "attributes": {
+        "title": "Zulay Milk Frother Blue",
+        "brand": "Zulay",
+        "price": 19.99,
+        "reviews": 100,
+        "rating": 4.5,
+        "parent_asin": "B0ZULAYPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2023-01-01",
+        "units_sold_30": 200368,
+        "revenue_30": 4005352.32,
+        "weight": 0.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    },
+    {
+      "id": "B0CHILD4",
+      "type": "products",
+      "attributes": {
+        "title": "Zulay Milk Frother Green",
+        "brand": "Zulay",
+        "price": 19.99,
+        "reviews": 100,
+        "rating": 4.5,
+        "parent_asin": "B0ZULAYPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2023-01-01",
+        "units_sold_30": 200368,
+        "revenue_30": 4005352.32,
+        "weight": 0.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    },
+    {
+      "id": "B0CHILD5",
+      "type": "products",
+      "attributes": {
+        "title": "Zulay Milk Frother White",
+        "brand": "Zulay",
+        "price": 19.99,
+        "reviews": 100,
+        "rating": 4.5,
+        "parent_asin": "B0ZULAYPARENT",
+        "seller_type": "FBA",
+        "listing_date": "2023-01-01",
+        "units_sold_30": 200368,
+        "revenue_30": 4005352.32,
+        "weight": 0.5,
+        "updated_at": "2026-08-27T01:32:04Z"
+      }
+    }
+  ]
+}
