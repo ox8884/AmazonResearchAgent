@@ -27,19 +27,23 @@ export class ApiCallOwnershipError extends Error {
 }
 
 export class PostgresApiBudget implements ApiBudget {
+  readonly claimOwner: string;
+
   constructor(
     private readonly client: QueueDatabaseClient,
     private readonly limits: {
       readonly dailyLimit: number;
       readonly reservedLimit: number;
     },
-    private readonly owner = 'worker'
-  ) {}
+    owner = 'worker'
+  ) {
+    this.claimOwner = owner;
+  }
 
   async authorize(input: AuthorizeApiCallInput): Promise<ApiAuthorizationDecision> {
     const { data: claimData, error: claimError } = await this.client.rpc('claim_api_call', {
       request_cache_key: input.cacheKey,
-      claim_owner: this.owner,
+      claim_owner: this.claimOwner,
       lease_seconds: CLAIM_LEASE_SECONDS
     });
     if (claimError) {
@@ -65,7 +69,7 @@ export class PostgresApiBudget implements ApiBudget {
 
     const { data, error } = await this.client.rpc('authorize_owned_api_call', {
       request_cache_key: input.cacheKey,
-      claim_owner: this.owner,
+      claim_owner: this.claimOwner,
       purpose: input.purpose,
       estimated_calls: input.estimatedCalls,
       endpoint: input.endpoint,
@@ -85,7 +89,7 @@ export class PostgresApiBudget implements ApiBudget {
   async complete(cacheKey: string): Promise<void> {
     const { data, error } = await this.client.rpc('complete_api_call_claim', {
       request_cache_key: cacheKey,
-      claim_owner: this.owner
+      claim_owner: this.claimOwner
     });
     if (error) {
       throw new Error(`Could not complete API call claim: ${error.message}`);
@@ -98,7 +102,7 @@ export class PostgresApiBudget implements ApiBudget {
   async stage(cacheKey: string, response: unknown): Promise<void> {
     const { data, error } = await this.client.rpc('stage_api_call_response', {
       request_cache_key: cacheKey,
-      claim_owner: this.owner,
+      claim_owner: this.claimOwner,
       response: asJson(response)
     });
     if (error) {

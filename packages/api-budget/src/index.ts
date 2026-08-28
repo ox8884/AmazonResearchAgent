@@ -29,6 +29,7 @@ export interface ApiBudget {
   complete?(cacheKey: string): Promise<void>;
   stage?(cacheKey: string, response: unknown): Promise<void>;
   readStaged?(cacheKey: string): Promise<unknown | null>;
+  readonly claimOwner?: string;
 }
 
 

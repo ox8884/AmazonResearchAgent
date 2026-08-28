@@ -402,6 +402,7 @@ export type Database = {
           owner: string
           reserved: boolean
           staged_response: Json | null
+          usage_persisted: boolean
         }
         Insert: {
           budget_date?: string | null
@@ -411,6 +412,7 @@ export type Database = {
           owner: string
           reserved?: boolean
           staged_response?: Json | null
+          usage_persisted?: boolean
         }
         Update: {
           budget_date?: string | null
@@ -420,6 +422,7 @@ export type Database = {
           owner?: string
           reserved?: boolean
           staged_response?: Json | null
+          usage_persisted?: boolean
         }
         Relationships: []
       }
@@ -1173,6 +1176,22 @@ export type Database = {
           request_cache_key: string
           claim_owner: string
           response: Json
+        }
+        Returns: boolean
+      }
+      record_api_usage_for_claim: {
+        Args: {
+          request_cache_key: string
+          claim_owner: string
+          usage_endpoint: string
+          usage_purpose: string
+          usage_http_status: number
+          usage_call_count: number
+          usage_retry_count: number
+          usage_cached: boolean
+          usage_success: boolean
+          usage_candidate_id: string
+          usage_budget_date: string
         }
         Returns: boolean
       }

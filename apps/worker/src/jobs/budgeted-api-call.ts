@@ -29,22 +29,70 @@ function asJson(value: unknown): Json {
 }
 
 function parseStaged(staged: unknown): BudgetedProviderResult | null {
-  if (!staged || typeof staged !== 'object') {
+  if (!staged || typeof staged !== 'object' || !('payload' in staged)) {
     return null;
   }
-  if (!('payload' in staged)) {
-    return null;
-  }
-  const record = staged as {
-    payload?: unknown;
-    httpAttempts?: unknown;
-    status?: unknown;
-  };
+  const httpAttempts =
+    'httpAttempts' in staged && typeof staged.httpAttempts === 'number' ? staged.httpAttempts : 0;
+  const status = 'status' in staged && typeof staged.status === 'number' ? staged.status : 200;
   return {
-    payload: record.payload,
-    httpAttempts: typeof record.httpAttempts === 'number' ? record.httpAttempts : 0,
-    status: typeof record.status === 'number' ? record.status : 200
+    payload: staged.payload,
+    httpAttempts,
+    status
   };
+}
+
+async function persistUsage(input: {
+  readonly client: QueueDatabaseClient;
+  readonly budget: ApiBudget;
+  readonly candidateId: string;
+  readonly endpoint: JungleScoutEndpoint;
+  readonly cacheKey: string;
+  readonly purpose: ApiCallPurpose;
+  readonly httpStatus: number;
+  readonly callCount: number;
+  readonly cached: boolean;
+  readonly success: boolean;
+}): Promise<void> {
+  const retryCount = Math.max(0, input.callCount - 1);
+  const budgetDate = new Date().toISOString().slice(0, 10);
+  if (input.budget.complete) {
+    const { data, error } = await input.client.rpc('record_api_usage_for_claim', {
+      request_cache_key: input.cacheKey,
+      claim_owner: input.budget.claimOwner ?? 'worker',
+      usage_endpoint: input.endpoint,
+      usage_purpose: input.purpose,
+      usage_http_status: input.httpStatus,
+      usage_call_count: input.callCount,
+      usage_retry_count: retryCount,
+      usage_cached: input.cached,
+      usage_success: input.success,
+      usage_candidate_id: input.candidateId,
+      usage_budget_date: budgetDate
+    });
+    if (error) {
+      throw new Error(`Could not persist API usage: ${error.message}`);
+    }
+    if (data !== true) {
+      throw new Error(`Could not persist API usage for ${input.cacheKey}`);
+    }
+    return;
+  }
+  const { error } = await input.client.from('api_usage').insert({
+    endpoint: input.endpoint,
+    cache_key: input.cacheKey,
+    purpose: input.purpose,
+    http_status: input.httpStatus,
+    call_count: input.callCount,
+    retry_count: retryCount,
+    cached: input.cached,
+    success: input.success,
+    candidate_id: input.candidateId,
+    budget_date: budgetDate
+  });
+  if (error) {
+    throw new Error(`Could not persist API usage: ${error.message}`);
+  }
 }
 
 export async function executeBudgetedApiCall(input: {
@@ -93,10 +141,10 @@ export async function executeBudgetedApiCall(input: {
         const staged = await input.budget.readStaged?.(input.cacheKey);
         const recovered = parseStaged(staged);
         let fetched: BudgetedProviderResult;
-        let fromCache = false;
+        let skippedHttp = false;
         if (recovered) {
           fetched = recovered;
-          fromCache = true;
+          skippedHttp = true;
         } else {
           fetched = await input.query();
           await input.budget.stage?.(input.cacheKey, {
@@ -115,48 +163,40 @@ export async function executeBudgetedApiCall(input: {
         if (cacheError) {
           throw new Error(`Could not persist API cache: ${cacheError.message}`);
         }
-        const { error: usageError } = await input.client.from('api_usage').insert({
+        await persistUsage({
+          client: input.client,
+          budget: input.budget,
+          candidateId: input.candidateId,
           endpoint: input.endpoint,
-          cache_key: input.cacheKey,
+          cacheKey: input.cacheKey,
           purpose: input.purpose,
-          http_status: fetched.status,
-          call_count: fetched.httpAttempts,
-          retry_count: Math.max(0, fetched.httpAttempts - 1),
-          cached: fromCache,
-          success: true,
-          candidate_id: input.candidateId,
-          budget_date: new Date().toISOString().slice(0, 10)
+          httpStatus: fetched.status,
+          callCount: fetched.httpAttempts,
+          cached: false,
+          success: true
         });
-        if (usageError) {
-          throw new Error(`Could not persist API usage: ${usageError.message}`);
-        }
         await input.budget.complete?.(input.cacheKey);
         return {
           kind: 'completed',
           httpAttempts: fetched.httpAttempts,
           status: fetched.status,
-          fromCache,
+          fromCache: skippedHttp,
           payload: fetched.payload
         };
       } catch (error: unknown) {
         if (error instanceof JungleScoutClientError) {
-          const { error: usageError } = await input.client.from('api_usage').insert({
+          await persistUsage({
+            client: input.client,
+            budget: input.budget,
+            candidateId: input.candidateId,
             endpoint: input.endpoint,
-            cache_key: input.cacheKey,
+            cacheKey: input.cacheKey,
             purpose: input.purpose,
-            http_status: error.status ?? 0,
-            call_count: error.httpAttempts,
-            retry_count: Math.max(0, error.httpAttempts - 1),
+            httpStatus: error.status ?? 0,
+            callCount: error.httpAttempts,
             cached: false,
-            success: false,
-            candidate_id: input.candidateId,
-            budget_date: new Date().toISOString().slice(0, 10)
+            success: false
           });
-          if (usageError) {
-            throw new Error(`Could not persist API usage: ${usageError.message}`, {
-              cause: error
-            });
-          }
         }
         throw error;
       }
