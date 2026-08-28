@@ -1,8 +1,11 @@
 import {
   JungleScoutClient,
+  queryKeywordMetrics,
   queryProductDatabase,
+  type KeywordMetrics,
   type ProductDatabasePage
 } from '@ara/jungle-scout';
+
 
 const DEFAULT_BASE_URL = 'https://developer.junglescout.com';
 const DEFAULT_DAILY_LIMIT = 20;
@@ -62,6 +65,27 @@ export function createJungleScoutProductDatabaseQuery(
     return queryProductDatabase(client, {
       marketplace: 'us',
       phrases: [...phrases]
+    });
+  };
+}
+
+export function createJungleScoutKeywordQuery(
+
+  env: NodeJS.ProcessEnv = process.env
+): (keyword: string) => Promise<KeywordMetrics> {
+  let client: JungleScoutClient | undefined;
+  return async (keyword) => {
+    if (!client) {
+      const config = readJungleScoutEnv(env);
+      client = new JungleScoutClient({
+        keyName: config.keyName,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl
+      });
+    }
+    return queryKeywordMetrics(client, {
+      marketplace: 'us',
+      keyword
     });
   };
 }

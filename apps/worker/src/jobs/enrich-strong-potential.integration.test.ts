@@ -24,7 +24,7 @@ integration('strong potential enrichment', () => {
     }
   });
 
-  it('stores assumed economics as listing_proxy evidence for Watch candidates', async () => {
+  it('does not fabricate economics or listing_proxy evidence', async () => {
     const importRunId = randomUUID();
     const rawId = randomUUID();
     const candidateId = randomUUID();
@@ -77,8 +77,7 @@ integration('strong potential enrichment', () => {
       .eq('kind', 'economics')
       .maybeSingle();
 
-    expect(result.differentiationMode).toBe('listing_proxy');
-    expect(JSON.stringify(evidence)).toContain('estimated_assumption');
-    expect(JSON.stringify(evidence)).toContain('listing_proxy');
+    expect(result.differentiationMode).toBe('missing');
+    expect(evidence).toBeNull();
   });
 });

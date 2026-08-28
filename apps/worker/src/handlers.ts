@@ -9,27 +9,33 @@ import {
 } from '@ara/ai-router';
 import {
   AiRequestSchema,
+  DeepValidationJobPayloadSchema,
   MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
   TestAiProviderConnectionJobPayloadSchema
 } from '@ara/shared';
-import type { Job, JobType, QueueDatabaseClient } from '@ara/queue';
+import { createQueue, type Job, type JobType, type QueueDatabaseClient } from '@ara/queue';
 import {
   runImportJob,
   type ImportSourceFile
 } from './jobs/import-opportunity-csv';
 import { runProviderConnectionTest } from './jobs/test-ai-provider';
-import { runMarketProbe } from './jobs/market-probe';
+import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe';
+import { runDeepValidation } from './jobs/deep-validation';
+import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
+  createJungleScoutKeywordQuery,
   createJungleScoutProductDatabaseQuery,
   readApiBudgetLimits,
   readJungleScoutEnv
 } from './jungle-scout-runtime';
+
 import type { ApiBudget } from '@ara/api-budget';
 import type { ProductDatabasePage } from '@ara/jungle-scout';
+
 
 export interface JobExecutionContext {
   signal: AbortSignal;
@@ -226,6 +232,7 @@ export function createJobHandlers(
       return checkpoint;
     };
   }
+  const queue = createQueue(client);
   handlers.MARKET_PROBE = async (job, context) => {
     const payload = MarketProbeJobPayloadSchema.parse(job.payload);
     const queryProductDatabase =
@@ -235,16 +242,62 @@ export function createJobHandlers(
     }
     const apiBudget =
       options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    const prior =
+      typeof context.checkpoint === 'object' &&
+      context.checkpoint !== null &&
+      'phase' in context.checkpoint &&
+      typeof context.checkpoint.phase === 'string'
+        ? (context.checkpoint as MarketProbeCheckpoint)
+        : undefined;
     const result = await runMarketProbe(
       { candidateId: payload.candidateId, locale: payload.locale },
       {
         client,
         budget: apiBudget,
         queryProductDatabase,
+        ...(prior ? { checkpoint: prior } : {}),
+        enqueueResume: async (input) => {
+          await queue.enqueueJob({
+            type: 'MARKET_PROBE',
+            payload: { candidateId: input.candidateId, locale: input.locale },
+            idempotencyKey: input.idempotencyKey,
+            availableAt: input.availableAt
+          });
+        },
         onCheckpoint: (value) => context.saveCheckpoint(value)
       }
     );
+    if (result.checkpoint.phase === 'completed') {
+      const { data: probed } = await client
+        .from('candidates')
+        .select('state')
+        .eq('id', payload.candidateId)
+        .maybeSingle();
+      if (probed?.state === 'Watch' || probed?.state === 'Needs Review') {
+        await queue.enqueueJob({
+          type: 'DEEP_VALIDATION',
+          payload: { candidateId: payload.candidateId, locale: payload.locale },
+          idempotencyKey: `deep-validation:${payload.candidateId}`
+        });
+      }
+    }
+
     return result.checkpoint;
+  };
+  handlers.DEEP_VALIDATION = async (job) => {
+    const payload = DeepValidationJobPayloadSchema.parse(job.payload);
+    const apiBudget =
+      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    return runDeepValidation(payload.candidateId, payload.locale, {
+      client,
+      budget: apiBudget,
+      queryKeyword: createJungleScoutKeywordQuery()
+    });
+  };
+
+  handlers.ENRICH_STRONG_POTENTIAL = async (job) => {
+    const payload = DeepValidationJobPayloadSchema.parse(job.payload);
+    return runEnrichStrongPotential(payload.candidateId, client);
   };
   return handlers;
 }
