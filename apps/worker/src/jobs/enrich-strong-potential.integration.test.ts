@@ -80,4 +80,59 @@ integration('strong potential enrichment', () => {
     expect(result.differentiationMode).toBe('missing');
     expect(evidence).toBeNull();
   });
+
+  it('does not call Task 11 adapters unless the candidate is Watch', async () => {
+    const importRunId = randomUUID();
+    const rawId = randomUUID();
+    const candidateId = randomUUID();
+    importRuns.push(importRunId);
+    const { error: importError } = await client.from('import_runs').insert({
+      id: importRunId,
+      submission_hash: `enrich-reject-${importRunId}`,
+      file_count: 1,
+      total_row_count: 1,
+      unique_keyword_count: 1,
+      source_files: []
+    });
+    if (importError) throw importError;
+    const { error: rawError } = await client.from('raw_opportunity_keywords').insert({
+      id: rawId,
+      import_run_id: importRunId,
+      source_file_name: 'enrich.csv',
+      source_hash: `enrich-reject-${importRunId}`,
+      source_row_number: 1,
+      row_hash: `enrich-reject-row-${importRunId}`,
+      raw_row_text: 'faucet mat',
+      raw_row: { Keyword: 'faucet mat' },
+      parsed_row: { keyword: 'faucet mat' },
+      keyword: 'faucet mat',
+      normalized_exact_keyword: 'faucet mat',
+      is_exact_duplicate: false
+    });
+    if (rawError) throw rawError;
+    const { error: candidateError } = await client.from('candidates').insert({
+      id: candidateId,
+      import_run_id: importRunId,
+      representative_raw_keyword_id: rawId,
+      keyword: 'faucet mat',
+      normalized_exact_keyword: 'faucet mat',
+      state: 'Reject',
+      rule_passed: false,
+      rule_reasons: [],
+      risk_flags: [],
+      preliminary_score: 10,
+      preliminary_score_components: {},
+      eligible_for_ai_normalization: false
+    });
+    if (candidateError) throw candidateError;
+    let calls = 0;
+    await runEnrichStrongPotential(candidateId, client, {
+      queryHistoricalSearchVolume: async () => {
+        calls += 1;
+        return { data: { keyword: 'faucet mat', points: [] }, httpAttempts: 1, status: 200 };
+      }
+    });
+    expect(calls).toBe(0);
+  });
 });
+

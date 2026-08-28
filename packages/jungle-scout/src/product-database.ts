@@ -62,14 +62,25 @@ export function buildProductDatabaseRequest(input: ProductDatabaseQueryInput): {
   };
 }
 
+export interface ProductDatabaseQueryResult {
+  readonly page: ProductDatabasePage;
+  readonly httpAttempts: number;
+  readonly status: number;
+}
+
 export async function queryProductDatabase(
   client: JungleScoutClient,
   input: ProductDatabaseQueryInput
-): Promise<ProductDatabasePage> {
+): Promise<ProductDatabaseQueryResult> {
   const request = buildProductDatabaseRequest(input);
   const result: JungleScoutRequestResult = await client.request(request.path, {
     method: request.method,
     json: request.json
   });
-  return ProductDatabasePageSchema.parse(result.body);
+  return {
+    page: ProductDatabasePageSchema.parse(result.body),
+    httpAttempts: result.httpAttempts,
+    status: result.status
+  };
 }
+

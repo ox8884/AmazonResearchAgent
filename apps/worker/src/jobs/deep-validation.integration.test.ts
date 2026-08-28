@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
+import { MemoryApiBudget } from '@ara/api-budget';
+import type { Job } from '@ara/queue';
+import { createJobHandlers } from '../handlers';
 import { runDeepValidation } from './deep-validation';
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -82,4 +85,54 @@ integration('deep validation job', () => {
     expect(result.keywordCalls).toBe(0);
     expect(usage).toHaveLength(0);
   });
+
+  it('enqueues exactly one ENRICH_STRONG_POTENTIAL for Watch', async () => {
+    const candidateId = await seedCandidate('Watch');
+    const handlers = createJobHandlers(client, {
+      apiBudget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
+      queryKeyword: async () => ({
+        keyword: 'sink splash guard',
+        monthlySearchVolume: null,
+        isUpperBound: false
+      })
+    });
+    const job: Job = {
+      id: randomUUID(),
+      type: 'DEEP_VALIDATION',
+      payload: { candidateId, locale: 'ko' },
+      status: 'running',
+      priority: 100,
+      availableAt: '2026-08-27T00:00:00.000Z',
+      leasedUntil: '2026-08-27T00:02:00.000Z',
+      leasedBy: 'worker-a',
+      attempts: 1,
+      maxAttempts: 5,
+      idempotencyKey: `deep-validation:${candidateId}`,
+      checkpoint: {},
+      lastError: null,
+      createdAt: '2026-08-27T00:00:00.000Z',
+      updatedAt: '2026-08-27T00:00:00.000Z'
+    };
+
+    await handlers.DEEP_VALIDATION?.(job, {
+      signal: new AbortController().signal,
+      checkpoint: {},
+      setCheckpoint() {},
+      async saveCheckpoint() {}
+    });
+    await handlers.DEEP_VALIDATION?.(job, {
+      signal: new AbortController().signal,
+      checkpoint: {},
+      setCheckpoint() {},
+      async saveCheckpoint() {}
+    });
+    const { data: jobs } = await client
+      .from('jobs')
+      .select('id,type')
+      .eq('idempotency_key', `enrich-strong:${candidateId}`);
+    expect(jobs).toHaveLength(1);
+    expect(jobs?.[0]?.type).toBe('ENRICH_STRONG_POTENTIAL');
+    await client.from('jobs').delete().eq('id', jobs?.[0]?.id ?? '');
+  });
 });
+

@@ -62,6 +62,7 @@ export {
   ApiCacheKeyInputSchema,
   ApiCallPurposeSchema,
   DeepValidationJobPayloadSchema,
+  EnrichStrongPotentialJobPayloadSchema,
   JungleScoutEndpointSchema,
   MarketProbeJobPayloadSchema,
   MarketSnapshotSchema,
@@ -71,6 +72,7 @@ export type {
   ApiCacheKeyInput,
   ApiCallPurpose,
   DeepValidationJobPayload,
+  EnrichStrongPotentialJobPayload,
   JungleScoutEndpoint,
   MarketProbeJobPayload,
   MarketSnapshot

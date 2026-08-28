@@ -66,3 +66,11 @@ export const DeepValidationJobPayloadSchema = z.object({
   locale: z.enum(['ko', 'en'])
 });
 export type DeepValidationJobPayload = z.infer<typeof DeepValidationJobPayloadSchema>;
+
+export const EnrichStrongPotentialJobPayloadSchema = z.object({
+  candidateId: z.uuid(),
+  locale: z.enum(['ko', 'en'])
+});
+export type EnrichStrongPotentialJobPayload = z.infer<
+  typeof EnrichStrongPotentialJobPayloadSchema
+>;

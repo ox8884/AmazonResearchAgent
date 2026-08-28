@@ -9,8 +9,10 @@ import { authorizeApiCall, type ApiBudget } from '@ara/api-budget';
 import {
   JungleScoutClientError,
   ProductDatabasePageSchema,
-  type ProductDatabasePage
+  type ProductDatabasePage,
+  type ProductDatabaseQueryResult
 } from '@ara/jungle-scout';
+
 import {
   calculateMarketMetrics,
   classifyProductRelevance,
@@ -30,7 +32,9 @@ export type MarketProbePhase =
   | 'metrics_scored'
   | 'completed'
   | 'deferred_budget'
+  | 'in_flight'
   | 'blocked_policy';
+
 
 export interface MarketProbeCheckpoint {
   readonly phase: MarketProbePhase;
@@ -41,7 +45,10 @@ export interface MarketProbeDependencies {
   readonly client: QueueDatabaseClient;
   readonly budget: ApiBudget;
   readonly purpose?: ApiCallPurpose;
-  readonly queryProductDatabase: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
+  readonly queryProductDatabase: (
+    phrases: readonly string[]
+  ) => Promise<ProductDatabaseQueryResult>;
+
   readonly checkpoint?: MarketProbeCheckpoint;
   enqueueResume?(input: {
     readonly candidateId: string;
@@ -197,6 +204,19 @@ export async function runMarketProbe(
         await dependencies.onCheckpoint?.(checkpoint);
         return { checkpoint, realCalls: 0 };
       }
+      case 'in_flight': {
+        const availableAt = new Date(Date.now() + 15_000).toISOString();
+        await dependencies.enqueueResume?.({
+          candidateId: candidate.id,
+          locale: input.locale,
+          availableAt,
+          idempotencyKey: `market-probe-inflight:${candidate.id}:${cacheKey}`
+        });
+        const checkpoint = { phase: 'in_flight' as const, cacheKey };
+        await dependencies.onCheckpoint?.(checkpoint);
+        return { checkpoint, realCalls: 0 };
+      }
+
       case 'cache_hit': {
         await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
         const { data: cached } = await dependencies.client
@@ -210,8 +230,31 @@ export async function runMarketProbe(
       case 'allowed': {
         await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
         try {
-          page = await dependencies.queryProductDatabase(phrases);
-          realCalls = 1;
+          const staged = await dependencies.budget.readStaged?.(cacheKey);
+          let status = 200;
+          let attempts = 0;
+          if (staged && typeof staged === 'object' && 'page' in staged) {
+            const stagedPage = staged.page;
+            page = ProductDatabasePageSchema.parse(stagedPage);
+            status =
+              'status' in staged && typeof staged.status === 'number' ? staged.status : 200;
+            attempts =
+              'httpAttempts' in staged && typeof staged.httpAttempts === 'number'
+                ? staged.httpAttempts
+                : 0;
+            realCalls = 0;
+          } else {
+            const fetched = await dependencies.queryProductDatabase(phrases);
+            page = fetched.page;
+            status = fetched.status;
+            attempts = fetched.httpAttempts;
+            realCalls = fetched.httpAttempts;
+            await dependencies.budget.stage?.(cacheKey, {
+              page: fetched.page,
+              status: fetched.status,
+              httpAttempts: fetched.httpAttempts
+            });
+          }
           const { error: cacheError } = await dependencies.client.from('api_cache').upsert({
             cache_key: cacheKey,
             endpoint: 'product_database',
@@ -226,10 +269,10 @@ export async function runMarketProbe(
             endpoint: 'product_database',
             cache_key: cacheKey,
             purpose,
-            http_status: 200,
-            call_count: 1,
-            retry_count: 0,
-            cached: false,
+            http_status: status,
+            call_count: attempts,
+            retry_count: Math.max(0, attempts - 1),
+            cached: realCalls === 0,
             success: true,
             candidate_id: candidate.id,
             niche_cluster_id: candidate.niche_cluster_id,
@@ -238,6 +281,7 @@ export async function runMarketProbe(
           if (usageError) {
             throw new Error(`Could not persist API usage: ${usageError.message}`);
           }
+          await dependencies.budget.complete?.(cacheKey);
         } catch (error: unknown) {
           if (error instanceof JungleScoutClientError) {
             const { error: usageError } = await dependencies.client.from('api_usage').insert({
@@ -245,7 +289,6 @@ export async function runMarketProbe(
               cache_key: cacheKey,
               purpose,
               http_status: error.status ?? 0,
-
               call_count: error.httpAttempts,
               retry_count: Math.max(0, error.httpAttempts - 1),
               cached: false,
@@ -259,7 +302,6 @@ export async function runMarketProbe(
                 cause: error
               });
             }
-
           }
           throw error;
         }

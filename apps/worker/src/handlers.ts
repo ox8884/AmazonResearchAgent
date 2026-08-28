@@ -10,11 +10,13 @@ import {
 import {
   AiRequestSchema,
   DeepValidationJobPayloadSchema,
+  EnrichStrongPotentialJobPayloadSchema,
   MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
   TestAiProviderConnectionJobPayloadSchema
 } from '@ara/shared';
+
 import { createQueue, type Job, type JobType, type QueueDatabaseClient } from '@ara/queue';
 import {
   runImportJob,
@@ -27,14 +29,19 @@ import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
+  createJungleScoutHistoricalSearchVolumeQuery,
   createJungleScoutKeywordQuery,
   createJungleScoutProductDatabaseQuery,
+  createJungleScoutSalesEstimatesQuery,
+  createJungleScoutShareOfVoiceQuery,
   readApiBudgetLimits,
   readJungleScoutEnv
 } from './jungle-scout-runtime';
-
 import type { ApiBudget } from '@ara/api-budget';
-import type { ProductDatabasePage } from '@ara/jungle-scout';
+import type { KeywordMetrics, ProductDatabaseQueryResult } from '@ara/jungle-scout';
+
+
+
 
 
 export interface JobExecutionContext {
@@ -90,7 +97,11 @@ export interface JobHandlerOptions {
   readonly normalizationCatalog?: ProviderCatalog;
   readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
   readonly apiBudget?: ApiBudget;
-  readonly queryProductDatabase?: (phrases: readonly string[]) => Promise<ProductDatabasePage>;
+  readonly queryProductDatabase?: (
+    phrases: readonly string[]
+  ) => Promise<ProductDatabaseQueryResult>;
+  readonly queryKeyword?: (keyword: string) => Promise<KeywordMetrics>;
+
 }
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
@@ -288,16 +299,40 @@ export function createJobHandlers(
     const payload = DeepValidationJobPayloadSchema.parse(job.payload);
     const apiBudget =
       options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
-    return runDeepValidation(payload.candidateId, payload.locale, {
+    const result = await runDeepValidation(payload.candidateId, payload.locale, {
       client,
       budget: apiBudget,
-      queryKeyword: createJungleScoutKeywordQuery()
+      queryKeyword: options.queryKeyword ?? createJungleScoutKeywordQuery()
+    });
+
+    const { data: deep } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', payload.candidateId)
+      .maybeSingle();
+    if (deep?.state === 'Watch') {
+      await queue.enqueueJob({
+        type: 'ENRICH_STRONG_POTENTIAL',
+        payload: { candidateId: payload.candidateId, locale: payload.locale },
+        idempotencyKey: `enrich-strong:${payload.candidateId}`
+      });
+    }
+    return result;
+  };
+
+
+  handlers.ENRICH_STRONG_POTENTIAL = async (job) => {
+    const payload = EnrichStrongPotentialJobPayloadSchema.parse(job.payload);
+    const apiBudget =
+      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    return runEnrichStrongPotential(payload.candidateId, client, {
+      budget: apiBudget,
+      queryHistoricalSearchVolume: createJungleScoutHistoricalSearchVolumeQuery(),
+      querySalesEstimates: createJungleScoutSalesEstimatesQuery(),
+      queryShareOfVoice: createJungleScoutShareOfVoiceQuery()
     });
   };
 
-  handlers.ENRICH_STRONG_POTENTIAL = async (job) => {
-    const payload = DeepValidationJobPayloadSchema.parse(job.payload);
-    return runEnrichStrongPotential(payload.candidateId, client);
-  };
+
   return handlers;
 }

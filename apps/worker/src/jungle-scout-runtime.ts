@@ -1,10 +1,18 @@
 import {
   JungleScoutClient,
+  queryHistoricalSearchVolume,
   queryKeywordMetrics,
   queryProductDatabase,
+  querySalesEstimates,
+  queryShareOfVoice,
+  type HistoricalSearchVolumeQueryResult,
   type KeywordMetrics,
-  type ProductDatabasePage
+  type ProductDatabaseQueryResult,
+  type SalesEstimatesQueryResult,
+  type ShareOfVoiceQueryResult
 } from '@ara/jungle-scout';
+
+
 
 
 const DEFAULT_BASE_URL = 'https://developer.junglescout.com';
@@ -51,7 +59,8 @@ export function readApiBudgetLimits(env: NodeJS.ProcessEnv = process.env): {
 
 export function createJungleScoutProductDatabaseQuery(
   env: NodeJS.ProcessEnv = process.env
-): (phrases: readonly string[]) => Promise<ProductDatabasePage> {
+): (phrases: readonly string[]) => Promise<ProductDatabaseQueryResult> {
+
   let client: JungleScoutClient | undefined;
   return async (phrases) => {
     if (!client) {
@@ -89,6 +98,58 @@ export function createJungleScoutKeywordQuery(
     });
   };
 }
+
+export function createJungleScoutHistoricalSearchVolumeQuery(
+  env: NodeJS.ProcessEnv = process.env
+): (keyword: string) => Promise<HistoricalSearchVolumeQueryResult> {
+  let client: JungleScoutClient | undefined;
+  return async (keyword) => {
+    if (!client) {
+      const config = readJungleScoutEnv(env);
+      client = new JungleScoutClient({
+        keyName: config.keyName,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl
+      });
+    }
+    return queryHistoricalSearchVolume(client, { marketplace: 'us', keyword });
+  };
+}
+
+export function createJungleScoutSalesEstimatesQuery(
+  env: NodeJS.ProcessEnv = process.env
+): (asins: readonly string[]) => Promise<SalesEstimatesQueryResult> {
+  let client: JungleScoutClient | undefined;
+  return async (asins) => {
+    if (!client) {
+      const config = readJungleScoutEnv(env);
+      client = new JungleScoutClient({
+        keyName: config.keyName,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl
+      });
+    }
+    return querySalesEstimates(client, { marketplace: 'us', asins: [...asins] });
+  };
+}
+
+export function createJungleScoutShareOfVoiceQuery(
+  env: NodeJS.ProcessEnv = process.env
+): (keyword: string) => Promise<ShareOfVoiceQueryResult> {
+  let client: JungleScoutClient | undefined;
+  return async (keyword) => {
+    if (!client) {
+      const config = readJungleScoutEnv(env);
+      client = new JungleScoutClient({
+        keyName: config.keyName,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl
+      });
+    }
+    return queryShareOfVoice(client, { marketplace: 'us', keyword });
+  };
+}
+
 
 function parseLimit(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === '') {

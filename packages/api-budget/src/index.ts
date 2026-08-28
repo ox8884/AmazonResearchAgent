@@ -12,7 +12,9 @@ export type ApiAuthorizationDecision =
   | { readonly kind: 'cache_hit'; readonly cacheKey: string }
   | { readonly kind: 'allowed'; readonly cacheKey: string; readonly remaining: number }
   | { readonly kind: 'deferred_budget'; readonly cacheKey: string }
+  | { readonly kind: 'in_flight'; readonly cacheKey: string }
   | { readonly kind: 'blocked_policy'; readonly cacheKey: string; readonly reason: string };
+
 
 export interface AuthorizeApiCallInput {
   readonly purpose: ApiCallPurpose;
@@ -24,7 +26,12 @@ export interface AuthorizeApiCallInput {
 
 export interface ApiBudget {
   authorize(input: AuthorizeApiCallInput): Promise<ApiAuthorizationDecision>;
+  complete?(cacheKey: string): Promise<void>;
+  stage?(cacheKey: string, response: unknown): Promise<void>;
+  readStaged?(cacheKey: string): Promise<unknown | null>;
 }
+
+
 
 export interface ApiBudgetStore extends ApiBudget {
   hasFreshCache(cacheKey: string, endpoint: JungleScoutEndpoint, now: Date): boolean;

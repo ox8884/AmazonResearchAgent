@@ -56,7 +56,9 @@ export async function runDeepValidation(
     case 'blocked_policy':
     case 'deferred_budget':
     case 'cache_hit':
+    case 'in_flight':
       return { keywordCalls: 0 };
+
     case 'allowed': {
       const metrics = await dependencies.queryKeyword(candidate.keyword);
       const { error: usageError } = await dependencies.client.from('api_usage').insert({

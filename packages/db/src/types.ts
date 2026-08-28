@@ -392,6 +392,38 @@ export type Database = {
         }
         Relationships: []
       }
+
+      api_call_claims: {
+        Row: {
+          budget_date: string | null
+          cache_key: string
+          claimed_until: string
+          completed_at: string | null
+          owner: string
+          reserved: boolean
+          staged_response: Json | null
+        }
+        Insert: {
+          budget_date?: string | null
+          cache_key: string
+          claimed_until: string
+          completed_at?: string | null
+          owner: string
+          reserved?: boolean
+          staged_response?: Json | null
+        }
+        Update: {
+          budget_date?: string | null
+          cache_key?: string
+          claimed_until?: string
+          completed_at?: string | null
+          owner?: string
+          reserved?: boolean
+          staged_response?: Json | null
+        }
+        Relationships: []
+      }
+
       api_usage: {
         Row: {
           budget_date: string
@@ -1092,6 +1124,42 @@ export type Database = {
           remaining: number | null
         }[]
       }
+      claim_api_call: {
+        Args: {
+          request_cache_key: string
+          claim_owner: string
+          lease_seconds: number
+        }
+        Returns: {
+          decision_kind: string
+          claimed_cache_key: string
+        }[]
+      }
+
+      complete_api_call_claim: {
+        Args: {
+          request_cache_key: string
+          claim_owner: string
+        }
+        Returns: boolean
+      }
+      mark_api_call_reserved: {
+        Args: {
+          request_cache_key: string
+          request_budget_date: string
+        }
+        Returns: boolean
+      }
+      stage_api_call_response: {
+        Args: {
+          request_cache_key: string
+          claim_owner: string
+          response: Json
+        }
+        Returns: boolean
+      }
+
+
       claim_ai_analysis: {
         Args: {
           analysis_role: string
