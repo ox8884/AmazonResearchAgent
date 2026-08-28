@@ -115,6 +115,9 @@ export function routeAiRequest(
     if (!entry.enabled || !entry.health.available) {
       continue;
     }
+    if (entry.provider.billingType === 'payg' && !request.allowPaidFallback) {
+      continue;
+    }
     for (const model of entry.models) {
       if (!supportsCapabilities(model, request.requiredCapabilities)) {
         continue;
@@ -122,6 +125,7 @@ export function routeAiRequest(
       if (model.billingType === 'payg' && !request.allowPaidFallback) {
         continue;
       }
+
       candidates.push({
         entry,
         model,

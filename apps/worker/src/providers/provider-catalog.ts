@@ -27,8 +27,10 @@ import {
   ProviderKindSchema,
   type AiModelDescriptor,
   type AiRole,
+  type BillingType,
   type ProviderCapability
 } from '@ara/shared';
+
 import { resolveApprovedCommandProfile } from './command-profiles';
 import {
   createPinnedProviderFetch,
@@ -220,9 +222,12 @@ export async function instantiatePersistedProvider(
 }
 
 
-function modelFromRow(model: ModelRow): AiModelDescriptor {
+function modelFromRow(
+  model: ModelRow,
+  providerBilling: BillingType
+): AiModelDescriptor {
   const capabilities = configCapabilities(model.capabilities);
-  const billingType = BillingTypeSchema.safeParse(model.billing_type);
+  const billingType = BillingTypeSchema.safeParse(providerBilling);
   if (capabilities.length === 0 || !billingType.success) {
     throw new ProviderCatalogError('Stored AI model metadata is invalid.');
   }
@@ -235,6 +240,7 @@ function modelFromRow(model: ModelRow): AiModelDescriptor {
     qualityRank: model.quality_rank
   };
 }
+
 
 function indexModels(models: readonly ModelRow[]): ProviderModels {
   const indexed = new Map<string, readonly ModelRow[]>();
@@ -294,7 +300,10 @@ async function catalogEntry(
           retryAfterSeconds: null
         }
       : liveHealth;
-  const persistedModels = models.filter((model) => model.enabled).map(modelFromRow);
+  const persistedModels = models
+    .filter((model) => model.enabled)
+    .map((model) => modelFromRow(model, adapter.billingType));
+
   const roles = configRoles(config);
   return {
     provider: adapter,
