@@ -45,6 +45,8 @@ vi.mock('@ara/secret-store', () => ({
 }));
 
 import { POST } from './route';
+import { ProviderRepositoryError } from '@ara/db';
+
 
 describe('provider settings route', () => {
   beforeEach(() => {
@@ -272,6 +274,35 @@ describe('provider settings route', () => {
       })
     );
   });
+
+  // Break: a stale settings form silently overwrites a newer provider revision.
+  it('returns 409 when the submitted settings revision is stale', async () => {
+    const error = new ProviderRepositoryError('save provider settings atomically');
+    Object.assign(error, { cause: new Error('settings_revision_conflict') });
+    fixtures.saveSettings.mockRejectedValue(error);
+
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          kind: 'openai_http',
+          billingType: 'subscription',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          modelDiscovery: 'enabled',
+          settingsRevision: 1,
+          models: [{ modelId: 'gone-model', enabled: true, priority: 1 }],
+          roles: []
+        })
+      })
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: 'settings_conflict' });
+  });
 });
+
 
 
