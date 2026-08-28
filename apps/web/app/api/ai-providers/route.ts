@@ -16,6 +16,7 @@ import {
   UnsafeModelIdError
 } from '@ara/shared';
 import {
+  decryptSecret,
   encryptSecret,
   getEncryptionKeyFromEnvironment,
   SecretStoreError,
@@ -49,7 +50,16 @@ const ProviderInputSchema = z.object({
   commandProfileId: z.string().trim().transform((value) => value || undefined).optional(),
   roles: z.array(AiRoleSchema).default([]),
   enabled: z.boolean().default(true),
-  priority: z.number().int().nonnegative().default(100)
+  priority: z.number().int().nonnegative().default(100),
+  models: z
+    .array(
+      z.object({
+        modelId: z.string().trim().min(1),
+        enabled: z.boolean(),
+        priority: z.number().int().nonnegative()
+      })
+    )
+    .optional()
 });
 
 type ProviderInput = z.infer<typeof ProviderInputSchema>;
@@ -240,14 +250,30 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }
     const input = parsed.data;
+    const encryptionKey = getEncryptionKeyFromEnvironment();
     const encrypted: EncryptedSecret | null = input.apiKey?.trim()
-      ? encryptSecret(input.apiKey.trim(), getEncryptionKeyFromEnvironment())
+      ? encryptSecret(input.apiKey.trim(), encryptionKey)
       : null;
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const providerId = input.id ?? `provider-${randomUUID()}`;
+    let secretForComparison = input.apiKey?.trim();
+    if (!secretForComparison && input.modelId && input.id) {
+      const existingSecret = await repository.findSecret(input.id);
+      if (existingSecret) {
+        secretForComparison = decryptSecret(
+          {
+            ciphertext: existingSecret.ciphertext,
+            iv: existingSecret.iv,
+            authTag: existingSecret.auth_tag,
+            last4: existingSecret.last4
+          },
+          encryptionKey
+        );
+      }
+    }
     const modelId = input.modelId
-      ? assertPersistableModelId(input.modelId, input.apiKey?.trim())
+      ? assertPersistableModelId(input.modelId, secretForComparison)
       : undefined;
     const provider = await repository.saveSettings({
       provider: {
@@ -285,6 +311,31 @@ export async function POST(request: Request): Promise<NextResponse> {
         : [],
       reconcileMode: modelId ? 'manual' : 'none'
     });
+    if (input.models && input.models.length > 0) {
+      await repository.saveSettings({
+        provider: {
+          id: provider.id,
+          name: provider.name,
+          kind: provider.kind,
+          billing_type: provider.billing_type,
+          enabled: provider.enabled,
+          priority: provider.priority,
+          config: provider.config
+        },
+        secret: null,
+        models: input.models.map((model) => ({
+          provider_id: provider.id,
+          model_id: model.modelId,
+          display_name: model.modelId,
+          capabilities: [...MODEL_CAPABILITIES],
+          billing_type: input.billingType,
+          quality_rank: 100,
+          enabled: model.enabled,
+          priority: model.priority
+        })),
+        reconcileMode: 'status'
+      });
+    }
 
     const [secret, models] = await Promise.all([
       repository.findSecret(provider.id),

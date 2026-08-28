@@ -166,7 +166,12 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
         .getAll('roles')
         .filter((value): value is string => typeof value === 'string'),
       enabled: formData.get('enabled') === 'on',
-      priority: Number(formData.get('priority') ?? 100)
+      priority: Number(formData.get('priority') ?? 100),
+      models: (saved?.models ?? []).map((model) => ({
+        modelId: model.id,
+        enabled: formData.get(`model-enabled-${model.id}`) === 'on',
+        priority: Number(formData.get(`model-priority-${model.id}`) ?? model.priority)
+      }))
     };
 
     try {
@@ -309,24 +314,51 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
               defaultValue={saved?.modelId ?? ''}
             />
           </div>
-          <label className="checkbox-field">
-            <input
-              name="modelEnabled"
-              type="checkbox"
-              defaultChecked={saved?.models[0]?.enabled ?? true}
-            />
-            <span>{copy.modelEnabled}</span>
-          </label>
-          <div className="field-stack">
-            <label htmlFor="model-priority">{copy.modelPriority}</label>
-            <input
-              id="model-priority"
-              name="modelPriority"
-              type="number"
-              min={0}
-              defaultValue={saved?.models[0]?.priority ?? 100}
-            />
-          </div>
+          {(saved?.models ?? []).map((model) => (
+            <div key={model.id} className="field-stack field-stack--wide">
+              <label className="checkbox-field">
+                <input
+                  name={`model-enabled-${model.id}`}
+                  type="checkbox"
+                  defaultChecked={model.enabled}
+                />
+                <span>
+                  {copy.modelEnabled}: {model.displayName} ({model.origin})
+                </span>
+              </label>
+              <label htmlFor={`model-priority-${model.id}`}>{copy.modelPriority}</label>
+              <input
+                id={`model-priority-${model.id}`}
+                name={`model-priority-${model.id}`}
+                type="number"
+                min={0}
+                defaultValue={model.priority}
+              />
+            </div>
+          ))}
+          {(!saved || saved.models.length === 0) && (
+            <>
+              <label className="checkbox-field">
+                <input
+                  name="modelEnabled"
+                  type="checkbox"
+                  defaultChecked
+                />
+                <span>{copy.modelEnabled}</span>
+              </label>
+              <div className="field-stack">
+                <label htmlFor="model-priority">{copy.modelPriority}</label>
+                <input
+                  id="model-priority"
+                  name="modelPriority"
+                  type="number"
+                  min={0}
+                  defaultValue={100}
+                />
+              </div>
+            </>
+          )}
+
           <div className="field-stack field-stack--wide">
             <label htmlFor="base-url">{copy.baseUrl}</label>
             <input

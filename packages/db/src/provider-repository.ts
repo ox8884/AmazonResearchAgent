@@ -28,7 +28,7 @@ export interface ProviderRepository {
     readonly provider: ProviderInsert;
     readonly secret: ProviderSecretInsert | null;
     readonly models: readonly ModelInsert[];
-    readonly reconcileMode: 'none' | 'manual' | 'discovery';
+    readonly reconcileMode: 'none' | 'manual' | 'discovery' | 'status';
   }): Promise<ProviderRow>;
 }
 

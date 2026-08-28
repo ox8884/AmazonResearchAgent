@@ -34,6 +34,7 @@ vi.mock('@ara/secret-store', () => ({
     authTag: 'tag',
     last4: plaintext.slice(-4)
   }),
+  decryptSecret: () => 'stored-secret-value',
   getEncryptionKeyFromEnvironment: () => Buffer.alloc(32, 3),
   SecretStoreError: class SecretStoreError extends Error {}
 }));
@@ -141,4 +142,34 @@ describe('provider settings route', () => {
       })
     );
   });
+
+  it('rejects a model ID equal to the stored secret on blank-key edit', async () => {
+    fixtures.findSecret.mockResolvedValue({
+      provider_id: 'provider-existing',
+      ciphertext: 'cipher',
+      iv: 'iv',
+      auth_tag: 'tag',
+      last4: 'alue'
+    });
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          kind: 'openai_http',
+          billingType: 'subscription',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          apiKey: '',
+          modelId: 'stored-secret-value',
+          roles: []
+        })
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(fixtures.saveSettings).not.toHaveBeenCalled();
+  });
+
 });

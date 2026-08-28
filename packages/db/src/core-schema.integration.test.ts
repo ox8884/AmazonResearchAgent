@@ -544,4 +544,85 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(ownerRelease?.result).toBe(true);
   });
 
+  it('preserves admin model priority, enabled, and manual origin across discovery', async () => {
+    const providerId = await seedProvider();
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'openai_http',
+          'billing_type', 'subscription',
+          'enabled', true,
+          'priority', 1,
+          'config', '{}'::jsonb
+        ),
+        null::jsonb,
+        jsonb_build_array(
+          jsonb_build_object(
+            'model_id', 'keep-me',
+            'display_name', 'keep-me',
+            'capabilities', '["structured_json"]'::jsonb,
+            'billing_type', 'subscription',
+            'enabled', false,
+            'priority', 7,
+            'origin', 'manual'
+          ),
+          jsonb_build_object(
+            'model_id', 'gone-discovered',
+            'display_name', 'gone-discovered',
+            'capabilities', '["structured_json"]'::jsonb,
+            'billing_type', 'subscription',
+            'enabled', true,
+            'priority', 2,
+            'origin', 'discovered'
+          )
+        ),
+        'manual'::text
+      )
+    `;
+    await sql`
+      update ai_models
+      set origin = 'discovered'
+      where provider_id = ${providerId} and model_id = 'gone-discovered'
+    `;
+    await sql`
+      select save_ai_provider_settings(
+        jsonb_build_object(
+          'id', ${providerId}::text,
+          'name', ${providerId}::text,
+          'kind', 'openai_http',
+          'billing_type', 'subscription',
+          'enabled', true,
+          'priority', 1,
+          'config', '{}'::jsonb
+        ),
+        null::jsonb,
+        jsonb_build_array(
+          jsonb_build_object(
+            'model_id', 'keep-me',
+            'display_name', 'keep-me',
+            'capabilities', '["structured_json"]'::jsonb,
+            'billing_type', 'subscription',
+            'enabled', true,
+            'priority', 100,
+            'origin', 'discovered'
+          )
+        ),
+        'discovery'::text
+      )
+    `;
+    const models = await sql<{ model_id: string; enabled: boolean; priority: number; origin: string }[]>`
+      select model_id, enabled, priority, origin
+      from ai_models
+      where provider_id = ${providerId}
+      order by model_id
+    `;
+    expect(models).toEqual([
+      { model_id: 'gone-discovered', enabled: false, origin: 'discovered', priority: 2 },
+      { model_id: 'keep-me', enabled: false, origin: 'manual', priority: 7 }
+    ]);
+  });
+
+
 });
