@@ -36,6 +36,8 @@ const SavedProviderSchema = z.object({
   networkScope: z.enum(['public', 'private', 'loopback']).nullable().optional(),
   commandProfileId: z.string().nullable().optional(),
   modelId: z.string().nullable().optional(),
+  modelDiscovery: z.enum(['enabled', 'disabled']).default('enabled'),
+  settingsRevision: z.number().default(1),
   models: z.array(ProviderModelSchema)
 });
 
@@ -150,6 +152,10 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
     setStatus({ kind: 'saving' });
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const submittedModelId =
+      typeof formData.get('modelId') === 'string' ? String(formData.get('modelId')).trim() : '';
+    const isNewManual =
+      submittedModelId.length > 0 && submittedModelId !== (saved?.modelId ?? '');
     const body = {
       id: formData.get('id') || undefined,
       name: formData.get('name') ?? '',
@@ -158,15 +164,19 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
       baseUrl: formData.get('baseUrl') ?? '',
       networkScope: formData.get('networkScope') ?? 'public',
       apiKey: formData.get('apiKey') ?? '',
-      modelId: formData.get('modelId') ?? '',
-      modelEnabled: formData.get('modelEnabled') === 'on',
-      modelPriority: Number(formData.get('modelPriority') ?? 100),
+      modelId: submittedModelId,
+      modelDiscovery: isNewManual
+        ? 'disabled'
+        : (saved?.modelDiscovery ?? (submittedModelId ? 'disabled' : 'enabled')),
+      modelEnabled: isNewManual ? true : formData.get('modelEnabled') === 'on',
+      modelPriority: isNewManual ? 100 : Number(formData.get('modelPriority') ?? 100),
       commandProfileId: formData.get('commandProfileId') ?? '',
       roles: formData
         .getAll('roles')
         .filter((value): value is string => typeof value === 'string'),
       enabled: formData.get('enabled') === 'on',
       priority: Number(formData.get('priority') ?? 100),
+      settingsRevision: saved?.settingsRevision,
       models: (saved?.models ?? []).map((model) => ({
         modelId: model.id,
         enabled: formData.get(`model-enabled-${model.id}`) === 'on',
@@ -210,12 +220,20 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
           .json<unknown>()
       );
       const result = await waitForProviderTest(queued.jobId);
+      const listed = ProviderListSchema.parse(
+        await ky.get('/api/ai-providers', { credentials: 'same-origin' }).json<unknown>()
+      );
+      setProviders(listed.providers);
+      const refreshed = listed.providers.find((provider) => provider.id === saved.id);
+      if (refreshed) {
+        setSaved(refreshed);
+      }
       setStatus({
         kind: 'tested',
         available: result.available,
         models: result.models
       });
-      await loadProviders();
+
     } catch (error) {
       if (error instanceof Error) {
         setStatus({ kind: 'error', message: copy.connectionUnavailable });

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   createProviderRepository,
+  fingerprintFromProviderConfig,
   ProviderRepositoryError,
+  secretCipherId,
   type Json,
   type ModelRow,
   type ProviderRow,
@@ -45,12 +47,14 @@ const ProviderInputSchema = z.object({
   networkScope: z.enum(['public', 'private', 'loopback']).default('public'),
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
+  modelDiscovery: z.enum(['enabled', 'disabled']).optional(),
   modelEnabled: z.boolean().default(true),
   modelPriority: z.number().int().nonnegative().default(100),
   commandProfileId: z.string().trim().transform((value) => value || undefined).optional(),
   roles: z.array(AiRoleSchema).default([]),
   enabled: z.boolean().default(true),
   priority: z.number().int().nonnegative().default(100),
+  settingsRevision: z.number().int().nonnegative().optional(),
   models: z
     .array(
       z.object({
@@ -95,6 +99,8 @@ interface PublicProvider {
   readonly networkScope: 'public' | 'private' | 'loopback' | null;
   readonly commandProfileId: string | null;
   readonly modelId: string | null;
+  readonly modelDiscovery: 'enabled' | 'disabled';
+  readonly settingsRevision: number;
   readonly models: readonly PublicModel[];
 }
 
@@ -158,15 +164,15 @@ function publicProvider(
         ? networkScope
         : null,
     commandProfileId: jsonString(config.commandProfileId),
-    modelId:
-      jsonString(config.manualModelId) ??
-      jsonString(config.modelId) ??
-      models[0]?.model_id ??
-      null,
+    modelId: jsonString(config.manualModelId) ?? jsonString(config.modelId),
+    modelDiscovery: jsonString(config.modelDiscovery) === 'disabled' ? 'disabled' : 'enabled',
+    settingsRevision: provider.settings_revision,
     models: models.map(publicModel)
   };
 }
 function providerConfig(input: ProviderInput): Json {
+  const modelDiscovery =
+    input.modelDiscovery ?? (input.modelId ? 'disabled' : 'enabled');
   if (input.kind === 'openai_http') {
     if (!input.baseUrl) {
       throw new ProviderConfigurationError('Base URL is required for HTTP providers.');
@@ -174,8 +180,10 @@ function providerConfig(input: ProviderInput): Json {
     return {
       baseUrl: input.baseUrl,
       networkScope: input.networkScope,
-      modelDiscovery: input.modelId ? 'disabled' : 'enabled',
-      ...(input.modelId ? { manualModelId: input.modelId } : {}),
+      modelDiscovery,
+      ...(modelDiscovery === 'disabled' && input.modelId
+        ? { manualModelId: input.modelId }
+        : {}),
       roles: input.roles
     };
   }
@@ -190,6 +198,7 @@ function providerConfig(input: ProviderInput): Json {
     roles: input.roles
   };
 }
+
 
 async function readJson(request: Request): Promise<unknown> {
   try {
@@ -275,6 +284,37 @@ export async function POST(request: Request): Promise<NextResponse> {
     const modelId = input.modelId
       ? assertPersistableModelId(input.modelId, secretForComparison)
       : undefined;
+    const existing = input.id ? await repository.findProvider(input.id) : null;
+    const existingSecret = input.id ? await repository.findSecret(input.id) : null;
+    const builtConfig = providerConfig({ ...input, modelId });
+    const nextSecret = encrypted
+      ? {
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          authTag: encrypted.authTag
+        }
+      : existingSecret;
+    const identity = fingerprintFromProviderConfig(
+      input.kind,
+      builtConfig,
+      secretCipherId(nextSecret)
+    );
+    const previousIdentity = existing
+      ? fingerprintFromProviderConfig(
+          existing.kind,
+          existing.config,
+          secretCipherId(existingSecret)
+        )
+      : null;
+    const previousConfig =
+      existing &&
+      typeof existing.config === 'object' &&
+      existing.config !== null &&
+      !Array.isArray(existing.config)
+        ? existing.config
+        : {};
+    const previousProbe =
+      previousIdentity === identity ? previousConfig.executionProbe : undefined;
     const provider = await repository.saveSettings({
       provider: {
         id: providerId,
@@ -283,7 +323,15 @@ export async function POST(request: Request): Promise<NextResponse> {
         billing_type: input.billingType,
         enabled: input.enabled,
         priority: input.priority,
-        config: providerConfig({ ...input, modelId })
+        config: {
+          ...(typeof builtConfig === 'object' &&
+          builtConfig !== null &&
+          !Array.isArray(builtConfig)
+            ? builtConfig
+            : {}),
+          executionIdentity: identity,
+          ...(previousProbe !== undefined ? { executionProbe: previousProbe } : {})
+        }
       },
       secret: encrypted
         ? {
@@ -309,33 +357,11 @@ export async function POST(request: Request): Promise<NextResponse> {
             }
           ]
         : [],
-      reconcileMode: modelId ? 'manual' : 'none'
+      reconcileMode: modelId ? 'manual' : 'none',
+      modelStatus: input.models ?? [],
+      expectedRevision: input.settingsRevision ?? null
     });
-    if (input.models && input.models.length > 0) {
-      await repository.saveSettings({
-        provider: {
-          id: provider.id,
-          name: provider.name,
-          kind: provider.kind,
-          billing_type: provider.billing_type,
-          enabled: provider.enabled,
-          priority: provider.priority,
-          config: provider.config
-        },
-        secret: null,
-        models: input.models.map((model) => ({
-          provider_id: provider.id,
-          model_id: model.modelId,
-          display_name: model.modelId,
-          capabilities: [...MODEL_CAPABILITIES],
-          billing_type: input.billingType,
-          quality_rank: 100,
-          enabled: model.enabled,
-          priority: model.priority
-        })),
-        reconcileMode: 'status'
-      });
-    }
+
 
     const [secret, models] = await Promise.all([
       repository.findSecret(provider.id),
@@ -356,9 +382,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     ) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }
+    if (error instanceof ProviderRepositoryError) {
+      const detail =
+        error.cause instanceof Error ? error.cause.message : error.message;
+      if (detail.includes('settings_revision_conflict')) {
+        return NextResponse.json({ error: 'settings_conflict' }, { status: 409 });
+      }
+      return NextResponse.json({ error: 'provider_store_unavailable' }, { status: 503 });
+    }
     if (
       error instanceof ServerConfigurationError ||
-      error instanceof ProviderRepositoryError ||
       error instanceof SecretStoreError
     ) {
       return NextResponse.json({ error: 'provider_store_unavailable' }, { status: 503 });

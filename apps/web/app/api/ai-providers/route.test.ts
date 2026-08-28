@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fixtures = vi.hoisted(() => {
   const saveSettings = vi.fn();
   const findSecret = vi.fn();
+  const findProvider = vi.fn();
   const listModels = vi.fn();
   return {
     saveSettings,
     findSecret,
+    findProvider,
     listModels
   };
 });
@@ -24,8 +26,11 @@ vi.mock('../../../lib/server/database', () => ({
 
 vi.mock('@ara/db', () => ({
   createProviderRepository: () => fixtures,
-  ProviderRepositoryError: class ProviderRepositoryError extends Error {}
+  ProviderRepositoryError: class ProviderRepositoryError extends Error {},
+  fingerprintFromProviderConfig: () => 'fingerprint',
+  secretCipherId: () => 'cipher-id'
 }));
+
 
 vi.mock('@ara/secret-store', () => ({
   encryptSecret: (plaintext: string) => ({
@@ -52,10 +57,12 @@ describe('provider settings route', () => {
       enabled: true,
       priority: 100,
       config: {},
+      settings_revision: 1,
       created_at: new Date(0).toISOString(),
       updated_at: new Date(0).toISOString()
     }));
     fixtures.findSecret.mockResolvedValue(null);
+    fixtures.findProvider.mockResolvedValue(null);
     fixtures.listModels.mockResolvedValue([]);
   });
 
@@ -84,11 +91,11 @@ describe('provider settings route', () => {
       expect.objectContaining({
         provider: expect.objectContaining({
           kind: 'command',
-          config: {
+          config: expect.objectContaining({
             commandProfileId: 'fake-command',
             modelId: 'fake-model',
             roles: ['niche_normalization']
-          }
+          })
         }),
         secret: null
       })
@@ -143,6 +150,38 @@ describe('provider settings route', () => {
     );
   });
 
+  // Break: model status is saved in a second transaction after config/secret commit.
+  it('persists config, secret, and model status in one saveSettings call', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          kind: 'openai_http',
+          billingType: 'subscription',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          apiKey: 'replacement-secret-value',
+          modelDiscovery: 'enabled',
+          models: [{ modelId: 'kept-model', enabled: false, priority: 3 }],
+          roles: ['niche_normalization'],
+          enabled: true
+        })
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(fixtures.saveSettings).toHaveBeenCalledTimes(1);
+    expect(fixtures.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secret: expect.objectContaining({ last4: 'alue' }),
+        modelStatus: [{ modelId: 'kept-model', enabled: false, priority: 3 }]
+      })
+    );
+  });
+
+
   it('rejects a model ID equal to the stored secret on blank-key edit', async () => {
     fixtures.findSecret.mockResolvedValue({
       provider_id: 'provider-existing',
@@ -172,4 +211,67 @@ describe('provider settings route', () => {
     expect(fixtures.saveSettings).not.toHaveBeenCalled();
   });
 
+
+  it('does not switch a discovery provider to manual when only model status is saved', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          kind: 'openai_http',
+          billingType: 'subscription',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          modelDiscovery: 'enabled',
+          models: [{ modelId: 'discovered-model', enabled: false, priority: 4 }],
+          roles: ['niche_normalization']
+        })
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(fixtures.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: expect.objectContaining({
+          config: expect.objectContaining({
+            modelDiscovery: 'enabled'
+          })
+        }),
+        reconcileMode: 'none',
+        modelStatus: [{ modelId: 'discovered-model', enabled: false, priority: 4 }]
+      })
+    );
+    expect(fixtures.saveSettings.mock.calls[0]?.[0]?.provider.config.manualModelId).toBeUndefined();
+  });
+
+  it('enables a newly entered manual model when the checkbox is omitted', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          kind: 'openai_http',
+          billingType: 'subscription',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          modelId: 'new-manual-model',
+          modelDiscovery: 'disabled',
+          roles: []
+        })
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(fixtures.saveSettings.mock.calls[0]?.[0]?.models[0]).toEqual(
+      expect.objectContaining({
+        model_id: 'new-manual-model',
+        enabled: true,
+        priority: 100
+      })
+    );
+  });
 });
+
+
