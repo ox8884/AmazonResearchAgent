@@ -3,9 +3,13 @@ import type { AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JungleScoutClient } from './client';
-import { queryHistoricalSearchVolume } from './historical-search-volume';
-import { querySalesEstimates } from './sales-estimates';
-import { queryShareOfVoice } from './share-of-voice';
+import {
+  buildHistoricalSearchVolumeRequest,
+  queryHistoricalSearchVolume
+} from './historical-search-volume';
+import { buildSalesEstimatesRequest, querySalesEstimates } from './sales-estimates';
+import { buildShareOfVoiceRequest, queryShareOfVoice } from './share-of-voice';
+
 
 describe('Jungle Scout Task 11 adapters', () => {
   let server: Server | undefined;
@@ -82,5 +86,33 @@ describe('Jungle Scout Task 11 adapters', () => {
       keyword: 'faucet mat'
     });
     expect(result.data.rows).toEqual([{ asin: 'B0ASINTEST', share: 0.12 }]);
+  });
+
+  it('builds approved Task 11 request shapes', () => {
+    expect(buildHistoricalSearchVolumeRequest({ marketplace: 'us', keyword: 'faucet mat' })).toEqual({
+      path: '/api/keywords/historical_search_volume?marketplace=us&keyword=faucet+mat',
+      method: 'GET'
+    });
+    expect(buildSalesEstimatesRequest({ marketplace: 'us', asins: ['B0ASINTEST'] })).toMatchObject({
+      path: '/api/sales_estimates_query',
+      method: 'POST'
+    });
+    expect(buildShareOfVoiceRequest({ marketplace: 'us', keyword: 'faucet mat' })).toEqual({
+      path: '/api/share_of_voice?marketplace=us&keyword=faucet+mat',
+      method: 'GET'
+    });
+  });
+
+  it('returns empty parsed data for malformed Task 11 bodies', async () => {
+    const client = await listen((_request, response) => {
+      response.setHeader('content-type', 'application/vnd.api+json');
+      response.end(JSON.stringify({ not: 'jsonapi' }));
+    });
+    const historical = await queryHistoricalSearchVolume(client, {
+      marketplace: 'us',
+      keyword: 'faucet mat'
+    });
+    expect(historical.data.points).toEqual([]);
+    expect(historical.status).toBe(200);
   });
 });

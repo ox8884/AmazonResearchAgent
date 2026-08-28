@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
 import { ProductDatabasePageSchema } from '@ara/jungle-scout';
 import type { Job } from '@ara/queue';
-import { createJobHandlers } from '../handlers';
+import { createJobHandlers, resolveJobHandler } from '../handlers';
+
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -203,9 +204,26 @@ integration('production MARKET_PROBE wiring', () => {
     expect(mock.hits()).toBe(1);
     expect(checkpoint).toMatchObject({ phase: 'completed' });
     expect(families?.length ?? 0).toBeGreaterThan(0);
+    const { data: probed } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: deepJobs } = await client
+      .from('jobs')
+      .select('id,type')
+      .eq('idempotency_key', `deep-validation:${candidateId}`);
+    if (probed?.state === 'Watch' || probed?.state === 'Needs Review') {
+      expect(deepJobs).toHaveLength(1);
+      expect(deepJobs?.[0]?.type).toBe('DEEP_VALIDATION');
+    } else {
+      expect(deepJobs ?? []).toHaveLength(0);
+    }
+    await client.from('jobs').delete().eq('idempotency_key', `deep-validation:${candidateId}`);
   });
 
   // Break: missing Jungle Scout env crashes the worker or leaks a secret.
+
   it('fails MARKET_PROBE as configuration error without leaking secrets', async () => {
     delete process.env.JUNGLE_SCOUT_KEY_NAME;
     delete process.env.JUNGLE_SCOUT_API_KEY;
@@ -223,4 +241,28 @@ integration('production MARKET_PROBE wiring', () => {
       })
     ).rejects.toThrow(/Jungle Scout is not configured/u);
   });
+
+  it('resolves production DEEP_VALIDATION and ENRICH_STRONG_POTENTIAL handlers', () => {
+    const handlers = createJobHandlers(client, {
+      apiBudget: {
+        authorize: async () => ({ kind: 'blocked_policy', cacheKey: 'x', reason: 'test' })
+      },
+      queryProductDatabase: async () => ({
+        page: fixture,
+        httpAttempts: 1,
+        status: 200
+      }),
+      queryKeyword: async () => ({
+        keyword: 'x',
+        monthlySearchVolume: null,
+        isUpperBound: false
+      })
+    });
+    expect(resolveJobHandler(handlers, 'DEEP_VALIDATION')).toBe(handlers.DEEP_VALIDATION);
+    expect(resolveJobHandler(handlers, 'ENRICH_STRONG_POTENTIAL')).toBe(
+      handlers.ENRICH_STRONG_POTENTIAL
+    );
+    expect(resolveJobHandler(handlers, 'MARKET_PROBE')).toBe(handlers.MARKET_PROBE);
+  });
 });
+

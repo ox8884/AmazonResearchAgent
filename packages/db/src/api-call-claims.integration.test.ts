@@ -119,4 +119,39 @@ describe('api_call_claims RPC', () => {
     });
     expect(cache).toBeUndefined();
   });
+
+  it('lets another worker reclaim after the lease expires', async () => {
+    const cacheKey = `db-it-claim-${randomUUID()}`;
+    const [first] = await sql<ClaimRow[]>`
+      select decision_kind from claim_api_call(${cacheKey}, 'worker-a', 60)
+    `;
+    await sql`
+      update api_call_claims
+      set claimed_until = now() - interval '1 second'
+      where cache_key = ${cacheKey}
+    `;
+    const [second] = await sql<ClaimRow[]>`
+      select decision_kind from claim_api_call(${cacheKey}, 'worker-b', 60)
+    `;
+    const [row] = await sql<{ owner: string }[]>`
+      select owner from api_call_claims where cache_key = ${cacheKey}
+    `;
+    expect(first?.decision_kind).toBe('claimed');
+    expect(second?.decision_kind).toBe('claimed');
+    expect(row?.owner).toBe('worker-b');
+  });
+
+  it('returns cache_hit after a completed cache row exists', async () => {
+    const cacheKey = `db-it-claim-${randomUUID()}`;
+    await sql`select claim_api_call(${cacheKey}, 'worker-a', 60)`;
+    await sql`select complete_api_call_claim(${cacheKey}, 'worker-a')`;
+    await sql`
+      insert into api_cache (cache_key, endpoint, response, expires_at)
+      values (${cacheKey}, 'product_database', '{}'::jsonb, now() + interval '1 hour')
+    `;
+    const [row] = await sql<ClaimRow[]>`
+      select decision_kind from claim_api_call(${cacheKey}, 'worker-b', 60)
+    `;
+    expect(row?.decision_kind).toBe('cache_hit');
+  });
 });

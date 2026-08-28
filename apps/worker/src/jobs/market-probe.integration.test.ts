@@ -1,15 +1,24 @@
 import { randomUUID } from 'node:crypto';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
-import { JungleScoutClientError, ProductDatabasePageSchema } from '@ara/jungle-scout';
+import {
+  JungleScoutClient,
+  JungleScoutClientError,
+  ProductDatabasePageSchema,
+  queryProductDatabase
+} from '@ara/jungle-scout';
 import { makeApiCacheKey } from '@ara/shared';
 import { createQueue } from '@ara/queue';
 import { runMarketProbe } from './market-probe';
 import { PostgresApiBudget } from './postgres-api-budget';
+
 
 
 
@@ -171,25 +180,50 @@ integration('market probe job', () => {
 
   it('persists three HTTP attempts when Product Database recovers after two 500s', async () => {
     const { candidateId } = await seedSinkCandidate();
-    const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
-    await runMarketProbe(
-      { candidateId, locale: 'ko' },
-      {
-        client,
-        budget,
-        queryProductDatabase: async () => ({
-          page: fixture,
-          httpAttempts: 3,
-          status: 200
-        })
+    let hits = 0;
+    const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      hits += 1;
+      if (hits < 3) {
+        response.statusCode = 500;
+        response.end(JSON.stringify({ errors: [{ status: '500' }] }));
+        return;
       }
-    );
+      response.setHeader('content-type', 'application/vnd.api+json');
+      response.end(JSON.stringify(fixture));
+    });
+    http.listen(0, '127.0.0.1');
+    await once(http, 'listening');
+    const address = http.address() as AddressInfo;
+    const jsClient = new JungleScoutClient({
+      keyName: 'AI',
+      apiKey: 'secret-key',
+      baseUrl: `http://127.0.0.1:${address.port}`
+    });
+    const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
+    try {
+      await runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget,
+          queryProductDatabase: (phrases) =>
+            queryProductDatabase(jsClient, {
+              marketplace: 'us',
+              phrases: [...phrases]
+            })
+        }
+      );
+
+    } finally {
+      http.close();
+    }
     const { data: usage } = await client
       .from('api_usage')
       .select('call_count,retry_count,http_status,success')
       .eq('candidate_id', candidateId)
       .eq('endpoint', 'product_database')
       .maybeSingle();
+    expect(hits).toBe(3);
     expect(usage).toMatchObject({
       call_count: 3,
       retry_count: 2,
@@ -197,6 +231,58 @@ integration('market probe job', () => {
       success: true
     });
   });
+
+  it('persists terminal Product Database failure without a success row', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    let hits = 0;
+    const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      hits += 1;
+      response.statusCode = 500;
+      response.end(JSON.stringify({ errors: [{ status: '500' }] }));
+    });
+    http.listen(0, '127.0.0.1');
+    await once(http, 'listening');
+    const address = http.address() as AddressInfo;
+    const jsClient = new JungleScoutClient({
+      keyName: 'AI',
+      apiKey: 'secret-key',
+      baseUrl: `http://127.0.0.1:${address.port}`
+    });
+    const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
+    try {
+      await expect(
+        runMarketProbe(
+          { candidateId, locale: 'ko' },
+          {
+            client,
+            budget,
+            queryProductDatabase: (phrases) =>
+              queryProductDatabase(jsClient, {
+                marketplace: 'us',
+                phrases: [...phrases]
+              })
+
+          }
+        )
+      ).rejects.toBeInstanceOf(JungleScoutClientError);
+    } finally {
+      http.close();
+    }
+    const { data: usage } = await client
+      .from('api_usage')
+      .select('call_count,retry_count,http_status,success')
+      .eq('candidate_id', candidateId)
+      .eq('endpoint', 'product_database');
+    expect(hits).toBe(3);
+    expect(usage).toHaveLength(1);
+    expect(usage?.[0]).toMatchObject({
+      call_count: 3,
+      retry_count: 2,
+      http_status: 500,
+      success: false
+    });
+  });
+
 
   it('defers normal research when only reserve remains', async () => {
     const { candidateId } = await seedSinkCandidate();
@@ -298,6 +384,13 @@ integration('market probe job', () => {
   it('does not re-reserve budget when the same Product Database job retries after failure', async () => {
     const { candidateId } = await seedSinkCandidate();
     const budget = new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, 'retry-owner');
+    const { data: before } = await client
+      .from('api_budget_daily')
+      .select('used_count')
+      .order('budget_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const usedBefore = before?.used_count ?? 0;
     await expect(
       runMarketProbe(
         { candidateId, locale: 'ko' },
@@ -322,14 +415,14 @@ integration('market probe job', () => {
         }
       }
     );
-    const { data: budgets } = await client
+    const { data: after } = await client
       .from('api_budget_daily')
       .select('used_count')
       .order('budget_date', { ascending: false })
       .limit(1)
       .maybeSingle();
     expect(calls).toBe(1);
-    expect(budgets?.used_count).toBe(1);
+    expect((after?.used_count ?? 0) - usedBefore).toBe(1);
   });
 
   it('does not HTTP again when a staged response exists before api_cache persist', async () => {
@@ -415,6 +508,28 @@ integration('market probe job', () => {
     const completed = await first;
     expect(completed.checkpoint.phase).toBe('completed');
   });
+
+  it('reuses durable cache after the first worker completes the logical call', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    const budget = new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, 'cache-owner');
+    let calls = 0;
+    const query = async () => {
+      calls += 1;
+      return { page: fixture, httpAttempts: 1, status: 200 };
+    };
+    const first = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget, queryProductDatabase: query }
+    );
+    const second = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget, queryProductDatabase: query }
+    );
+    expect(first.realCalls).toBe(1);
+    expect(second.realCalls).toBe(0);
+    expect(calls).toBe(1);
+  });
 });
+
 
 

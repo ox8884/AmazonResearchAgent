@@ -53,6 +53,8 @@ export async function runEnrichStrongPotential(
       .map((product) => product.asin)
       .filter((asin): asin is string => typeof asin === 'string' && asin.length > 0);
   }
+  asins = [...new Set(asins)];
+
 
 
 
