@@ -1054,6 +1054,288 @@ integration('market probe job', () => {
 
   });
 
+  it('keeps a durable Market Probe after a pre-expiry in-flight continuation', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const expandedKey = makeApiCacheKey({
+      endpoint: 'product_database',
+      marketplace: 'us',
+      phrases: expandedPhrases
+    });
+    const queue = createQueue(client);
+    const workerId = `expand-preexpiry-${candidateId}`;
+    let expandedHits = 0;
+    const failingQuery = async (phrases: readonly string[]) => {
+      if (phrases.join('\0') === expandedPhrases.join('\0')) {
+        expandedHits += 1;
+        throw new JungleScoutClientError('expanded provider 500', 500, true, 3);
+      }
+      expect(phrases).toEqual(literalPhrases);
+      return { page: emptyPage, httpAttempts: 1, status: 200 };
+    };
+    await queue.enqueueJob({
+      type: 'MARKET_PROBE',
+      payload: { candidateId, locale: 'ko' },
+      idempotencyKey: `market-probe:${candidateId}`
+    });
+    const firstClaimed = await queue.claimJobs(workerId, 1, 60);
+    const firstJob = firstClaimed[0];
+    if (!firstJob) {
+      throw new Error('Did not claim the initial MARKET_PROBE job.');
+    }
+    const handlers = createJobHandlers(client, { queryProductDatabase: failingQuery });
+    await runJob(firstJob, {
+      queue,
+      handlers,
+      workerId,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    const { data: usage } = await client
+      .from('api_usage')
+      .select('call_count,retry_count,http_status,success')
+      .eq('candidate_id', candidateId)
+      .eq('cache_key', expandedKey);
+    expect(usage).toHaveLength(1);
+    expect(usage?.[0]).toMatchObject({
+      call_count: 3,
+      retry_count: 2,
+      http_status: 500,
+      success: false
+    });
+    const { data: failed } = await client
+      .from('jobs')
+      .select('id,status')
+      .eq('id', firstJob.id)
+      .single();
+    expect(failed?.status).toBe('queued');
+    expect(expandedHits).toBe(1);
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', firstJob.id);
+    const retryClaimed = await queue.claimJobs(workerId, 1, 60);
+    const retryJob = retryClaimed.find((job) => job.id === firstJob.id);
+    if (!retryJob) {
+      throw new Error('Did not claim the MARKET_PROBE retry.');
+    }
+    await runJob(retryJob, {
+      queue,
+      handlers,
+      workerId,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    const { data: claim } = await client
+      .from('api_call_claims')
+      .select('claimed_until')
+      .eq('cache_key', expandedKey)
+      .single();
+    const claimedUntilMs = Date.parse(claim?.claimed_until ?? '');
+    expect(claimedUntilMs).toBeGreaterThan(Date.now());
+    const { data: afterRetry } = await client
+      .from('jobs')
+      .select('status,checkpoint')
+      .eq('id', firstJob.id)
+      .single();
+    expect(afterRetry?.checkpoint).toMatchObject({ phase: 'in_flight' });
+    expect(expandedHits).toBe(1);
+    const { data: firstContinuations } = await client
+      .from('jobs')
+      .select('id,status,type,payload')
+      .like('idempotency_key', `market-probe-inflight:${candidateId}:%`)
+      .neq('id', firstJob.id);
+    const firstContinuation = firstContinuations?.[0];
+    if (!firstContinuation) {
+      throw new Error('Expected an in-flight continuation after the production retry.');
+    }
+    expect(firstContinuation.type).toBe('MARKET_PROBE');
+    expect(firstContinuation.payload).toMatchObject({ candidateId, locale: 'ko' });
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', firstContinuation.id);
+    const preExpiryClaimed = await queue.claimJobs(`${workerId}-early`, 1, 60);
+    const preExpiryJob = preExpiryClaimed.find((job) => job.id === firstContinuation.id);
+    if (!preExpiryJob) {
+      throw new Error('Did not claim the in-flight continuation before lease expiry.');
+    }
+    await runJob(preExpiryJob, {
+      queue,
+      handlers,
+      workerId: `${workerId}-early`,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    expect(expandedHits).toBe(1);
+    expect(Date.parse(claim?.claimed_until ?? '')).toBeGreaterThan(Date.now());
+    const { data: afterEarly } = await client
+      .from('jobs')
+      .select('id,status,available_at,type,payload')
+      .eq('type', 'MARKET_PROBE')
+      .like('idempotency_key', `market-probe-inflight:${candidateId}:%`);
+    const future = (afterEarly ?? []).find(
+      (job) =>
+        job.status === 'queued' &&
+        Date.parse(job.available_at) >= claimedUntilMs &&
+        (job.id !== firstContinuation.id || job.status === 'queued')
+    );
+    expect(future).toBeTruthy();
+    expect(future?.id).not.toBe(firstContinuation.id);
+    expect(future?.type).toBe('MARKET_PROBE');
+    expect(future?.payload).toMatchObject({ candidateId, locale: 'ko' });
+    const { data: candidate } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: snapshots } = await client
+      .from('market_snapshots')
+      .select('id')
+      .eq('candidate_id', candidateId);
+    const { data: downstream } = await client
+      .from('jobs')
+      .select('id')
+      .eq('idempotency_key', `deep-validation:${candidateId}`);
+    expect(candidate?.state).not.toBe('Watch');
+    expect(candidate?.state).not.toBe('Needs Review');
+    expect(snapshots ?? []).toHaveLength(0);
+    expect(downstream ?? []).toHaveLength(0);
+    await client
+      .from('api_call_claims')
+      .update({ claimed_until: new Date(0).toISOString() })
+      .eq('cache_key', expandedKey);
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', future?.id ?? '');
+    const postExpiryClaimed = await queue.claimJobs(`${workerId}-reclaim`, 1, 60);
+    const postExpiryJob = postExpiryClaimed.find((job) => job.id === future?.id);
+    if (!postExpiryJob) {
+      throw new Error('Did not claim the post-expiry MARKET_PROBE job.');
+    }
+    await runJob(postExpiryJob, {
+      queue,
+      handlers: createJobHandlers(client, {
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }),
+      workerId: `${workerId}-reclaim`,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    expect(expandedHits).toBe(2);
+    const { data: completedFuture } = await client
+      .from('jobs')
+      .select('status')
+      .eq('id', future?.id ?? '')
+      .single();
+    expect(completedFuture?.status).toBe('completed');
+    const { data: leftover } = await client
+      .from('jobs')
+      .select('id')
+      .like('idempotency_key', `market-probe-inflight:${candidateId}:%`)
+      .eq('status', 'queued');
+    expect(leftover ?? []).toHaveLength(0);
+  });
+
+  it('collapses concurrent in-flight resumes onto one reclaim-window job', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const queue = createQueue(client);
+    const ownerA = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-conc-a-${candidateId}`
+    );
+    const ownerB = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-conc-b-${candidateId}`
+    );
+    const ownerC = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-conc-c-${candidateId}`
+    );
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: (() => void) | undefined;
+    const startedAtQuery = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const enqueueResume = async (input: {
+      candidateId: string;
+      locale: 'ko';
+      availableAt: string;
+      idempotencyKey: string;
+    }) => {
+      await queue.enqueueJob({
+        type: 'MARKET_PROBE',
+        payload: { candidateId: input.candidateId, locale: input.locale },
+        idempotencyKey: input.idempotencyKey,
+        availableAt: input.availableAt
+      });
+    };
+    const first = runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget: ownerA,
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            started?.();
+            await held;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          expect(phrases).toEqual(literalPhrases);
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+    await startedAtQuery;
+    const observers = await Promise.all([
+      runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget: ownerB,
+          queryProductDatabase: async () => {
+            throw new Error('observer B must not call the provider');
+          },
+          enqueueResume
+        }
+      ),
+      runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget: ownerC,
+          queryProductDatabase: async () => {
+            throw new Error('observer C must not call the provider');
+          },
+          enqueueResume
+        }
+      )
+    ]);
+    expect(observers.map((result) => result.checkpoint.phase)).toEqual(['in_flight', 'in_flight']);
+    const { data: inflightJobs } = await client
+      .from('jobs')
+      .select('id')
+      .like('idempotency_key', `market-probe-inflight:${candidateId}:%`);
+    expect(inflightJobs).toHaveLength(1);
+    release?.();
+    await first;
+  });
+
+
 
 });
 

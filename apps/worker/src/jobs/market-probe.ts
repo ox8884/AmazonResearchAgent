@@ -27,6 +27,9 @@ import { nextBudgetResetAt } from './budget-reset';
 
 export { nextBudgetResetAt };
 
+const API_CLAIM_LEASE_MS = 120_000;
+const IN_FLIGHT_RECLAIM_MARGIN_MS = 1_000;
+
 export type MarketProbePhase =
   | 'budget_authorized'
   | 'api_fetched'
@@ -123,6 +126,43 @@ async function persistDecision(
   }
 }
 
+async function scheduleInFlightResume(input: {
+  readonly client: QueueDatabaseClient;
+  readonly candidateId: string;
+  readonly locale: Locale;
+  readonly cacheKey: string;
+  readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
+}): Promise<void> {
+  const { data } = await input.client
+    .from('api_call_claims')
+    .select('claimed_until')
+    .eq('cache_key', input.cacheKey)
+    .maybeSingle();
+  const claimedUntilMs = data?.claimed_until ? Date.parse(data.claimed_until) : Number.NaN;
+  const reclaimMs = Number.isFinite(claimedUntilMs)
+    ? claimedUntilMs + IN_FLIGHT_RECLAIM_MARGIN_MS
+    : Date.now() + API_CLAIM_LEASE_MS + IN_FLIGHT_RECLAIM_MARGIN_MS;
+  const availableAt = new Date(reclaimMs).toISOString();
+  const reclaimBucket = Number.isFinite(claimedUntilMs)
+    ? new Date(claimedUntilMs).toISOString().slice(0, 19)
+    : availableAt.slice(0, 19);
+  const baseKey = `market-probe-inflight:${input.candidateId}:${input.cacheKey}:${reclaimBucket}`;
+  const { data: existing } = await input.client
+    .from('jobs')
+    .select('status')
+    .eq('idempotency_key', baseKey)
+    .maybeSingle();
+  const idempotencyKey =
+    existing && existing.status !== 'queued' ? `${baseKey}:reclaim` : baseKey;
+  await input.enqueueResume?.({
+    candidateId: input.candidateId,
+    locale: input.locale,
+    availableAt,
+    idempotencyKey
+  });
+}
+
+
 async function exitUnavailableAuthorization(input: {
   readonly kind: 'deferred_budget' | 'in_flight' | 'blocked_policy';
   readonly client: QueueDatabaseClient;
@@ -150,12 +190,12 @@ async function exitUnavailableAuthorization(input: {
     return { checkpoint, realCalls: input.realCalls };
   }
   if (input.kind === 'in_flight') {
-    const availableAt = new Date(Date.now() + 15_000).toISOString();
-    await input.enqueueResume?.({
+    await scheduleInFlightResume({
+      client: input.client,
       candidateId: input.candidateId,
       locale: input.locale,
-      availableAt,
-      idempotencyKey: `market-probe-inflight:${input.candidateId}:${input.cacheKey}`
+      cacheKey: input.cacheKey,
+      enqueueResume: input.enqueueResume
     });
     const checkpoint = { phase: 'in_flight' as const, cacheKey: input.cacheKey };
     await input.onCheckpoint?.(checkpoint);
