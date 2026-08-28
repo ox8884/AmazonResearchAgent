@@ -53,5 +53,13 @@ describe('AI provider schemas', () => {
     expect(() => assertPersistableModelId('super-secret', 'super-secret')).toThrow(
       UnsafeModelIdError
     );
+    expect(() =>
+      assertPersistableModelId(
+        'model-settings-api-secret-value',
+        'settings-api-secret-value'
+      )
+    ).toThrow(UnsafeModelIdError);
+    expect(assertPersistableModelId('model-ab', 'ab')).toBe('model-ab');
   });
+
 });

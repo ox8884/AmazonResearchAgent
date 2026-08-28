@@ -88,8 +88,16 @@ export function assertPersistableModelId(
   if (secretPlaintext && parsed === secretPlaintext) {
     throw new UnsafeModelIdError('Model ID must not equal provider secret material.');
   }
+  if (
+    secretPlaintext &&
+    secretPlaintext.length >= 16 &&
+    parsed.includes(secretPlaintext)
+  ) {
+    throw new UnsafeModelIdError('Model ID must not contain provider secret material.');
+  }
   return parsed;
 }
+
 
 export const AiModelDescriptorSchema = z.object({
   providerId: z.string().trim().min(1),
