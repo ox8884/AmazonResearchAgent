@@ -9,7 +9,9 @@ export type SalesEstimatesInput = z.infer<typeof SalesEstimatesInputSchema>;
 
 const SalesEstimateSchema = z.object({
   asin: z.string(),
-  estimatedMonthlySales: z.number().nullable()
+  estimatedMonthlySales: z.number().nullable(),
+  prices: z.array(z.number()).optional(),
+  dailySales: z.array(z.number()).optional()
 });
 
 export const SalesEstimatesSchema = z.object({

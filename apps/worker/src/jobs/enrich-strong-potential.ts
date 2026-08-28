@@ -1,30 +1,112 @@
 import type { ApiBudget } from '@ara/api-budget';
-import { authorizeApiCall, DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
-import { makeApiCacheKey } from '@ara/shared';
+import { DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
+import type { Json } from '@ara/db';
+import { makeApiCacheKey, type Locale } from '@ara/shared';
 import type { QueueDatabaseClient } from '@ara/queue';
 import type {
   HistoricalSearchVolumeQueryResult,
   SalesEstimatesQueryResult,
   ShareOfVoiceQueryResult
 } from '@ara/jungle-scout';
-
+import {
+  analyzeHistoricalSearchVolume,
+  analyzeSalesEstimates,
+  analyzeShareOfVoice,
+  scoreMarketOpportunity,
+  type MarketMetrics
+} from '@ara/research-engine';
+import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
 
 export interface EnrichStrongPotentialOptions {
   readonly budget?: ApiBudget;
   readonly keyword?: string;
   readonly asins?: readonly string[];
+  readonly locale?: Locale;
   readonly queryHistoricalSearchVolume?: (
     keyword: string
   ) => Promise<HistoricalSearchVolumeQueryResult>;
   readonly querySalesEstimates?: (asins: readonly string[]) => Promise<SalesEstimatesQueryResult>;
   readonly queryShareOfVoice?: (keyword: string) => Promise<ShareOfVoiceQueryResult>;
+  enqueueResume?(input: {
+    readonly candidateId: string;
+    readonly locale: Locale;
+    readonly availableAt: string;
+    readonly idempotencyKey: string;
+  }): Promise<void>;
+}
+
+export interface EnrichStrongPotentialResult {
+  readonly differentiationMode: 'listing_proxy' | 'missing' | 'review_text';
+  readonly completed: boolean;
+  readonly analysisVerdict: 'Reject' | 'Watch' | 'Needs Review' | 'strong_potential' | null;
+  readonly salesAsins: readonly string[];
+}
+
+function asJson(value: unknown): Json {
+  return JSON.parse(JSON.stringify(value)) as Json;
+}
+
+function relevantAsinsFrom(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object' || !('asins' in payload)) {
+    return [];
+  }
+  const asins = (payload as { asins?: unknown }).asins;
+  if (!Array.isArray(asins)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      asins.filter((asin): asin is string => typeof asin === 'string' && asin.length > 0)
+    )
+  ].sort();
+}
+
+async function persistEvidence(
+  client: QueueDatabaseClient,
+  candidateId: string,
+  kind: string,
+  payload: unknown
+): Promise<void> {
+  const { error } = await client.from('candidate_evidence').insert({
+    candidate_id: candidateId,
+    kind,
+    payload: asJson(payload)
+  });
+  if (error) {
+    throw new Error(`Could not persist ${kind} evidence: ${error.message}`);
+  }
+}
+
+async function runEndpoint(input: {
+  readonly client: QueueDatabaseClient;
+  readonly budget: ApiBudget;
+  readonly candidateId: string;
+  readonly endpoint: 'historical_search_volume' | 'sales_estimates' | 'share_of_voice';
+  readonly phrases: readonly string[];
+  readonly query: () => Promise<{ payload: unknown; httpAttempts: number; status: number }>;
+}): Promise<BudgetedCallOutcome> {
+  return executeBudgetedApiCall({
+    client: input.client,
+    budget: input.budget,
+    candidateId: input.candidateId,
+    endpoint: input.endpoint,
+    cacheKey: makeApiCacheKey({
+      endpoint: input.endpoint,
+      marketplace: 'us',
+      phrases: [...input.phrases],
+      version: 'v1'
+    }),
+    purpose: 'strong_revalidation',
+    ttlMs: DEFAULT_CACHE_TTL_MS[input.endpoint],
+    query: input.query
+  });
 }
 
 export async function runEnrichStrongPotential(
   candidateId: string,
   client: QueueDatabaseClient,
   options: EnrichStrongPotentialOptions = {}
-): Promise<{ differentiationMode: 'listing_proxy' | 'missing' }> {
+): Promise<EnrichStrongPotentialResult> {
   const { data: candidate, error } = await client
     .from('candidates')
     .select('id,state,keyword,niche_cluster_id')
@@ -33,166 +115,305 @@ export async function runEnrichStrongPotential(
   if (error || !candidate) {
     throw new Error('Enrichment candidate was not found.');
   }
-  if (candidate.state !== 'Watch') {
-    return { differentiationMode: 'missing' };
+  if (candidate.state !== 'Watch' && candidate.state !== 'Needs Review') {
+    return {
+      differentiationMode: 'missing',
+      completed: false,
+      analysisVerdict: null,
+      salesAsins: []
+    };
   }
 
   const keyword = options.keyword ?? candidate.keyword;
   const budget = options.budget;
+  const locale = options.locale ?? 'ko';
   if (!budget || !keyword) {
-    return { differentiationMode: 'missing' };
+    return {
+      differentiationMode: 'missing',
+      completed: false,
+      analysisVerdict: null,
+      salesAsins: []
+    };
   }
 
   let asins = options.asins ? [...options.asins] : [];
-  if (asins.length === 0 && candidate.niche_cluster_id) {
-    const { data: products, error: productError } = await client
-      .from('products')
-      .select('asin')
-      .eq('niche_cluster_id', candidate.niche_cluster_id)
-      .order('asin', { ascending: true })
-      .limit(20);
-    if (productError) {
-      throw new Error(`Could not load Sales Estimates ASINs: ${productError.message}`);
+  if (asins.length === 0) {
+    const { data: relevant, error: relevantError } = await client
+      .from('candidate_evidence')
+      .select('payload')
+      .eq('candidate_id', candidateId)
+      .eq('kind', 'relevant_asins')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (relevantError) {
+      throw new Error(`Could not load relevant ASINs: ${relevantError.message}`);
     }
-    asins = (products ?? [])
-      .map((product) => product.asin)
-      .filter((asin): asin is string => typeof asin === 'string' && asin.length > 0);
+    asins = relevantAsinsFrom(relevant?.payload);
   }
-  asins = [...new Set(asins)];
+  asins = [...new Set(asins)].sort();
 
+  const incomplete = async (outcome: Extract<BudgetedCallOutcome, { kind: 'deferred_budget' | 'in_flight' }>) => {
+    await options.enqueueResume?.({
+      candidateId,
+      locale,
+      availableAt: outcome.availableAt,
+      idempotencyKey:
+        outcome.kind === 'deferred_budget'
+          ? `enrich-resume:${candidateId}:${outcome.availableAt.slice(0, 10)}`
+          : `enrich-inflight:${candidateId}`
+    });
+    return {
+      differentiationMode: 'missing' as const,
+      completed: false,
+      analysisVerdict: null,
+      salesAsins: asins
+    };
+  };
 
-
-
-
+  let historicalPayload: unknown;
   if (options.queryHistoricalSearchVolume) {
     const queryHistorical = options.queryHistoricalSearchVolume;
-    await persistEndpoint({
+    const outcome = await runEndpoint({
       client,
       budget,
       candidateId,
       endpoint: 'historical_search_volume',
       phrases: [keyword],
-      query: async () => queryHistorical(keyword)
+      query: async () => {
+        const fetched = await queryHistorical(keyword);
+        return {
+          payload: fetched.data,
+          httpAttempts: fetched.httpAttempts,
+          status: fetched.status
+        };
+      }
     });
+    if (outcome.kind === 'blocked_policy') {
+      return {
+        differentiationMode: 'missing',
+        completed: false,
+        analysisVerdict: null,
+        salesAsins: asins
+      };
+    }
+    if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
+      return incomplete(outcome);
+    }
+    historicalPayload = outcome.payload;
+    await persistEvidence(client, candidateId, 'historical_search_volume', historicalPayload);
   }
+
   if (options.querySalesEstimates && asins.length > 0) {
     const querySales = options.querySalesEstimates;
-    await persistEndpoint({
+    const outcome = await runEndpoint({
       client,
       budget,
       candidateId,
       endpoint: 'sales_estimates',
       phrases: asins,
-      query: async () => querySales(asins)
+      query: async () => {
+        const fetched = await querySales(asins);
+        return {
+          payload: fetched.data,
+          httpAttempts: fetched.httpAttempts,
+          status: fetched.status
+        };
+      }
     });
+    if (outcome.kind === 'blocked_policy') {
+      return {
+        differentiationMode: 'missing',
+        completed: false,
+        analysisVerdict: null,
+        salesAsins: asins
+      };
+    }
+    if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
+      return incomplete(outcome);
+    }
+    await persistEvidence(client, candidateId, 'sales_estimates', outcome.payload);
+    const estimates =
+      outcome.payload && typeof outcome.payload === 'object' && 'estimates' in outcome.payload
+        ? (outcome.payload as { estimates: Array<{ estimatedMonthlySales: number | null; prices?: number[] }> })
+            .estimates
+        : [];
+    await persistEvidence(
+      client,
+      candidateId,
+      'sales_estimates_analysis',
+      analyzeSalesEstimates({
+        monthlySales: estimates.map((row) => row.estimatedMonthlySales),
+        prices: estimates.flatMap((row) => row.prices ?? [])
+      })
+    );
   }
 
   if (options.queryShareOfVoice) {
     const queryShare = options.queryShareOfVoice;
-    await persistEndpoint({
+    const outcome = await runEndpoint({
       client,
       budget,
       candidateId,
       endpoint: 'share_of_voice',
       phrases: [keyword],
-      query: async () => queryShare(keyword)
+      query: async () => {
+        const fetched = await queryShare(keyword);
+        return {
+          payload: fetched.data,
+          httpAttempts: fetched.httpAttempts,
+          status: fetched.status
+        };
+      }
     });
-  }
-
-  const { error: economicsError } = await client.from('candidate_evidence').insert({
-    candidate_id: candidateId,
-    kind: 'economics',
-    payload: {
-      economicsSource: 'estimated_assumption',
-      salePrice: null,
-      amazonFees: null,
-      differentiationEvidenceMode: 'missing',
-      note: 'Allowable landed cost is not computed without observed sale price and Amazon fees.'
+    if (outcome.kind === 'blocked_policy') {
+      return {
+        differentiationMode: 'missing',
+        completed: false,
+        analysisVerdict: null,
+        salesAsins: asins
+      };
     }
-  });
-  if (economicsError) {
-    throw new Error(`Could not persist economics evidence: ${economicsError.message}`);
+    if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
+      return incomplete(outcome);
+    }
+    await persistEvidence(client, candidateId, 'share_of_voice', outcome.payload);
+    const { data: products, error: productError } = await client
+      .from('products')
+      .select('asin,brand')
+      .in('asin', asins.length > 0 ? asins : ['']);
+    if (productError) {
+      throw new Error(`Could not load brand mapping: ${productError.message}`);
+    }
+    const brandByAsin: Record<string, string | null> = {};
+    for (const product of products ?? []) {
+      if (typeof product.asin === 'string') {
+        brandByAsin[product.asin] = typeof product.brand === 'string' ? product.brand : null;
+      }
+    }
+    const rows =
+      outcome.payload && typeof outcome.payload === 'object' && 'rows' in outcome.payload
+        ? (outcome.payload as { rows: Array<{ asin: string; share: number | null }> }).rows
+        : [];
+    await persistEvidence(
+      client,
+      candidateId,
+      'share_of_voice_analysis',
+      analyzeShareOfVoice({ rows, brandByAsin })
+    );
   }
 
-  return { differentiationMode: 'missing' };
-}
-
-async function persistEndpoint(input: {
-  readonly client: QueueDatabaseClient;
-  readonly budget: ApiBudget;
-  readonly candidateId: string;
-  readonly endpoint: 'historical_search_volume' | 'sales_estimates' | 'share_of_voice';
-  readonly phrases: readonly string[];
-  readonly query?: () => Promise<
-    | HistoricalSearchVolumeQueryResult
-    | SalesEstimatesQueryResult
-    | ShareOfVoiceQueryResult
-    | undefined
-  >;
-}): Promise<void> {
-  if (!input.query) {
-    return;
-  }
-  const cacheKey = makeApiCacheKey({
-    endpoint: input.endpoint,
-    marketplace: 'us',
-    phrases: [...input.phrases],
-    version: 'v1'
-  });
-  const decision = await authorizeApiCall(input.budget, {
-    purpose: 'strong_revalidation',
-    estimatedCalls: 1,
-    cacheKey,
-    endpoint: input.endpoint
-  });
-  if (decision.kind !== 'allowed' && decision.kind !== 'cache_hit') {
-    return;
-  }
-  if (decision.kind === 'cache_hit') {
-    return;
-  }
-  const fetched = await input.query();
-  if (!fetched) {
-    return;
-  }
-  await input.budget.stage?.(cacheKey, {
-    data: fetched.data,
-    status: fetched.status,
-    httpAttempts: fetched.httpAttempts
-  });
-  const { error: cacheError } = await input.client.from('api_cache').upsert({
-    cache_key: cacheKey,
-    endpoint: input.endpoint,
-    response: fetched.data,
-    captured_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + DEFAULT_CACHE_TTL_MS[input.endpoint]).toISOString()
-  });
-  if (cacheError) {
-    throw new Error(`Could not persist API cache: ${cacheError.message}`);
+  if (historicalPayload && typeof historicalPayload === 'object' && 'points' in historicalPayload) {
+    const analysis = analyzeHistoricalSearchVolume({
+      points: (historicalPayload as { points: Array<{ month: string; searchVolume: number | null }> })
+        .points
+    });
+    await persistEvidence(client, candidateId, 'historical_search_volume_analysis', analysis);
   }
 
-  const { error: usageError } = await input.client.from('api_usage').insert({
-    endpoint: input.endpoint,
-    cache_key: cacheKey,
-    purpose: 'strong_revalidation',
-    http_status: fetched.status,
-    call_count: fetched.httpAttempts,
-    retry_count: Math.max(0, fetched.httpAttempts - 1),
-    cached: false,
-    success: true,
-    candidate_id: input.candidateId,
-    budget_date: new Date().toISOString().slice(0, 10)
+  await persistEvidence(client, candidateId, 'economics', {
+    economicsSource: 'estimated_assumption',
+    salePrice: null,
+    amazonFees: null,
+    differentiationEvidenceMode: 'missing',
+    note: 'Allowable landed cost is not computed without observed sale price and Amazon fees.'
   });
-  if (usageError) {
-    throw new Error(`Could not persist API usage: ${usageError.message}`);
+
+  const { data: reviewEvidence } = await client
+    .from('candidate_evidence')
+    .select('id')
+    .eq('candidate_id', candidateId)
+    .eq('kind', 'review_text')
+    .maybeSingle();
+  const { data: verifiedEconomics } = await client
+    .from('candidate_evidence')
+    .select('payload')
+    .eq('candidate_id', candidateId)
+    .eq('kind', 'economics_verified')
+    .maybeSingle();
+  const differentiationMode = reviewEvidence ? 'review_text' : 'missing';
+  const verified =
+    verifiedEconomics?.payload &&
+    typeof verifiedEconomics.payload === 'object' &&
+    'salePrice' in verifiedEconomics.payload &&
+    'amazonFees' in verifiedEconomics.payload
+      ? (verifiedEconomics.payload as { salePrice: unknown; amazonFees: unknown })
+      : null;
+  const marginProvisional = !(
+    typeof verified?.salePrice === 'number' && typeof verified.amazonFees === 'number'
+  );
+
+  const { data: snapshot } = await client
+    .from('market_snapshots')
+    .select('metrics,observed_sample_sales')
+    .eq('candidate_id', candidateId)
+    .order('captured_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let snapshotMetrics: MarketMetrics | null = null;
+  const rawSnapshot = snapshot?.metrics;
+  if (rawSnapshot && typeof rawSnapshot === 'object' && 'metrics' in rawSnapshot) {
+    const inner: unknown = rawSnapshot.metrics;
+    if (inner && typeof inner === 'object' && 'observedSampleSales' in inner) {
+      snapshotMetrics = inner as MarketMetrics;
+    }
   }
-  const { error: evidenceError } = await input.client.from('candidate_evidence').insert({
-    candidate_id: input.candidateId,
-    kind: input.endpoint,
-    payload: fetched.data
+  const metrics: MarketMetrics = snapshotMetrics ?? {
+    observedSampleSales: snapshot?.observed_sample_sales ?? 0,
+    estimatedMarketSales: null,
+    top3SalesConcentration: 0,
+    top10AverageReviews: null,
+    medianReviews: null,
+    shareOver1000Reviews: 0,
+    brandConcentration: 0,
+    amazonRetailPresent: false,
+    familyCount: 0,
+    priceCompression: null,
+    newerLowReviewSellerSuccess: null,
+    historicalTrendConsistency: null
+  };
+
+  const score = scoreMarketOpportunity({
+    metrics,
+    hardFilterFailed: false,
+    marginProvisional,
+    differentiationMode,
+    ipRisk: false
   });
-  if (evidenceError) {
-    throw new Error(`Could not persist enrichment evidence: ${evidenceError.message}`);
+  const analysisVerdict =
+    score.verdict === 'Strong' ? 'strong_potential' : score.verdict;
+  await persistEvidence(client, candidateId, 'analysis_verdict', {
+    verdict: analysisVerdict,
+    total: score.total,
+    reasons: score.reasons,
+    candidateState: score.verdict === 'Strong' ? 'Watch' : score.verdict
+  });
+  const toState = score.verdict === 'Strong' ? 'Watch' : score.verdict;
+  if (toState !== candidate.state) {
+    const { error: stateError } = await client
+      .from('candidates')
+      .update({ state: toState })
+      .eq('id', candidateId);
+    if (stateError) {
+      throw new Error(`Could not persist analysis state: ${stateError.message}`);
+    }
   }
-  await input.budget.complete?.(cacheKey);
+  const { error: decisionError } = await client.from('decision_history').insert({
+    candidate_id: candidateId,
+    from_state: candidate.state,
+    to_state: toState,
+    reasons: asJson([{ code: 'ANALYSIS_VERDICT', detail: analysisVerdict }]),
+    decided_by: 'enrich-strong-potential',
+    idempotency_key: `enrich-verdict:${candidateId}:${analysisVerdict}`
+  });
+  if (decisionError && decisionError.code !== '23505') {
+    throw new Error(`Could not persist analysis verdict: ${decisionError.message}`);
+  }
+
+  return {
+    differentiationMode,
+    completed: true,
+    analysisVerdict,
+    salesAsins: asins
+  };
 }

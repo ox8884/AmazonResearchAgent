@@ -41,4 +41,15 @@ export type { MarketMetrics } from './market-metrics';
 export { scoreMarketOpportunity } from './scoring/market-score';
 export type { MarketScoreResult } from './scoring/market-score';
 export { calculateAllowableLandedCost } from './economics';
+export {
+  analyzeHistoricalSearchVolume,
+  analyzeSalesEstimates,
+  analyzeShareOfVoice
+} from './deep-evidence';
+export type {
+  HistoricalSearchAnalysis,
+  SalesEstimatesAnalysis,
+  ShareOfVoiceAnalysis
+} from './deep-evidence';
+
 export type { AllowableLandedCost } from './economics';
