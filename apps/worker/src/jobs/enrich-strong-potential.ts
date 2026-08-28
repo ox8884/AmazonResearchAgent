@@ -1,5 +1,5 @@
 import type { ApiBudget } from '@ara/api-budget';
-import { authorizeApiCall } from '@ara/api-budget';
+import { authorizeApiCall, DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
 import { makeApiCacheKey } from '@ara/shared';
 import type { QueueDatabaseClient } from '@ara/queue';
 import type {
@@ -7,6 +7,7 @@ import type {
   SalesEstimatesQueryResult,
   ShareOfVoiceQueryResult
 } from '@ara/jungle-scout';
+
 
 export interface EnrichStrongPotentialOptions {
   readonly budget?: ApiBudget;
@@ -135,16 +136,22 @@ async function persistEndpoint(input: {
   if (!fetched) {
     return;
   }
+  await input.budget.stage?.(cacheKey, {
+    data: fetched.data,
+    status: fetched.status,
+    httpAttempts: fetched.httpAttempts
+  });
   const { error: cacheError } = await input.client.from('api_cache').upsert({
     cache_key: cacheKey,
     endpoint: input.endpoint,
     response: fetched.data,
     captured_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    expires_at: new Date(Date.now() + DEFAULT_CACHE_TTL_MS[input.endpoint]).toISOString()
   });
   if (cacheError) {
     throw new Error(`Could not persist API cache: ${cacheError.message}`);
   }
+
   const { error: usageError } = await input.client.from('api_usage').insert({
     endpoint: input.endpoint,
     cache_key: cacheKey,

@@ -244,6 +244,9 @@ export function createJobHandlers(
     };
   }
   const queue = createQueue(client);
+  const budgetFor = (job: Job): ApiBudget =>
+    options.apiBudget ??
+    new PostgresApiBudget(client, readApiBudgetLimits(), `job:${job.id}:${job.attempts}`);
   handlers.MARKET_PROBE = async (job, context) => {
     const payload = MarketProbeJobPayloadSchema.parse(job.payload);
     const queryProductDatabase =
@@ -251,8 +254,8 @@ export function createJobHandlers(
     if (!options.queryProductDatabase) {
       readJungleScoutEnv();
     }
-    const apiBudget =
-      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    const apiBudget = budgetFor(job);
+
     const prior =
       typeof context.checkpoint === 'object' &&
       context.checkpoint !== null &&
@@ -297,13 +300,22 @@ export function createJobHandlers(
   };
   handlers.DEEP_VALIDATION = async (job) => {
     const payload = DeepValidationJobPayloadSchema.parse(job.payload);
-    const apiBudget =
-      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    const apiBudget = budgetFor(job);
+
     const result = await runDeepValidation(payload.candidateId, payload.locale, {
       client,
       budget: apiBudget,
-      queryKeyword: options.queryKeyword ?? createJungleScoutKeywordQuery()
+      queryKeyword: options.queryKeyword ?? createJungleScoutKeywordQuery(),
+      enqueueResume: async (input) => {
+        await queue.enqueueJob({
+          type: 'DEEP_VALIDATION',
+          payload: { candidateId: input.candidateId, locale: input.locale },
+          idempotencyKey: input.idempotencyKey,
+          availableAt: input.availableAt
+        });
+      }
     });
+
 
     const { data: deep } = await client
       .from('candidates')
@@ -323,8 +335,8 @@ export function createJobHandlers(
 
   handlers.ENRICH_STRONG_POTENTIAL = async (job) => {
     const payload = EnrichStrongPotentialJobPayloadSchema.parse(job.payload);
-    const apiBudget =
-      options.apiBudget ?? new PostgresApiBudget(client, readApiBudgetLimits());
+    const apiBudget = budgetFor(job);
+
     return runEnrichStrongPotential(payload.candidateId, client, {
       budget: apiBudget,
       queryHistoricalSearchVolume: createJungleScoutHistoricalSearchVolumeQuery(),
