@@ -33,7 +33,12 @@ export const ProductDatabaseProductSchema = z.object({
 export type ProductDatabaseProduct = z.infer<typeof ProductDatabaseProductSchema>;
 
 export const ProductDatabasePageSchema = z.object({
-  data: z.array(ProductDatabaseProductSchema)
+  data: z.array(ProductDatabaseProductSchema),
+  meta: z
+    .object({
+      result_count: z.number().optional()
+    })
+    .optional()
 });
 export type ProductDatabasePage = z.infer<typeof ProductDatabasePageSchema>;
 

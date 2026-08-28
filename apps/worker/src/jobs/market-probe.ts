@@ -157,15 +157,20 @@ export async function runMarketProbe(
     throw new Error('Market probe candidate was not found.');
   }
   let phrases: string[] = [candidate.keyword];
+  let aliases: string[] = [];
   if (candidate.niche_cluster_id) {
     const { data: cluster } = await dependencies.client
       .from('niche_clusters')
-      .select('catalog_phrases,canonical_name')
+      .select('catalog_phrases,canonical_name,aliases')
       .eq('id', candidate.niche_cluster_id)
       .maybeSingle();
     const catalog = cluster?.catalog_phrases;
     if (Array.isArray(catalog)) {
       phrases = catalog.filter((item): item is string => typeof item === 'string');
+    }
+    const clusterAliases = cluster?.aliases;
+    if (Array.isArray(clusterAliases)) {
+      aliases = clusterAliases.filter((item): item is string => typeof item === 'string');
     }
   }
   const cacheKey = makeApiCacheKey({
@@ -332,6 +337,54 @@ export async function runMarketProbe(
       }
       default:
         return assertNever(decision);
+    }
+  }
+
+  if (page && page.data.length === 0) {
+    const expanded = [...new Set([...phrases, ...aliases])].filter((phrase) => phrase.length > 0);
+    if (expanded.length > phrases.length) {
+      const expandedKey = makeApiCacheKey({
+        endpoint: 'product_database',
+        marketplace: 'us',
+        phrases: expanded
+      });
+      const expandDecision = await authorizeApiCall(dependencies.budget, {
+        purpose,
+        estimatedCalls: 1,
+        cacheKey: expandedKey,
+        endpoint: 'product_database'
+      });
+      if (expandDecision.kind === 'allowed') {
+        const fetched = await dependencies.queryProductDatabase(expanded);
+        page = fetched.page;
+        realCalls += fetched.httpAttempts;
+        const { error: expandUsageError } = await dependencies.client.from('api_usage').insert({
+          endpoint: 'product_database',
+          cache_key: expandedKey,
+          purpose,
+          http_status: fetched.status,
+          call_count: fetched.httpAttempts,
+          retry_count: Math.max(0, fetched.httpAttempts - 1),
+          cached: false,
+          success: true,
+          candidate_id: candidate.id,
+          niche_cluster_id: candidate.niche_cluster_id,
+          budget_date: new Date().toISOString().slice(0, 10)
+        });
+        if (expandUsageError) {
+          throw new Error(`Could not persist expanded API usage: ${expandUsageError.message}`);
+        }
+      }
+    }
+  }
+  if (page?.meta?.result_count !== undefined) {
+    const { error: coverageError } = await dependencies.client.from('candidate_evidence').insert({
+      candidate_id: candidate.id,
+      kind: 'product_database_coverage',
+      payload: asJson({ result_count: page.meta.result_count })
+    });
+    if (coverageError) {
+      throw new Error(`Could not persist coverage evidence: ${coverageError.message}`);
     }
   }
 
