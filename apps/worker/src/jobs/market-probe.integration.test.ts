@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
-import { MemoryApiBudget } from '@ara/api-budget';
+import { DEFAULT_CACHE_TTL_MS, MemoryApiBudget } from '@ara/api-budget';
 import {
   JungleScoutClient,
   JungleScoutClientError,
@@ -38,6 +38,8 @@ const fixture = ProductDatabasePageSchema.parse(
     )
   )
 );
+const emptyPage = ProductDatabasePageSchema.parse({ data: [] });
+
 
 function database() {
   return createServerDatabaseClient({
@@ -127,6 +129,86 @@ integration('market probe job', () => {
     if (candidateError) throw candidateError;
     return { candidateId };
   }
+  async function seedExpandableCandidate(): Promise<{
+    candidateId: string;
+    literalPhrases: string[];
+    expandedPhrases: string[];
+  }> {
+    const importRunId = randomUUID();
+    const clusterId = randomUUID();
+    const rawId = randomUUID();
+    const candidateId = randomUUID();
+    const literalPhrases = [`zero-literal ${clusterId}`];
+    const aliases = [`expand-alias ${clusterId}`];
+    const expandedPhrases = [...new Set([...literalPhrases, ...aliases])];
+    importRuns.push(importRunId);
+    clusterIds.push(clusterId);
+    const { error: clusterError } = await client.from('niche_clusters').insert({
+      id: clusterId,
+      canonical_name: `sink drip tray ${clusterId}`,
+      canonical_key: `sink drip tray ${clusterId}`,
+      catalog_phrases: literalPhrases,
+      aliases,
+      state: 'Ready for API Validation'
+    });
+    if (clusterError) throw clusterError;
+    const { error: importError } = await client.from('import_runs').insert({
+      id: importRunId,
+      submission_hash: `probe-${importRunId}`,
+      file_count: 1,
+      total_row_count: 1,
+      unique_keyword_count: 1,
+      source_files: []
+    });
+    if (importError) throw importError;
+    const { error: rawError } = await client.from('raw_opportunity_keywords').insert({
+      id: rawId,
+      import_run_id: importRunId,
+      source_file_name: 'probe.csv',
+      source_hash: `probe-${importRunId}`,
+      source_row_number: 1,
+      row_hash: `probe-row-${importRunId}`,
+      raw_row_text: 'sink drip tray',
+      raw_row: { Keyword: 'sink drip tray' },
+      parsed_row: { keyword: 'sink drip tray' },
+      keyword: 'sink drip tray',
+      normalized_exact_keyword: 'sink drip tray',
+      is_exact_duplicate: false
+    });
+    if (rawError) throw rawError;
+    const { error: candidateError } = await client.from('candidates').insert({
+      id: candidateId,
+      import_run_id: importRunId,
+      representative_raw_keyword_id: rawId,
+      niche_cluster_id: clusterId,
+      keyword: 'sink drip tray',
+      normalized_exact_keyword: 'sink drip tray',
+      state: 'Ready for API Validation',
+      rule_passed: true,
+      rule_reasons: [],
+      risk_flags: [],
+      preliminary_score: 70,
+      preliminary_score_components: {},
+      eligible_for_ai_normalization: true
+    });
+    if (candidateError) throw candidateError;
+    return { candidateId, literalPhrases, expandedPhrases };
+  }
+  async function resetDailyBudget(): Promise<void> {
+    const budgetDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(
+      new Date()
+    );
+    const { error } = await client.from('api_budget_daily').upsert({
+      budget_date: budgetDate,
+      daily_limit: 1000,
+      reserved_limit: 5,
+      used_count: 0,
+      reserved_used_count: 0
+    });
+    if (error) throw error;
+  }
+
+
 
   it('expands sink niche, caches the Product Database page, and produces relevant micro niches', async () => {
     const { candidateId } = await seedSinkCandidate();
@@ -530,6 +612,159 @@ integration('market probe job', () => {
     expect(second.realCalls).toBe(0);
     expect(calls).toBe(1);
   });
+
+  it('recovers expanded Product Database after crash before api_usage', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const expandedKey = makeApiCacheKey({
+      endpoint: 'product_database',
+      marketplace: 'us',
+      phrases: expandedPhrases
+    });
+    const owner = `expand-crash-${candidateId}`;
+    const budget = new PostgresApiBudget(client, { dailyLimit: 1000, reservedLimit: 5 }, owner);
+    await budget.authorize({
+      purpose: 'normal_validation',
+      estimatedCalls: 1,
+      cacheKey: expandedKey,
+      endpoint: 'product_database'
+    });
+    let expandedHits = 0;
+    expandedHits += 1;
+    await budget.stage(expandedKey, {
+      payload: fixture,
+      httpAttempts: 1,
+      status: 200
+    });
+    const { error: cacheError } = await client.from('api_cache').upsert({
+      cache_key: expandedKey,
+      endpoint: 'product_database',
+      response: fixture,
+      captured_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + DEFAULT_CACHE_TTL_MS.product_database).toISOString()
+    });
+    if (cacheError) throw cacheError;
+    const result = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget,
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          expect(phrases).toEqual(literalPhrases);
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+    const { data: usage } = await client
+      .from('api_usage')
+      .select('call_count,retry_count,http_status,success,cached')
+      .eq('candidate_id', candidateId)
+      .eq('cache_key', expandedKey);
+    const { data: claim } = await client
+      .from('api_call_claims')
+      .select('completed_at,usage_persisted')
+      .eq('cache_key', expandedKey)
+      .maybeSingle();
+    expect(expandedHits).toBe(1);
+    expect(usage).toHaveLength(1);
+    expect(usage?.[0]).toMatchObject({
+      call_count: 1,
+      retry_count: 0,
+      http_status: 200,
+      success: true,
+      cached: false
+    });
+    expect(claim?.usage_persisted).toBe(true);
+    expect(claim?.completed_at).not.toBeNull();
+    expect(result.checkpoint.phase).toBe('completed');
+  });
+
+  it('does not fabricate expanded usage on a completed expanded cache hit', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const expandedKey = makeApiCacheKey({
+      endpoint: 'product_database',
+      marketplace: 'us',
+      phrases: expandedPhrases
+    });
+    const budget = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-cache-${candidateId}`
+    );
+    let expandedHits = 0;
+    const query = async (phrases: readonly string[]) => {
+      if (phrases.join('\0') === expandedPhrases.join('\0')) {
+        expandedHits += 1;
+        return { page: fixture, httpAttempts: 1, status: 200 };
+      }
+      expect(phrases).toEqual(literalPhrases);
+      return { page: emptyPage, httpAttempts: 1, status: 200 };
+    };
+    await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget, queryProductDatabase: query }
+    );
+    await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      { client, budget, queryProductDatabase: query }
+    );
+    const { data: usage } = await client
+      .from('api_usage')
+      .select('id')
+      .eq('candidate_id', candidateId)
+      .eq('cache_key', expandedKey);
+    expect(expandedHits).toBe(1);
+    expect(usage).toHaveLength(1);
+  });
+
+  it('records expanded terminal Product Database failure without fake success', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const expandedKey = makeApiCacheKey({
+      endpoint: 'product_database',
+      marketplace: 'us',
+      phrases: expandedPhrases
+    });
+    const budget = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-fail-${candidateId}`
+    );
+    await expect(
+      runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget,
+          queryProductDatabase: async (phrases) => {
+            if (phrases.join('\0') === expandedPhrases.join('\0')) {
+              throw new JungleScoutClientError('expanded provider 500', 500, true, 3);
+            }
+            expect(phrases).toEqual(literalPhrases);
+            return { page: emptyPage, httpAttempts: 1, status: 200 };
+          }
+        }
+      )
+    ).rejects.toBeInstanceOf(JungleScoutClientError);
+    const { data: usage } = await client
+      .from('api_usage')
+      .select('call_count,retry_count,http_status,success')
+      .eq('candidate_id', candidateId)
+      .eq('cache_key', expandedKey);
+    expect(usage).toHaveLength(1);
+    expect(usage?.[0]).toMatchObject({
+      call_count: 3,
+      retry_count: 2,
+      http_status: 500,
+      success: false
+    });
+  });
+
 });
 
 

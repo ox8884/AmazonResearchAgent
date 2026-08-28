@@ -5,7 +5,7 @@ import {
   type ApiCallPurpose,
   type Locale
 } from '@ara/shared';
-import { authorizeApiCall, type ApiBudget } from '@ara/api-budget';
+import { authorizeApiCall, DEFAULT_CACHE_TTL_MS, type ApiBudget } from '@ara/api-budget';
 import {
   JungleScoutClientError,
   ProductDatabasePageSchema,
@@ -22,6 +22,10 @@ import {
   scoreMarketOpportunity,
   type CatalogProduct
 } from '@ara/research-engine';
+import { executeBudgetedApiCall } from './budgeted-api-call';
+import { nextBudgetResetAt } from './budget-reset';
+
+export { nextBudgetResetAt };
 
 export type MarketProbePhase =
   | 'budget_authorized'
@@ -63,30 +67,6 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled authorization decision: ${JSON.stringify(value)}`);
 }
 
-export function nextBudgetResetAt(now = new Date()): string {
-  const zone = 'America/Chicago';
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(now);
-  const start = now.getTime();
-  const limit = start + 50 * 60 * 60 * 1000;
-  for (let ms = start; ms <= limit; ms += 60 * 1000) {
-    const instant = new Date(ms);
-    const date = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(instant);
-    const hour = Number(
-      new Intl.DateTimeFormat('en-US', {
-        timeZone: zone,
-        hour: '2-digit',
-        hourCycle: 'h23'
-      }).format(instant)
-    );
-    const minute = Number(
-      new Intl.DateTimeFormat('en-US', { timeZone: zone, minute: '2-digit' }).format(instant)
-    );
-    if (date !== today && hour === 0 && minute === 0) {
-      return instant.toISOString();
-    }
-  }
-  throw new Error('Could not resolve next America/Chicago budget reset.');
-}
 
 
 
@@ -348,31 +328,38 @@ export async function runMarketProbe(
         marketplace: 'us',
         phrases: expanded
       });
-      const expandDecision = await authorizeApiCall(dependencies.budget, {
-        purpose,
-        estimatedCalls: 1,
+      const outcome = await executeBudgetedApiCall({
+        client: dependencies.client,
+        budget: dependencies.budget,
+        candidateId: candidate.id,
+        endpoint: 'product_database',
         cacheKey: expandedKey,
-        endpoint: 'product_database'
+        purpose,
+        ttlMs: DEFAULT_CACHE_TTL_MS.product_database,
+        query: async () => {
+          const fetched = await dependencies.queryProductDatabase(expanded);
+          return {
+            payload: fetched.page,
+            httpAttempts: fetched.httpAttempts,
+            status: fetched.status
+          };
+        }
       });
-      if (expandDecision.kind === 'allowed') {
-        const fetched = await dependencies.queryProductDatabase(expanded);
-        page = fetched.page;
-        realCalls += fetched.httpAttempts;
-        const { error: expandUsageError } = await dependencies.client.from('api_usage').insert({
-          endpoint: 'product_database',
-          cache_key: expandedKey,
-          purpose,
-          http_status: fetched.status,
-          call_count: fetched.httpAttempts,
-          retry_count: Math.max(0, fetched.httpAttempts - 1),
-          cached: false,
-          success: true,
-          candidate_id: candidate.id,
-          niche_cluster_id: candidate.niche_cluster_id,
-          budget_date: new Date().toISOString().slice(0, 10)
-        });
-        if (expandUsageError) {
-          throw new Error(`Could not persist expanded API usage: ${expandUsageError.message}`);
+      switch (outcome.kind) {
+        case 'completed': {
+          page = ProductDatabasePageSchema.parse(outcome.payload ?? { data: [] });
+          if (!outcome.fromCache) {
+            realCalls += outcome.httpAttempts;
+          }
+          break;
+        }
+        case 'deferred_budget':
+        case 'blocked_policy':
+        case 'in_flight':
+          break;
+        default: {
+          const exhaustive: never = outcome;
+          throw new Error(`Unhandled expanded Product Database outcome: ${JSON.stringify(exhaustive)}`);
         }
       }
     }

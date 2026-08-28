@@ -4,7 +4,7 @@ import type { ApiBudget } from '@ara/api-budget';
 import { authorizeApiCall } from '@ara/api-budget';
 import { JungleScoutClientError } from '@ara/jungle-scout';
 import type { ApiCallPurpose, JungleScoutEndpoint } from '@ara/shared';
-import { nextBudgetResetAt } from './market-probe';
+import { nextBudgetResetAt } from './budget-reset';
 
 export type BudgetedCallOutcome =
   | { readonly kind: 'blocked_policy' }
