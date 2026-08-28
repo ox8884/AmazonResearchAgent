@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
-import { DEFAULT_CACHE_TTL_MS, MemoryApiBudget } from '@ara/api-budget';
+import { DEFAULT_CACHE_TTL_MS, MemoryApiBudget, type ApiBudget } from '@ara/api-budget';
 import {
   JungleScoutClient,
   JungleScoutClientError,
@@ -17,6 +17,8 @@ import {
 } from '@ara/jungle-scout';
 import { makeApiCacheKey } from '@ara/shared';
 import { createQueue } from '@ara/queue';
+import { createJobHandlers } from '../handlers';
+import { runJob } from '../main';
 import { runMarketProbe } from './market-probe';
 import { PostgresApiBudget } from './postgres-api-budget';
 
@@ -55,6 +57,8 @@ integration('market probe job', () => {
 
   afterEach(async () => {
     await client.from('jobs').delete().like('idempotency_key', 'market-probe-resume:%');
+    await client.from('jobs').delete().like('idempotency_key', 'market-probe-inflight:%');
+    await client.from('jobs').delete().like('idempotency_key', 'deep-validation:%');
     for (const importRunId of importRuns.splice(0)) {
       await client.from('import_runs').delete().eq('id', importRunId);
     }
@@ -764,6 +768,292 @@ integration('market probe job', () => {
       success: false
     });
   });
+
+  it('defers expanded Product Database when literal consumed the last normal slot', async () => {
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const queue = createQueue(client);
+    let expandedHits = 0;
+    const result = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget: new MemoryApiBudget({ dailyLimit: 2, used: 0, reserve: 1 }),
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          expect(phrases).toEqual(literalPhrases);
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        },
+        enqueueResume: async (input) => {
+          await queue.enqueueJob({
+            type: 'MARKET_PROBE',
+            payload: { candidateId: input.candidateId, locale: input.locale },
+            idempotencyKey: input.idempotencyKey,
+            availableAt: input.availableAt
+          });
+        }
+      }
+    );
+    const { data: candidate } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: jobs } = await client
+      .from('jobs')
+      .select('id,type,payload,available_at,status')
+      .like('idempotency_key', `market-probe-resume:${candidateId}:%`);
+    const { data: snapshots } = await client
+      .from('market_snapshots')
+      .select('id')
+      .eq('candidate_id', candidateId);
+    const { data: downstream } = await client
+      .from('jobs')
+      .select('id')
+      .eq('idempotency_key', `deep-validation:${candidateId}`);
+    expect(expandedHits).toBe(0);
+    expect(result.checkpoint.phase).toBe('deferred_budget');
+    expect(candidate?.state).toBe('Waiting for API Budget');
+    expect(jobs).toHaveLength(1);
+    expect(jobs?.[0]?.type).toBe('MARKET_PROBE');
+    expect(jobs?.[0]?.payload).toMatchObject({ candidateId, locale: 'ko' });
+    expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
+    expect(snapshots ?? []).toHaveLength(0);
+    expect(downstream ?? []).toHaveLength(0);
+  });
+
+  it('does not complete expanded Product Database while the claim is in flight', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const ownerA = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-inflight-a-${candidateId}`
+    );
+    const ownerB = new PostgresApiBudget(
+      client,
+      { dailyLimit: 1000, reservedLimit: 5 },
+      `expand-inflight-b-${candidateId}`
+    );
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: (() => void) | undefined;
+    const startedAtQuery = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let expandedHits = 0;
+    const first = runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget: ownerA,
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            started?.();
+            await held;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          expect(phrases).toEqual(literalPhrases);
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+    await startedAtQuery;
+    const second = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget: ownerB,
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+    expect(second.checkpoint.phase).toBe('in_flight');
+    expect(second.realCalls).toBe(0);
+    expect(expandedHits).toBe(1);
+    release?.();
+    const completed = await first;
+    expect(completed.checkpoint.phase).toBe('completed');
+  });
+
+  it('blocks expanded Product Database without scoring the literal zero page', async () => {
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const inner = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
+    let authorizes = 0;
+    const budget: ApiBudget = {
+      authorize: async (input) => {
+        authorizes += 1;
+        if (authorizes === 1) {
+          return inner.authorize(input);
+        }
+        return { kind: 'blocked_policy', cacheKey: input.cacheKey, reason: 'blocked' };
+      }
+    };
+    let expandedHits = 0;
+    const result = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget,
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          expect(phrases).toEqual(literalPhrases);
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+    const { data: candidate } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: snapshots } = await client
+      .from('market_snapshots')
+      .select('id')
+      .eq('candidate_id', candidateId);
+    expect(expandedHits).toBe(0);
+    expect(result.checkpoint.phase).toBe('blocked_policy');
+    expect(candidate?.state).toBe('Ready for API Validation');
+    expect(snapshots ?? []).toHaveLength(0);
+  });
+
+  it('does not complete a production retry while the expanded claim is in flight', async () => {
+    await resetDailyBudget();
+    const { candidateId, literalPhrases, expandedPhrases } = await seedExpandableCandidate();
+    const expandedKey = makeApiCacheKey({
+      endpoint: 'product_database',
+      marketplace: 'us',
+      phrases: expandedPhrases
+    });
+    const queue = createQueue(client);
+    const workerId = `expand-retry-${candidateId}`;
+    let expandedHits = 0;
+    const query = async (phrases: readonly string[]) => {
+      if (phrases.join('\0') === expandedPhrases.join('\0')) {
+        expandedHits += 1;
+        throw new JungleScoutClientError('expanded provider 500', 500, true, 3);
+      }
+      expect(phrases).toEqual(literalPhrases);
+      return { page: emptyPage, httpAttempts: 1, status: 200 };
+    };
+    await queue.enqueueJob({
+      type: 'MARKET_PROBE',
+      payload: { candidateId, locale: 'ko' },
+      idempotencyKey: `market-probe:${candidateId}`
+    });
+    const firstClaimed = await queue.claimJobs(workerId, 1, 60);
+    const firstJob = firstClaimed[0];
+    if (!firstJob) {
+      throw new Error('Did not claim the initial MARKET_PROBE job.');
+    }
+    const handlers = createJobHandlers(client, { queryProductDatabase: query });
+    await runJob(firstJob, {
+      queue,
+      handlers,
+      workerId,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    const { data: failed } = await client
+      .from('jobs')
+      .select('id,status,available_at')
+      .eq('id', firstJob.id)
+      .single();
+    expect(failed?.status).toBe('queued');
+    expect(expandedHits).toBe(1);
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', firstJob.id);
+    const retryClaimed = await queue.claimJobs(workerId, 1, 60);
+    const retryJob = retryClaimed.find((job) => job.id === firstJob.id);
+    if (!retryJob) {
+      throw new Error('Did not claim the MARKET_PROBE retry.');
+    }
+    await runJob(retryJob, {
+      queue,
+      handlers,
+      workerId,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    const { data: afterRetry } = await client
+      .from('jobs')
+      .select('status,checkpoint')
+      .eq('id', firstJob.id)
+      .single();
+    const { data: candidate } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: snapshots } = await client
+      .from('market_snapshots')
+      .select('id')
+      .eq('candidate_id', candidateId);
+    const { data: downstream } = await client
+      .from('jobs')
+      .select('id')
+      .eq('idempotency_key', `deep-validation:${candidateId}`);
+    expect(expandedHits).toBe(1);
+    expect(afterRetry?.checkpoint).toMatchObject({ phase: 'in_flight' });
+    expect(candidate?.state).not.toBe('Watch');
+    expect(candidate?.state).not.toBe('Needs Review');
+    expect(snapshots ?? []).toHaveLength(0);
+    expect(downstream ?? []).toHaveLength(0);
+    await client
+      .from('api_call_claims')
+      .update({ claimed_until: new Date(0).toISOString() })
+      .eq('cache_key', expandedKey);
+    const { data: inflightRows } = await client
+      .from('jobs')
+      .select('id')
+      .like('idempotency_key', `market-probe-inflight:${candidateId}:%`);
+    const nextId = inflightRows?.[0]?.id;
+    if (!nextId) {
+      throw new Error('Expected an in-flight resume job after the production retry.');
+    }
+    await client
+      .from('jobs')
+      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .eq('id', nextId);
+    const reclaimClaimed = await queue.claimJobs(`${workerId}-reclaim`, 1, 60);
+    const reclaimJob = reclaimClaimed.find((job) => job.id === nextId);
+    if (!reclaimJob) {
+      throw new Error('Did not claim the in-flight resume job after lease expiry.');
+    }
+    await runJob(reclaimJob, {
+      queue,
+      handlers: createJobHandlers(client, {
+        queryProductDatabase: async (phrases) => {
+          if (phrases.join('\0') === expandedPhrases.join('\0')) {
+            expandedHits += 1;
+            return { page: fixture, httpAttempts: 1, status: 200 };
+          }
+          return { page: emptyPage, httpAttempts: 1, status: 200 };
+        }
+      }),
+      workerId: `${workerId}-reclaim`,
+      signal: AbortSignal.timeout(30_000),
+      heartbeatIntervalMs: 60_000
+    });
+    expect(expandedHits).toBe(2);
+
+  });
+
 
 });
 

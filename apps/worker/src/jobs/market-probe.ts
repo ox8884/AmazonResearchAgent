@@ -123,6 +123,50 @@ async function persistDecision(
   }
 }
 
+async function exitUnavailableAuthorization(input: {
+  readonly kind: 'deferred_budget' | 'in_flight' | 'blocked_policy';
+  readonly client: QueueDatabaseClient;
+  readonly candidateId: string;
+  readonly fromState: string;
+  readonly locale: Locale;
+  readonly cacheKey: string;
+  readonly realCalls: number;
+  readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
+  readonly onCheckpoint?: MarketProbeDependencies['onCheckpoint'];
+}): Promise<{ checkpoint: MarketProbeCheckpoint; realCalls: number }> {
+  if (input.kind === 'deferred_budget') {
+    await persistDecision(input.client, input.candidateId, input.fromState, 'Waiting for API Budget', [
+      { code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }
+    ]);
+    const availableAt = nextBudgetResetAt();
+    await input.enqueueResume?.({
+      candidateId: input.candidateId,
+      locale: input.locale,
+      availableAt,
+      idempotencyKey: `market-probe-resume:${input.candidateId}:${availableAt.slice(0, 10)}`
+    });
+    const checkpoint = { phase: 'deferred_budget' as const, cacheKey: input.cacheKey };
+    await input.onCheckpoint?.(checkpoint);
+    return { checkpoint, realCalls: input.realCalls };
+  }
+  if (input.kind === 'in_flight') {
+    const availableAt = new Date(Date.now() + 15_000).toISOString();
+    await input.enqueueResume?.({
+      candidateId: input.candidateId,
+      locale: input.locale,
+      availableAt,
+      idempotencyKey: `market-probe-inflight:${input.candidateId}:${input.cacheKey}`
+    });
+    const checkpoint = { phase: 'in_flight' as const, cacheKey: input.cacheKey };
+    await input.onCheckpoint?.(checkpoint);
+    return { checkpoint, realCalls: input.realCalls };
+  }
+  const checkpoint = { phase: 'blocked_policy' as const, cacheKey: input.cacheKey };
+  await input.onCheckpoint?.(checkpoint);
+  return { checkpoint, realCalls: input.realCalls };
+}
+
+
 export async function runMarketProbe(
   input: { candidateId: string; locale: Locale },
   dependencies: MarketProbeDependencies
@@ -188,42 +232,20 @@ export async function runMarketProbe(
       endpoint: 'product_database'
     });
     switch (decision.kind) {
-      case 'deferred_budget': {
-        await persistDecision(
-          dependencies.client,
-          candidate.id,
-          candidate.state,
-          'Waiting for API Budget',
-          [{ code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }]
-        );
-        const availableAt = nextBudgetResetAt();
-        await dependencies.enqueueResume?.({
+      case 'deferred_budget':
+      case 'blocked_policy':
+      case 'in_flight':
+        return exitUnavailableAuthorization({
+          kind: decision.kind,
+          client: dependencies.client,
           candidateId: candidate.id,
+          fromState: candidate.state,
           locale: input.locale,
-          availableAt,
-          idempotencyKey: `market-probe-resume:${candidate.id}:${availableAt.slice(0, 10)}`
+          cacheKey,
+          realCalls: 0,
+          enqueueResume: dependencies.enqueueResume,
+          onCheckpoint: dependencies.onCheckpoint
         });
-        const checkpoint = { phase: 'deferred_budget' as const, cacheKey };
-        await dependencies.onCheckpoint?.(checkpoint);
-        return { checkpoint, realCalls: 0 };
-      }
-      case 'blocked_policy': {
-        const checkpoint = { phase: 'blocked_policy' as const, cacheKey };
-        await dependencies.onCheckpoint?.(checkpoint);
-        return { checkpoint, realCalls: 0 };
-      }
-      case 'in_flight': {
-        const availableAt = new Date(Date.now() + 15_000).toISOString();
-        await dependencies.enqueueResume?.({
-          candidateId: candidate.id,
-          locale: input.locale,
-          availableAt,
-          idempotencyKey: `market-probe-inflight:${candidate.id}:${cacheKey}`
-        });
-        const checkpoint = { phase: 'in_flight' as const, cacheKey };
-        await dependencies.onCheckpoint?.(checkpoint);
-        return { checkpoint, realCalls: 0 };
-      }
 
       case 'cache_hit': {
         await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
@@ -356,7 +378,17 @@ export async function runMarketProbe(
         case 'deferred_budget':
         case 'blocked_policy':
         case 'in_flight':
-          break;
+          return exitUnavailableAuthorization({
+            kind: outcome.kind,
+            client: dependencies.client,
+            candidateId: candidate.id,
+            fromState: candidate.state,
+            locale: input.locale,
+            cacheKey: expandedKey,
+            realCalls,
+            enqueueResume: dependencies.enqueueResume,
+            onCheckpoint: dependencies.onCheckpoint
+          });
         default: {
           const exhaustive: never = outcome;
           throw new Error(`Unhandled expanded Product Database outcome: ${JSON.stringify(exhaustive)}`);
