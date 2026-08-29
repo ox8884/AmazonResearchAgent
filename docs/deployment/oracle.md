@@ -6,8 +6,8 @@ The worker is the only long-running research process. It consumes the durable Su
 
 ## Host setup
 
-1. Set the host timezone to `America/Chicago`.
-2. Run `ops/oracle/bootstrap.sh` on the ARM64 host.
+1. Leave the shared host timezone unchanged (`America/New_York` on hermes-server). Daily 03:00 America/Chicago is expressed on the timer unit, not by changing the host clock.
+2. Run only the remaining project-scoped `ops/oracle/bootstrap.sh` steps on the ARM64 host (service account, `/opt/amazon-research/current`, `/etc/amazon-research`, swap if missing). Do not reinstall Node or Corepack when they already exist.
 3. Deploy the release tree to `/opt/amazon-research/current`.
 4. Create `/etc/amazon-research/worker.env` with **variable names only**. Never commit values.
 
@@ -27,7 +27,6 @@ Worker environment variable names:
 ## systemd
 
 ```bash
-sudo timedatectl set-timezone America/Chicago
 sudo cp ops/systemd/amazon-research-worker.service /etc/systemd/system/
 sudo cp ops/systemd/amazon-research-daily.service /etc/systemd/system/
 sudo cp ops/systemd/amazon-research-daily.timer /etc/systemd/system/
@@ -35,6 +34,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now amazon-research-worker.service
 sudo systemctl enable --now amazon-research-daily.timer
 ```
+
+The daily timer uses `OnCalendar=*-*-* 03:00:00 America/Chicago`. On a host that stays `America/New_York`, that is 04:00 local / 08:00 UTC in CDT and 04:00 local / 09:00 UTC in CST. Do not run `timedatectl set-timezone`.
 
 Start command: `pnpm --filter @ara/worker start`
 
