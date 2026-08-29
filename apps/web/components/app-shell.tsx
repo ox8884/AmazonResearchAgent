@@ -23,8 +23,11 @@ export function AppShell({
             <span>{copy.appName}</span>
           </a>
           <nav className="primary-nav" aria-label="Primary">
-            <a href={localizedHref(locale)}>{copy.navHome}</a>
+            <a href={localizedHref(locale, '/dashboard')}>{copy.navDashboard}</a>
+            <a href={localizedHref(locale, '/candidates')}>{copy.navCandidates}</a>
+            <a href={localizedHref(locale, '/runs')}>{copy.navRuns}</a>
             <a href={localizedHref(locale, '/imports')}>{copy.navImports}</a>
+            <a href={localizedHref(locale, '/settings')}>{copy.navSettings}</a>
             <a href={localizedHref(locale, '/settings/ai')}>{copy.navAiSettings}</a>
           </nav>
           <LanguageSwitcher

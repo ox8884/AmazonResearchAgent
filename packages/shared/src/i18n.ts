@@ -91,7 +91,24 @@ export type CopyKey =
   | 'researchNowQueued'
   | 'researchNowError'
   | 'navDashboard'
-  | 'competitionLabel';
+  | 'competitionLabel'
+  | 'navCandidates'
+  | 'navRuns'
+  | 'navSettings'
+  | 'candidatesTitle'
+  | 'runsTitle'
+  | 'settingsTitle'
+  | 'queuedLabel'
+  | 'runningLabel'
+  | 'waitingLabel'
+  | 'completedLabel'
+  | 'apiBudgetLabel'
+  | 'demandLabel'
+  | 'marginLabel'
+  | 'differentiationLabel'
+  | 'noRuns'
+  | 'waitingBudgetLabel'
+  | 'needsAttentionLabel';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -185,7 +202,24 @@ export const COPY = {
     researchNowQueued: '대기열에 추가됨',
     researchNowError: '리서치를 대기열에 넣지 못했습니다.',
     navDashboard: '대시보드',
-    competitionLabel: '경쟁도'
+    competitionLabel: '경쟁도',
+    navCandidates: '후보',
+    navRuns: '실행',
+    navSettings: '설정',
+    candidatesTitle: '후보 목록',
+    runsTitle: '리서치 실행',
+    settingsTitle: '리서치 설정',
+    queuedLabel: '대기',
+    runningLabel: '실행 중',
+    waitingLabel: '대기 중',
+    completedLabel: '완료',
+    apiBudgetLabel: 'API 예산',
+    demandLabel: '수요',
+    marginLabel: '마진',
+    differentiationLabel: '차별화',
+    noRuns: '아직 리서치 실행이 없습니다.',
+    waitingBudgetLabel: 'Waiting for API Budget',
+    needsAttentionLabel: 'Needs Attention'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -276,7 +310,24 @@ export const COPY = {
     researchNowQueued: 'Added to queue',
     researchNowError: 'Research could not be queued.',
     navDashboard: 'Dashboard',
-    competitionLabel: 'Competition'
+    competitionLabel: 'Competition',
+    navCandidates: 'Candidates',
+    navRuns: 'Runs',
+    navSettings: 'Settings',
+    candidatesTitle: 'Candidates',
+    runsTitle: 'Research runs',
+    settingsTitle: 'Research settings',
+    queuedLabel: 'Queued',
+    runningLabel: 'Running',
+    waitingLabel: 'Waiting',
+    completedLabel: 'Completed',
+    apiBudgetLabel: 'API budget',
+    demandLabel: 'Demand',
+    marginLabel: 'Margin',
+    differentiationLabel: 'Differentiation',
+    noRuns: 'No research runs yet.',
+    waitingBudgetLabel: 'Waiting for API Budget',
+    needsAttentionLabel: 'Needs Attention'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

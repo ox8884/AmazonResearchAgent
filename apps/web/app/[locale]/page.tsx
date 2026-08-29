@@ -1,8 +1,15 @@
 import { getCopy, RuleReasonSchema } from '@ara/shared';
+import { ApiUsageMeter } from '../../components/api-usage-meter';
+import { ResearchActivity } from '../../components/research-activity';
 import { ResearchNowButton } from '../../components/research-now-button';
 import { ButtonLink, EmptyState, localeDate, LocalizedStatusBadge, MetricCard } from '../../components/ui';
 import { localizedHref, parseLocale } from '../../lib/locale';
-import { getDashboardView } from '../../lib/server/dashboard-data';
+import {
+  getApiBudgetMeterView,
+  getDashboardView,
+  getJobCountsView
+} from '../../lib/server/dashboard-data';
+
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage({
@@ -12,7 +19,11 @@ export default async function DashboardPage({
 }) {
   const locale = parseLocale((await params).locale);
   const copy = getCopy(locale);
-  const dashboard = await getDashboardView();
+  const [dashboard, jobCounts, apiBudget] = await Promise.all([
+    getDashboardView(),
+    getJobCountsView(),
+    getApiBudgetMeterView()
+  ]);
   const data = dashboard.data;
   return (
     <div className="content-stack">
@@ -36,6 +47,10 @@ export default async function DashboardPage({
         <MetricCard label={copy.totalCandidates} value={data.totals.candidates} />
         <MetricCard label={copy.acceptedLabel} value={data.totals.accepted} />
         <MetricCard label={copy.rejectedLabel} value={data.totals.rejected} />
+      </section>
+      <ResearchActivity locale={locale} counts={jobCounts} />
+      <section className="metric-grid" aria-label={copy.apiBudgetLabel}>
+        <ApiUsageMeter locale={locale} meter={apiBudget} />
       </section>
 
       <section className="panel" aria-labelledby="recent-imports-title">
