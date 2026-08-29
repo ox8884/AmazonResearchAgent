@@ -22,24 +22,55 @@ export type NotificationStore = {
   deliver(text: string, idempotencyKey: string): Promise<void>;
 };
 
+const INTERNAL_STATES: readonly string[] = [
+  'Waiting for API Budget',
+  'Waiting for AI Capacity',
+  'API Validation Running'
+];
+
+const MAJOR_TO_STATES: readonly string[] = [
+  'Watch',
+  'Reject',
+  'Needs Review',
+  'Deep Research',
+  'Strong'
+];
+
 function eventFor(input: LifecycleNotificationInput): string | null {
   if (input.toState === 'Needs Attention' && input.fromState !== 'Needs Attention') {
     return 'NEEDS_ATTENTION';
   }
   const isStrong =
     input.analysisVerdict === 'strong_potential' || input.toState === 'Strong';
-  if (!isStrong) {
+  if (isStrong) {
+    return input.fromState === 'Watch' ? 'WATCH_TO_STRONG' : 'NEW_STRONG';
+  }
+  if (input.fromState === input.toState) {
     return null;
   }
-  return input.fromState === 'Watch' ? 'WATCH_TO_STRONG' : 'NEW_STRONG';
+  if (INTERNAL_STATES.includes(input.toState)) {
+    return null;
+  }
+  if (MAJOR_TO_STATES.includes(input.toState)) {
+    return 'MAJOR_STATE_CHANGE';
+  }
+  return null;
 }
 
-function summaryFor(eventType: string, candidateId: string): string {
+function summaryFor(
+  eventType: string,
+  candidateId: string,
+  fromState: string,
+  toState: string
+): string {
   if (eventType === 'NEW_STRONG') {
     return `NEW_STRONG ${candidateId}`;
   }
   if (eventType === 'WATCH_TO_STRONG') {
     return `WATCH_TO_STRONG ${candidateId}`;
+  }
+  if (eventType === 'MAJOR_STATE_CHANGE') {
+    return `MAJOR_STATE_CHANGE ${candidateId} ${fromState}->${toState}`;
   }
   return `NEEDS_ATTENTION ${candidateId}`;
 }
@@ -57,9 +88,12 @@ export async function recordCandidateLifecycleNotification(
     fromState: input.fromState,
     toState: input.toState,
     eventType,
-    summary: summaryFor(eventType, input.candidateId)
+    summary: summaryFor(eventType, input.candidateId, input.fromState, input.toState)
   };
-  const idempotencyKey = `${eventType}:${input.candidateId}`;
+  const idempotencyKey =
+    eventType === 'MAJOR_STATE_CHANGE'
+      ? `MAJOR_STATE_CHANGE:${input.candidateId}:${input.fromState}:${input.toState}`
+      : `${eventType}:${input.candidateId}`;
   const inserted = await store.insertNotification({
     candidateId: input.candidateId,
     eventType,

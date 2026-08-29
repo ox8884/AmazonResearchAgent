@@ -118,4 +118,70 @@ describe('candidate lifecycle notifications', () => {
     expect(store.candidateState).toBe('Watch');
     expect(store.deliveries).toHaveLength(0);
   });
+
+  // Contract: more-specific Task 6 events supersede MAJOR_STATE_CHANGE for the same transition.
+  it('records one MAJOR_STATE_CHANGE for a meaningful non-specific lifecycle transition', async () => {
+    const store = new MemoryNotificationStore();
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Ready for API Validation',
+      toState: 'Needs Review',
+      locale: 'ko'
+    });
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Ready for API Validation',
+      toState: 'Needs Review',
+      locale: 'ko'
+    });
+    expect(store.rows.map((row) => row.eventType)).toEqual(['MAJOR_STATE_CHANGE']);
+    expect(JSON.stringify(store.rows[0]?.payload)).not.toMatch(/token|authorization|password/iu);
+  });
+
+  it('does not emit MAJOR_STATE_CHANGE for internal budget deferral', async () => {
+    const store = new MemoryNotificationStore();
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Ready for API Validation',
+      toState: 'Waiting for API Budget',
+      locale: 'ko'
+    });
+    expect(store.rows).toEqual([]);
+  });
+
+  it('does not also emit MAJOR_STATE_CHANGE when a more-specific event applies', async () => {
+    const store = new MemoryNotificationStore();
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Watch',
+      toState: 'Needs Attention',
+      locale: 'ko'
+    });
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Watch',
+      toState: 'Watch',
+      analysisVerdict: 'strong_potential',
+      locale: 'ko'
+    });
+    expect(store.rows.map((row) => row.eventType).sort()).toEqual([
+      'NEEDS_ATTENTION',
+      'WATCH_TO_STRONG'
+    ]);
+  });
+
+  it('does not roll back MAJOR_STATE_CHANGE source rows when Telegram fails', async () => {
+    const store = new MemoryNotificationStore();
+    store.failDelivery = true;
+    store.candidateState = 'Needs Review';
+    await recordCandidateLifecycleNotification(store, {
+      candidateId: CANDIDATE,
+      fromState: 'Ready for API Validation',
+      toState: 'Needs Review',
+      locale: 'ko'
+    });
+    expect(store.rows.map((row) => row.eventType)).toEqual(['MAJOR_STATE_CHANGE']);
+    expect(store.candidateState).toBe('Needs Review');
+    expect(store.deliveries).toHaveLength(0);
+  });
 });
