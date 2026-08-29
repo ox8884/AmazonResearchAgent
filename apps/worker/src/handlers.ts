@@ -26,6 +26,7 @@ import { runProviderConnectionTest } from './jobs/test-ai-provider';
 import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe';
 import { runDeepValidation } from './jobs/deep-validation';
 import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
+import { runSendDigest } from './jobs/send-digest';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
 import { runDailyResearch } from './jobs/daily-research';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
@@ -250,6 +251,7 @@ export function createJobHandlers(
     context.setCheckpoint(result);
     return result;
   };
+  handlers.SEND_DIGEST = async () => runSendDigest(client);
   const budgetFor = (job: Job): ApiBudget =>
     options.apiBudget ??
     new PostgresApiBudget(client, readApiBudgetLimits(), `job:${job.id}:${job.attempts}`);

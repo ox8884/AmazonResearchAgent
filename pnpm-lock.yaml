@@ -99,6 +99,9 @@ importers:
       '@ara/jungle-scout':
         specifier: workspace:*
         version: link:../../packages/jungle-scout
+      '@ara/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
       '@ara/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -160,6 +163,12 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/notifications:
+    dependencies:
+      '@ara/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/queue:
     dependencies:

@@ -17,6 +17,7 @@
     "@ara/api-budget": "workspace:*",
     "@ara/db": "workspace:*",
     "@ara/jungle-scout": "workspace:*",
+    "@ara/notifications": "workspace:*",
     "@ara/queue": "workspace:*",
     "@ara/research-engine": "workspace:*",
     "@ara/secret-store": "workspace:*",

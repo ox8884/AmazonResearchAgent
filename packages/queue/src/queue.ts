@@ -11,7 +11,8 @@ export type JobType =
   | 'MARKET_PROBE'
   | 'DEEP_VALIDATION'
   | 'ENRICH_STRONG_POTENTIAL'
-  | 'DAILY_RESEARCH';
+  | 'DAILY_RESEARCH'
+  | 'SEND_DIGEST';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type QueueDatabaseClient = ReturnType<typeof createServerDatabaseClient>;
 
