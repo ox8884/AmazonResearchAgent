@@ -27,6 +27,7 @@ import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe'
 import { runDeepValidation } from './jobs/deep-validation';
 import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
 import { runNormalizeJob } from './jobs/normalize-opportunities';
+import { runDailyResearch } from './jobs/daily-research';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
   createJungleScoutHistoricalSearchVolumeQuery,
@@ -244,6 +245,11 @@ export function createJobHandlers(
     };
   }
   const queue = createQueue(client);
+  handlers.DAILY_RESEARCH = async (job, context) => {
+    const result = await runDailyResearch(job, { client, queue });
+    context.setCheckpoint(result);
+    return result;
+  };
   const budgetFor = (job: Job): ApiBudget =>
     options.apiBudget ??
     new PostgresApiBudget(client, readApiBudgetLimits(), `job:${job.id}:${job.attempts}`);
@@ -268,12 +274,17 @@ export function createJobHandlers(
       {
         client,
         budget: apiBudget,
+        purpose: payload.purpose ?? 'normal_validation',
         queryProductDatabase,
         ...(prior ? { checkpoint: prior } : {}),
         enqueueResume: async (input) => {
           await queue.enqueueJob({
             type: 'MARKET_PROBE',
-            payload: { candidateId: input.candidateId, locale: input.locale },
+            payload: {
+              candidateId: input.candidateId,
+              locale: input.locale,
+              purpose: input.purpose
+            },
             idempotencyKey: input.idempotencyKey,
             availableAt: input.availableAt
           });

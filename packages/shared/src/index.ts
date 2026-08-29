@@ -80,3 +80,21 @@ export type {
   MarketProbeJobPayload,
   MarketSnapshot
 } from './jungle-scout';
+
+export {
+  DailyResearchJobPayloadSchema,
+  LogicalRunDateSchema,
+  ScheduledMarketProbePayloadSchema
+} from './automation';
+export type {
+  DailyResearchJobPayload,
+  LogicalRunDate,
+  ScheduledMarketProbePayload
+} from './automation';
+export {
+  AnalysisVerdictEvidenceSchema,
+  DailyResearchCheckpointSchema,
+  DailyResearchPlanItemSchema,
+  DailyResearchSelectedCandidateIdsSchema
+} from './automation';
+export type { DailyResearchCheckpoint } from './automation';

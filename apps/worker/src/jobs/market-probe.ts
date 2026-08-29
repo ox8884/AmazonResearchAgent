@@ -60,6 +60,7 @@ export interface MarketProbeDependencies {
   enqueueResume?(input: {
     readonly candidateId: string;
     readonly locale: Locale;
+    readonly purpose?: ApiCallPurpose;
     readonly availableAt: string;
     readonly idempotencyKey: string;
   }): Promise<void>;
@@ -125,11 +126,11 @@ async function persistDecision(
     throw new Error(`Could not persist decision: ${error.message}`);
   }
 }
-
 async function scheduleInFlightResume(input: {
   readonly client: QueueDatabaseClient;
   readonly candidateId: string;
   readonly locale: Locale;
+  readonly purpose: ApiCallPurpose;
   readonly cacheKey: string;
   readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
 }): Promise<void> {
@@ -152,16 +153,16 @@ async function scheduleInFlightResume(input: {
     .select('status')
     .eq('idempotency_key', baseKey)
     .maybeSingle();
-  const idempotencyKey =
+  const idempotencyKey: string =
     existing && existing.status !== 'queued' ? `${baseKey}:reclaim` : baseKey;
   await input.enqueueResume?.({
     candidateId: input.candidateId,
     locale: input.locale,
+    purpose: input.purpose,
     availableAt,
     idempotencyKey
   });
 }
-
 
 async function exitUnavailableAuthorization(input: {
   readonly kind: 'deferred_budget' | 'in_flight' | 'blocked_policy';
@@ -169,6 +170,7 @@ async function exitUnavailableAuthorization(input: {
   readonly candidateId: string;
   readonly fromState: string;
   readonly locale: Locale;
+  readonly purpose: ApiCallPurpose;
   readonly cacheKey: string;
   readonly realCalls: number;
   readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
@@ -182,6 +184,7 @@ async function exitUnavailableAuthorization(input: {
     await input.enqueueResume?.({
       candidateId: input.candidateId,
       locale: input.locale,
+      purpose: input.purpose,
       availableAt,
       idempotencyKey: `market-probe-resume:${input.candidateId}:${availableAt.slice(0, 10)}`
     });
@@ -194,6 +197,7 @@ async function exitUnavailableAuthorization(input: {
       client: input.client,
       candidateId: input.candidateId,
       locale: input.locale,
+      purpose: input.purpose,
       cacheKey: input.cacheKey,
       enqueueResume: input.enqueueResume
     });
@@ -281,6 +285,7 @@ export async function runMarketProbe(
           candidateId: candidate.id,
           fromState: candidate.state,
           locale: input.locale,
+          purpose,
           cacheKey,
           realCalls: 0,
           enqueueResume: dependencies.enqueueResume,
@@ -424,6 +429,7 @@ export async function runMarketProbe(
             candidateId: candidate.id,
             fromState: candidate.state,
             locale: input.locale,
+            purpose,
             cacheKey: expandedKey,
             realCalls,
             enqueueResume: dependencies.enqueueResume,

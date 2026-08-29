@@ -10,7 +10,8 @@ export type JobType =
   | 'TEST_AI_PROVIDER_CONNECTION'
   | 'MARKET_PROBE'
   | 'DEEP_VALIDATION'
-  | 'ENRICH_STRONG_POTENTIAL';
+  | 'ENRICH_STRONG_POTENTIAL'
+  | 'DAILY_RESEARCH';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type QueueDatabaseClient = ReturnType<typeof createServerDatabaseClient>;
 
