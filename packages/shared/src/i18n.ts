@@ -108,7 +108,9 @@ export type CopyKey =
   | 'differentiationLabel'
   | 'noRuns'
   | 'waitingBudgetLabel'
-  | 'needsAttentionLabel';
+  | 'needsAttentionLabel'
+  | 'researchNowOverride'
+  | 'researchNowOverrideConfirm';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -219,7 +221,9 @@ export const COPY = {
     differentiationLabel: '차별화',
     noRuns: '아직 리서치 실행이 없습니다.',
     waitingBudgetLabel: 'Waiting for API Budget',
-    needsAttentionLabel: 'Needs Attention'
+    needsAttentionLabel: 'Needs Attention',
+    researchNowOverride: '예약 예산 사용',
+    researchNowOverrideConfirm: '예약 API 예산을 사용해서 지금 리서치를 실행할까요?'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -327,7 +331,9 @@ export const COPY = {
     differentiationLabel: 'Differentiation',
     noRuns: 'No research runs yet.',
     waitingBudgetLabel: 'Waiting for API Budget',
-    needsAttentionLabel: 'Needs Attention'
+    needsAttentionLabel: 'Needs Attention',
+    researchNowOverride: 'Use reserved budget',
+    researchNowOverrideConfirm: 'Run Research Now using the reserved API budget?'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

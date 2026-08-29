@@ -573,6 +573,35 @@ function childPayload(
   });
 }
 
+async function enqueueDigestBestEffort(
+  dependencies: RunDailyResearchDependencies,
+  researchRunId: string,
+  locale: Locale,
+  checkpoint: DailyResearchCheckpoint
+): Promise<DailyResearchCheckpoint> {
+  try {
+    await dependencies.queue.enqueueJob({
+      type: 'SEND_DIGEST',
+      payload: { researchRunId },
+      idempotencyKey: `send-digest:${researchRunId}`
+    });
+    if (dependencies.client) {
+      await dependencies.client.from('notifications').insert({
+        research_run_id: researchRunId,
+        event_type: 'DAILY_SUMMARY',
+        locale,
+        idempotency_key: `daily-summary:${researchRunId}`,
+        payload: { summary: `research run ${researchRunId}` }
+      });
+    }
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      throw error;
+    }
+  }
+  return checkpoint;
+}
+
 export async function runDailyResearch(
   job: Job,
   dependencies: RunDailyResearchDependencies
@@ -669,7 +698,7 @@ export async function runDailyResearch(
       checkpoint
     });
     if (adopted) {
-      return adopted;
+      return enqueueDigestBestEffort(dependencies, run.id, payload.locale, adopted);
     }
   }
 
@@ -678,15 +707,17 @@ export async function runDailyResearch(
     selectedItems: checkpoint.selectedItems,
     enqueuedCandidateIds: [...enqueuedCandidateIds]
   };
-  const adopted = await persistDailyResearchCheckpoint(runStore, run.id, {
+  const completed = await persistDailyResearchCheckpoint(runStore, run.id, {
     status: 'completed',
     completed_at: now.toISOString(),
     checkpoint
   });
-  if (adopted) {
-    return adopted;
-  }
-  return checkpoint;
+  return enqueueDigestBestEffort(
+    dependencies,
+    run.id,
+    payload.locale,
+    completed ?? checkpoint
+  );
 }
 
 export function createDailyResearchHandler(

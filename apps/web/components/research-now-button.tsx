@@ -14,30 +14,44 @@ export function ResearchNowButton({ locale }: { locale: Locale }) {
   const copy = getCopy(locale);
   const [status, setStatus] = useState<'idle' | 'queued' | 'error'>('idle');
 
+  async function enqueue(mode: 'normal' | 'override-reserve'): Promise<void> {
+    if (mode === 'override-reserve' && !window.confirm(copy.researchNowOverrideConfirm)) {
+      return;
+    }
+    try {
+      const payload = await ky
+        .post('/api/research-now', {
+          json: { mode },
+          headers: adminCsrfHeaders(),
+          credentials: 'same-origin'
+        })
+        .json<unknown>();
+      ResearchNowResponseSchema.parse(payload);
+      setStatus('queued');
+    } catch {
+      setStatus('error');
+    }
+  }
+
   return (
     <div className="cluster">
       <button
         type="button"
         className="button button--primary"
         onClick={() => {
-          void (async () => {
-            try {
-              const payload = await ky
-                .post('/api/research-now', {
-                  json: { mode: 'normal' },
-                  headers: adminCsrfHeaders(),
-                  credentials: 'same-origin'
-                })
-                .json<unknown>();
-              ResearchNowResponseSchema.parse(payload);
-              setStatus('queued');
-            } catch {
-              setStatus('error');
-            }
-          })();
+          void enqueue('normal');
         }}
       >
         {copy.researchNow}
+      </button>
+      <button
+        type="button"
+        className="button button--secondary"
+        onClick={() => {
+          void enqueue('override-reserve');
+        }}
+      >
+        {copy.researchNowOverride}
       </button>
       {status === 'queued' ? (
         <p className="notice" role="status">
