@@ -16,6 +16,7 @@ import {
   type MarketMetrics
 } from '@ara/research-engine';
 import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
+import { notifyCandidateDecision } from './candidate-notifications';
 
 export interface EnrichStrongPotentialOptions {
   readonly budget?: ApiBudget;
@@ -412,6 +413,13 @@ export async function runEnrichStrongPotential(
   if (decisionError && decisionError.code !== '23505') {
     throw new Error(`Could not persist analysis verdict: ${decisionError.message}`);
   }
+  await notifyCandidateDecision(client, {
+    candidateId,
+    fromState: candidate.state,
+    toState,
+    analysisVerdict,
+    locale: options.locale ?? 'ko'
+  });
 
   return {
     differentiationMode,

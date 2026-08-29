@@ -1,4 +1,5 @@
 import type { QueueDatabaseClient } from '@ara/queue';
+import { notifyCandidateDecision } from './candidate-notifications';
 import type { Json } from '@ara/db';
 import {
   makeApiCacheKey,
@@ -146,6 +147,12 @@ async function persistDecision(
   if (error && error.code !== '23505') {
     throw new Error(`Could not persist decision: ${error.message}`);
   }
+  await notifyCandidateDecision(client, {
+    candidateId,
+    fromState,
+    toState,
+    locale: 'ko'
+  });
 }
 async function scheduleInFlightResume(input: {
   readonly client: QueueDatabaseClient;
