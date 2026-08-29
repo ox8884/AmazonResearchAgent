@@ -34,8 +34,20 @@ export function budgetResumeIdempotencyKey(
   return `market-probe-resume:${candidateId}:${purpose}:${availableAt.slice(0, 10)}`;
 }
 
+export function inFlightResumeIdempotencyKey(input: {
+  readonly candidateId: string;
+  readonly purpose: ApiCallPurpose;
+  readonly cacheKey: string;
+  readonly reclaimBucket: string;
+  readonly reclaim: boolean;
+}): string {
+  const baseKey = `market-probe-inflight:${input.candidateId}:${input.purpose}:${input.cacheKey}:${input.reclaimBucket}`;
+  return input.reclaim ? `${baseKey}:reclaim` : baseKey;
+}
+
 const API_CLAIM_LEASE_MS = 120_000;
 const IN_FLIGHT_RECLAIM_MARGIN_MS = 1_000;
+
 
 export type MarketProbePhase =
   | 'budget_authorized'
@@ -157,14 +169,25 @@ async function scheduleInFlightResume(input: {
   const reclaimBucket = Number.isFinite(claimedUntilMs)
     ? new Date(claimedUntilMs).toISOString().slice(0, 19)
     : availableAt.slice(0, 19);
-  const baseKey = `market-probe-inflight:${input.candidateId}:${input.cacheKey}:${reclaimBucket}`;
+  const baseKey = inFlightResumeIdempotencyKey({
+    candidateId: input.candidateId,
+    purpose: input.purpose,
+    cacheKey: input.cacheKey,
+    reclaimBucket,
+    reclaim: false
+  });
   const { data: existing } = await input.client
     .from('jobs')
     .select('status')
     .eq('idempotency_key', baseKey)
     .maybeSingle();
-  const idempotencyKey: string =
-    existing && existing.status !== 'queued' ? `${baseKey}:reclaim` : baseKey;
+  const idempotencyKey = inFlightResumeIdempotencyKey({
+    candidateId: input.candidateId,
+    purpose: input.purpose,
+    cacheKey: input.cacheKey,
+    reclaimBucket,
+    reclaim: existing?.status !== undefined && existing.status !== 'queued'
+  });
   await input.enqueueResume?.({
     candidateId: input.candidateId,
     locale: input.locale,

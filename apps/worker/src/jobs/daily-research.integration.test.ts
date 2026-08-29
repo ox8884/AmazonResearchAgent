@@ -17,8 +17,8 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const integration = supabaseUrl && serviceRoleKey ? describe : describe.skip;
 const fixturePrefix = `worker-it-daily-${randomUUID()}`;
-const fixtureYear =
-  2100 + Number.parseInt(fixturePrefix.replaceAll('-', '').slice(-8), 16) % 10_000;
+const fixtureEntropy = Number.parseInt(fixturePrefix.replaceAll('-', '').slice(-8), 16);
+const fixtureYear = 2000 + (fixtureEntropy % 8_000);
 const fixtureRunDates = [`${fixtureYear}-01-01`, `${fixtureYear}-01-02`] as const;
 type AppSettingsRow = Database['public']['Tables']['app_settings']['Row'];
 function database(): QueueDatabaseClient {
@@ -92,12 +92,51 @@ async function cleanupDailyFixtures(
   if (researchRunError) throw researchRunError;
 }
 
+
+async function restoreDailyResearchSettingsIfOwned(
+  client: QueueDatabaseClient,
+  originalSettings: AppSettingsRow | null,
+  fixtureSettings: AppSettingsRow | null
+): Promise<void> {
+  if (!fixtureSettings) return;
+
+  if (originalSettings) {
+    const restoredValues = {
+      locale: originalSettings.locale,
+      timezone: originalSettings.timezone,
+      daily_api_budget: originalSettings.daily_api_budget,
+      manual_api_reserve: originalSettings.manual_api_reserve,
+      manual_reserve_enabled: originalSettings.manual_reserve_enabled,
+      new_percent: originalSettings.new_percent,
+      watch_percent: originalSettings.watch_percent,
+      strong_percent: originalSettings.strong_percent,
+      new_freshness_hours: originalSettings.new_freshness_hours,
+      watch_freshness_hours: originalSettings.watch_freshness_hours,
+      strong_freshness_hours: originalSettings.strong_freshness_hours
+    };
+    const { error } = await client
+      .from('app_settings')
+      .update(restoredValues)
+      .eq('id', true)
+      .eq('updated_at', fixtureSettings.updated_at);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await client
+    .from('app_settings')
+    .delete()
+    .eq('id', true)
+    .eq('updated_at', fixtureSettings.updated_at);
+  if (error) throw error;
+}
 integration('daily research orchestration', () => {
   const client = database();
   const candidateIds: string[] = [];
   const importRunIds: string[] = [];
   const runDates = [...fixtureRunDates];
   let originalSettings: AppSettingsRow | null = null;
+  let fixtureSettings: AppSettingsRow | null = null;
 
   beforeAll(async () => {
     const { data: settings, error: readSettingsError } = await client
@@ -124,6 +163,13 @@ integration('daily research orchestration', () => {
       strong_freshness_hours: 24
     });
     if (settingsError) throw settingsError;
+    const { data: installedSettings, error: installedSettingsError } = await client
+      .from('app_settings')
+      .select('*')
+      .eq('id', true)
+      .single();
+    if (installedSettingsError) throw installedSettingsError;
+    fixtureSettings = installedSettings;
 
     for (const state of ['Ready for API Validation', 'Watch']) {
       const importRunId = randomUUID();
@@ -174,13 +220,7 @@ integration('daily research orchestration', () => {
       .delete()
       .in('id', importRunIds);
     if (importError) throw importError;
-    if (originalSettings) {
-      const { error } = await client.from('app_settings').upsert(originalSettings);
-      if (error) throw error;
-    } else {
-      const { error } = await client.from('app_settings').delete().eq('id', true);
-      if (error) throw error;
-    }
+    await restoreDailyResearchSettingsIfOwned(client, originalSettings, fixtureSettings);
   });
 
   it('deduplicates a date, checkpoints selection before fanout, resumes safely, and preserves strong revalidation', async () => {
@@ -265,5 +305,41 @@ integration('daily research orchestration', () => {
       purpose: 'strong_revalidation',
       researchRunId: runId
     });
+  });
+
+  it('preserves settings changed after the fixture snapshot during cleanup', async () => {
+    const fixture = fixtureSettings;
+    if (!fixture) throw new Error('Daily research settings fixture was not installed.');
+
+    const changedTelegramEnabled = !fixture.telegram_enabled;
+    const { error: concurrentModificationError } = await client
+      .from('app_settings')
+      .update({ telegram_enabled: changedTelegramEnabled })
+      .eq('id', true);
+    if (concurrentModificationError) throw concurrentModificationError;
+
+    await restoreDailyResearchSettingsIfOwned(client, originalSettings, fixture);
+
+    const { data: preserved, error: preservedError } = await client
+      .from('app_settings')
+      .select('*')
+      .eq('id', true)
+      .single();
+    if (preservedError) throw preservedError;
+    expect(preserved.telegram_enabled).toBe(changedTelegramEnabled);
+    expect(preserved.daily_api_budget).toBe(fixture.daily_api_budget);
+
+    const { error: repairError } = await client
+      .from('app_settings')
+      .update({ telegram_enabled: fixture.telegram_enabled })
+      .eq('id', true);
+    if (repairError) throw repairError;
+    const { data: repaired, error: repairedError } = await client
+      .from('app_settings')
+      .select('*')
+      .eq('id', true)
+      .single();
+    if (repairedError) throw repairedError;
+    fixtureSettings = repaired;
   });
 });
