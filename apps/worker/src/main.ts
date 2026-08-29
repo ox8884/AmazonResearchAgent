@@ -1,6 +1,7 @@
 import { hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createServerDatabaseClient } from '@ara/db';
+import { formatLog } from '@ara/shared';
 import {
   createQueue,
   JobLeaseLostError,
@@ -15,7 +16,6 @@ import {
   ProviderCatalogCache,
   resolvePersistedProviderCatalog
 } from './providers/provider-catalog';
-
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
 
 export interface WorkerQueue {
@@ -61,13 +61,12 @@ export interface WorkerLoopOptions extends RunJobOptions {
 
 const consoleLogger: WorkerLogger = {
   info(message) {
-    console.info(message);
+    console.info(formatLog({ level: 'info', service: 'worker', event: message }));
   },
   error(message) {
-    console.error(message);
+    console.error(formatLog({ level: 'error', service: 'worker', event: message }));
   }
 };
-
 export function retryDelayMilliseconds(attempt: number): number {
   if (attempt < 1) {
     throw new RangeError('attempt must be at least 1');

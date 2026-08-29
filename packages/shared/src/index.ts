@@ -27,6 +27,8 @@ export type {
 
 export { ResearchSettingsSchema } from './settings';
 export type { ResearchSettings, ResearchSettingsInput } from './settings';
+export { formatLog } from './logger';
+export type { StructuredLog } from './logger';
 export { COPY, DEFAULT_LOCALE, getCopy } from './i18n';
 export type { CopyKey } from './i18n';
 
