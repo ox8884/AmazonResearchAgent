@@ -1570,6 +1570,15 @@ export type Database = {
         }
         Returns: boolean
       }
+      advance_daily_research_checkpoint: {
+        Args: {
+          next_checkpoint: Json
+          next_completed_at: string | null
+          next_status: string
+          run_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

@@ -58,7 +58,7 @@ export interface DailyResearchRunStore {
   updateRun(
     runId: string,
     update: Database['public']['Tables']['research_runs']['Update']
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export interface DailyResearchQueue {
@@ -116,6 +116,37 @@ export class DailyResearchError extends Error {
     super(message, { cause });
     this.name = 'DailyResearchError';
   }
+}
+
+export function canAdvanceDailyResearchCheckpoint(
+  current: Pick<DailyResearchRunRecord, 'status' | 'checkpoint'>,
+  next: Database['public']['Tables']['research_runs']['Update']
+): boolean {
+  const nextStatus = next.status ?? current.status;
+  const currentParsed = DailyResearchCheckpointSchema.safeParse(current.checkpoint);
+  const nextParsed = DailyResearchCheckpointSchema.safeParse(
+    next.checkpoint ?? current.checkpoint
+  );
+  const currentPhase = currentParsed.success ? currentParsed.data.phase : null;
+  const nextPhase = nextParsed.success ? nextParsed.data.phase : null;
+  const currentCount = currentParsed.success
+    ? currentParsed.data.enqueuedCandidateIds.length
+    : 0;
+  const nextCount = nextParsed.success
+    ? nextParsed.data.enqueuedCandidateIds.length
+    : 0;
+
+  if (current.status === 'completed' || currentPhase === 'fanout_complete') {
+    return (
+      nextStatus === 'completed' &&
+      nextPhase === 'fanout_complete' &&
+      nextCount >= currentCount
+    );
+  }
+  return (
+    nextCount >= currentCount &&
+    (nextStatus === 'fanout' || nextStatus === 'completed')
+  );
 }
 
 export function deriveChicagoDate(now = new Date()): LogicalRunDate {
@@ -453,22 +484,18 @@ function createDailyResearchRunStore(
       return data;
     },
     async updateRun(runId, update) {
-      const { data, error } = await client
-        .from('research_runs')
-        .update(update)
-        .eq('id', runId)
-        .select('id')
-        .maybeSingle();
+      const { data, error } = await client.rpc('advance_daily_research_checkpoint', {
+        run_id: runId,
+        next_status: update.status ?? '',
+        next_checkpoint: update.checkpoint ?? {},
+        next_completed_at: update.completed_at ?? null
+      });
       if (error) {
         throw new DailyResearchError(
           `Could not checkpoint daily research run: ${errorMessage(error)}`
         );
       }
-      if (!data) {
-        throw new DailyResearchError(
-          `Could not checkpoint daily research run ${runId}: the run was not found.`
-        );
-      }
+      return data === true;
     }
   };
 }
@@ -491,6 +518,24 @@ function checkpointFromRun(
     return null;
   }
   return parsedCheckpoint.data;
+}
+
+async function persistDailyResearchCheckpoint(
+  runStore: DailyResearchRunStore,
+  runId: string,
+  update: Database['public']['Tables']['research_runs']['Update']
+): Promise<DailyResearchCheckpoint | undefined> {
+  if (await runStore.updateRun(runId, update)) {
+    return undefined;
+  }
+  const latest = await runStore.readRun(runId);
+  const adopted = latest
+    ? checkpointFromRun(latest.selected_candidate_ids, latest.checkpoint)
+    : null;
+  if (latest?.status === 'completed' && adopted?.phase === 'fanout_complete') {
+    return adopted;
+  }
+  throw new DailyResearchError('Rejected stale daily research checkpoint write.');
 }
 
 function isUnpublishedRun(run: DailyResearchRunRecord): boolean {
@@ -617,10 +662,13 @@ export async function runDailyResearch(
       selectedItems: checkpoint.selectedItems,
       enqueuedCandidateIds: [...enqueuedCandidateIds]
     };
-    await runStore.updateRun(run.id, {
+    const adopted = await persistDailyResearchCheckpoint(runStore, run.id, {
       status: 'fanout',
       checkpoint
     });
+    if (adopted) {
+      return adopted;
+    }
   }
 
   checkpoint = {
@@ -628,11 +676,14 @@ export async function runDailyResearch(
     selectedItems: checkpoint.selectedItems,
     enqueuedCandidateIds: [...enqueuedCandidateIds]
   };
-  await runStore.updateRun(run.id, {
+  const adopted = await persistDailyResearchCheckpoint(runStore, run.id, {
     status: 'completed',
     completed_at: now.toISOString(),
     checkpoint
   });
+  if (adopted) {
+    return adopted;
+  }
   return checkpoint;
 }
 

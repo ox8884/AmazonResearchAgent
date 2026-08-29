@@ -80,11 +80,14 @@ async function cleanupDailyFixtures(
     .delete()
     .in('idempotency_key', runKeys);
   if (parentJobError) throw parentJobError;
-  const { error: lockError } = await client
-    .from('scheduled_run_locks')
-    .delete()
-    .in('run_date', runDates);
-  if (lockError) throw lockError;
+  const fixtureRunIds = (runs ?? []).map((run) => run.id);
+  if (fixtureRunIds.length > 0) {
+    const { error: lockError } = await client
+      .from('scheduled_run_locks')
+      .delete()
+      .in('research_run_id', fixtureRunIds);
+    if (lockError) throw lockError;
+  }
   const { error: researchRunError } = await client
     .from('research_runs')
     .delete()
@@ -341,5 +344,48 @@ integration('daily research orchestration', () => {
       .single();
     if (repairedError) throw repairedError;
     fixtureSettings = repaired;
+  });
+
+  // Break: fixture cleanup deletes another run’s scheduled lock just because the dates overlap.
+  it('does not delete scheduled locks owned by another research run', async () => {
+    const foreignDate = `${fixtureYear}-12-31`;
+    const { data: foreignRun, error: foreignRunError } = await client
+      .from('research_runs')
+      .insert({
+        source: 'scheduled',
+        logical_run_date: foreignDate,
+        idempotency_key: `${fixturePrefix}-foreign-lock`,
+        locale: 'ko'
+      })
+      .select('id')
+      .single();
+    if (foreignRunError) throw foreignRunError;
+    const { error: foreignLockError } = await client.from('scheduled_run_locks').insert({
+      run_date: foreignDate,
+      research_run_id: foreignRun.id
+    });
+    if (foreignLockError) throw foreignLockError;
+
+    try {
+      await cleanupDailyFixtures(client, [foreignDate]);
+      const { data: remainingLock, error: remainingError } = await client
+        .from('scheduled_run_locks')
+        .select('research_run_id')
+        .eq('run_date', foreignDate)
+        .maybeSingle();
+      if (remainingError) throw remainingError;
+      expect(remainingLock?.research_run_id).toBe(foreignRun.id);
+    } finally {
+      const { error: lockDeleteError } = await client
+        .from('scheduled_run_locks')
+        .delete()
+        .eq('research_run_id', foreignRun.id);
+      if (lockDeleteError) throw lockDeleteError;
+      const { error: runDeleteError } = await client
+        .from('research_runs')
+        .delete()
+        .eq('id', foreignRun.id);
+      if (runDeleteError) throw runDeleteError;
+    }
   });
 });

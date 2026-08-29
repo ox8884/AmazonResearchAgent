@@ -87,6 +87,67 @@ describe('automation schema', () => {
     expect(stored?.selected_candidate_ids).toEqual(['candidate-a']);
   });
 
+  // Break: a stale fanout write can replace a completed daily-research checkpoint.
+  it('rejects checkpoint regression after a daily run is completed', async () => {
+    const [run] = await sql<{ id: string }[]>`
+      insert into research_runs (
+        source,
+        logical_run_date,
+        idempotency_key,
+        status,
+        checkpoint
+      )
+      values (
+        'scheduled',
+        date '2099-01-04',
+        'db-it-automation-checkpoint',
+        'completed',
+        '{"phase":"fanout_complete","selectedItems":[{"id":"00000000-0000-4000-8000-00000000000a","bucket":"new"}],"enqueuedCandidateIds":["00000000-0000-4000-8000-00000000000a"]}'::jsonb
+      )
+      returning id
+    `;
+    if (!run) throw new Error('Checkpoint fixture was not created.');
+
+    const rejected = await sql<{ advanced: boolean }[]>`
+      select advance_daily_research_checkpoint(
+        ${run.id}::uuid,
+        'fanout',
+        ${sql.json({
+          phase: 'fanout',
+          selectedItems: [
+            { id: '00000000-0000-4000-8000-00000000000a', bucket: 'new' }
+          ],
+          enqueuedCandidateIds: []
+        })},
+        null
+      ) as advanced
+    `;
+    const accepted = await sql<{ advanced: boolean }[]>`
+      select advance_daily_research_checkpoint(
+        ${run.id}::uuid,
+        'completed',
+        ${sql.json({
+          phase: 'fanout_complete',
+          selectedItems: [
+            { id: '00000000-0000-4000-8000-00000000000a', bucket: 'new' }
+          ],
+          enqueuedCandidateIds: ['00000000-0000-4000-8000-00000000000a']
+        })},
+        now()
+      ) as advanced
+    `;
+    const [stored] = await sql<{ status: string; checkpoint: { phase: string } }[]>`
+      select status, checkpoint from research_runs where id = ${run.id}::uuid
+    `;
+
+    expect(rejected[0]?.advanced).toBe(false);
+    expect(accepted[0]?.advanced).toBe(true);
+    expect(stored).toMatchObject({
+      status: 'completed',
+      checkpoint: { phase: 'fanout_complete' }
+    });
+  });
+
   // Break: a retry can create a second outbound Telegram delivery for one logical event.
   it('deduplicates notification delivery identity', async () => {
     await sql`

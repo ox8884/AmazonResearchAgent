@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DAILY_RESEARCH_PAGE_SIZE,
+  canAdvanceDailyResearchCheckpoint,
   collectDailyResearchPages,
   runDailyResearch,
   type DailyResearchQueue,
@@ -22,6 +23,7 @@ type QueuedChild = {
 };
 class InMemoryRunStore implements DailyResearchRunStore {
   readonly publishedPlans: string[][] = [];
+  readonly appliedStatuses: string[] = [];
   private run: DailyResearchRunRecord = {
     id: RUN_ID,
     logical_run_date: DATE,
@@ -61,8 +63,15 @@ class InMemoryRunStore implements DailyResearchRunStore {
   async updateRun(
     _runId: string,
     update: Parameters<DailyResearchRunStore['updateRun']>[1]
-  ): Promise<void> {
+  ): Promise<boolean> {
+    if (!canAdvanceDailyResearchCheckpoint(this.run, update)) {
+      return false;
+    }
     this.run = { ...this.run, ...update };
+    if (typeof update.status === 'string') {
+      this.appliedStatuses.push(update.status);
+    }
+    return true;
   }
 }
 
@@ -180,7 +189,9 @@ describe('daily research orchestration', () => {
       async publishPlan() {
         return false;
       },
-      async updateRun() {}
+      async updateRun() {
+        return true;
+      }
     };
 
     await expect(
@@ -234,5 +245,52 @@ describe('daily research orchestration', () => {
       [DAILY_RESEARCH_PAGE_SIZE, DAILY_RESEARCH_PAGE_SIZE * 2 - 1],
       [DAILY_RESEARCH_PAGE_SIZE * 2, DAILY_RESEARCH_PAGE_SIZE * 3 - 1]
     ]);
+  });
+
+  // Break: a lease-expired worker can overwrite a reclaimer’s completed fanout with older partial progress.
+  it('does not let a stale worker regress a completed fanout checkpoint', async () => {
+    const store = new InMemoryRunStore();
+    const replacementQueue = new DeduplicatingQueue();
+    let sawFirstEnqueue: (() => void) | undefined;
+    const firstEnqueue = new Promise<void>((resolve) => {
+      sawFirstEnqueue = resolve;
+    });
+    let resumeStale: (() => void) | undefined;
+    const holdStale = new Promise<void>((resolve) => {
+      resumeStale = resolve;
+    });
+    const staleQueue: DailyResearchQueue = {
+      async enqueueJob(input) {
+        const payload = ScheduledMarketProbePayloadSchema.parse(input.payload);
+        if (payload.candidateId === CANDIDATE_A) {
+          sawFirstEnqueue?.();
+          await holdStale;
+        }
+        return input.idempotencyKey;
+      }
+    };
+
+    const stale = runDailyResearch(
+      orchestratorJob('stale'),
+      dependencies(store, staleQueue, async () => plan(CANDIDATE_A, CANDIDATE_B))
+    );
+    await firstEnqueue;
+    await runDailyResearch(
+      orchestratorJob('replacement'),
+      dependencies(store, replacementQueue, async () => plan(CANDIDATE_A, CANDIDATE_B))
+    );
+    resumeStale?.();
+
+    const completed = await stale;
+    expect(completed.phase).toBe('fanout_complete');
+    const firstCompleted = store.appliedStatuses.indexOf('completed');
+    expect(firstCompleted).toBeGreaterThanOrEqual(0);
+    expect(store.appliedStatuses.slice(firstCompleted + 1)).not.toContain('fanout');
+    const run = await store.readRun(RUN_ID);
+    expect(run.status).toBe('completed');
+    expect(run.checkpoint).toMatchObject({
+      phase: 'fanout_complete',
+      enqueuedCandidateIds: [CANDIDATE_A, CANDIDATE_B]
+    });
   });
 });
