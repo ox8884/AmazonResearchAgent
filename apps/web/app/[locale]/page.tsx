@@ -1,8 +1,8 @@
 import { getCopy, RuleReasonSchema } from '@ara/shared';
+import { ResearchNowButton } from '../../components/research-now-button';
 import { ButtonLink, EmptyState, localeDate, LocalizedStatusBadge, MetricCard } from '../../components/ui';
 import { localizedHref, parseLocale } from '../../lib/locale';
 import { getDashboardView } from '../../lib/server/dashboard-data';
-
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage({
@@ -21,7 +21,10 @@ export default async function DashboardPage({
           <h1>{copy.homeTitle}</h1>
           <p>{copy.homeDescription}</p>
         </div>
-        <ButtonLink href={localizedHref(locale, '/imports/new')}>{copy.newImport}</ButtonLink>
+        <div className="cluster">
+          <ResearchNowButton locale={locale} />
+          <ButtonLink href={localizedHref(locale, '/imports/new')}>{copy.newImport}</ButtonLink>
+        </div>
       </header>
 
       {dashboard.kind === 'unavailable' ? (

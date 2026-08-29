@@ -41,6 +41,7 @@ export interface DailyResearchRunRecord {
   readonly logical_run_date: string;
   readonly locale: string;
   readonly status: string;
+  readonly mode?: string;
   readonly selected_candidate_ids: Database['public']['Tables']['research_runs']['Row']['selected_candidate_ids'];
   readonly checkpoint: Database['public']['Tables']['research_runs']['Row']['checkpoint'];
   readonly started_at?: string | null;
@@ -458,7 +459,7 @@ function createDailyResearchRunStore(
       const { data, error } = await client
         .from('research_runs')
         .select(
-          'id,logical_run_date,locale,status,selected_candidate_ids,checkpoint,started_at,completed_at'
+          'id,logical_run_date,locale,status,mode,selected_candidate_ids,checkpoint,started_at,completed_at'
         )
         .eq('id', runId)
         .maybeSingle();
@@ -558,14 +559,15 @@ function isUnpublishedRun(run: DailyResearchRunRecord): boolean {
 function childPayload(
   item: ResearchPlanItem,
   locale: DailyResearchJobPayload['locale'],
-  researchRunId: string
+  researchRunId: string,
+  mode: string | undefined
 ): ScheduledMarketProbePayload {
   return ScheduledMarketProbePayloadSchema.parse({
     candidateId: item.id,
     locale,
     researchRunId,
     purpose:
-      item.bucket === ResearchPlanBucket.strong
+      mode === 'override-reserve' || item.bucket === ResearchPlanBucket.strong
         ? 'strong_revalidation'
         : 'normal_validation'
   });
@@ -650,7 +652,7 @@ export async function runDailyResearch(
     if (enqueuedCandidateIds.has(item.id)) {
       continue;
     }
-    const payloadForChild = childPayload(item, payload.locale, run.id);
+    const payloadForChild = childPayload(item, payload.locale, run.id, run.mode);
     await dependencies.queue.enqueueJob({
       type: 'MARKET_PROBE',
       payload: payloadForChild,

@@ -19,6 +19,9 @@ export const LogicalRunDateSchema = z
   }, 'Expected a valid ISO calendar date (YYYY-MM-DD).');
 export type LogicalRunDate = z.infer<typeof LogicalRunDateSchema>;
 
+export const ResearchNowModeSchema = z.enum(['normal', 'override-reserve']);
+export type ResearchNowMode = z.infer<typeof ResearchNowModeSchema>;
+
 export const DailyResearchJobPayloadSchema = z.object({
   researchRunId: z.uuid(),
   logicalRunDate: LogicalRunDateSchema,

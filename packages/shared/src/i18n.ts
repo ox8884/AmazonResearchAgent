@@ -86,7 +86,12 @@ export type CopyKey =
   | 'adminPassword'
   | 'adminLogin'
   | 'adminLogout'
-  | 'invalidLogin';
+  | 'invalidLogin'
+  | 'researchNow'
+  | 'researchNowQueued'
+  | 'researchNowError'
+  | 'navDashboard'
+  | 'competitionLabel';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -175,7 +180,12 @@ export const COPY = {
     adminPassword: '관리자 비밀번호',
     adminLogin: '로그인',
     adminLogout: '로그아웃',
-    invalidLogin: '로그인 정보가 올바르지 않습니다.'
+    invalidLogin: '로그인 정보가 올바르지 않습니다.',
+    researchNow: '지금 리서치',
+    researchNowQueued: '대기열에 추가됨',
+    researchNowError: '리서치를 대기열에 넣지 못했습니다.',
+    navDashboard: '대시보드',
+    competitionLabel: '경쟁도'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -261,7 +271,12 @@ export const COPY = {
     adminPassword: 'Admin password',
     adminLogin: 'Log in',
     adminLogout: 'Log out',
-    invalidLogin: 'The login credentials are invalid.'
+    invalidLogin: 'The login credentials are invalid.',
+    researchNow: 'Research Now',
+    researchNowQueued: 'Added to queue',
+    researchNowError: 'Research could not be queued.',
+    navDashboard: 'Dashboard',
+    competitionLabel: 'Competition'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

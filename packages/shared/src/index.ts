@@ -84,11 +84,13 @@ export type {
 export {
   DailyResearchJobPayloadSchema,
   LogicalRunDateSchema,
+  ResearchNowModeSchema,
   ScheduledMarketProbePayloadSchema
 } from './automation';
 export type {
   DailyResearchJobPayload,
   LogicalRunDate,
+  ResearchNowMode,
   ScheduledMarketProbePayload
 } from './automation';
 export {
