@@ -1,0 +1,11 @@
+[Unit]
+Description=Amazon Research Agent daily enqueue
+After=network-online.target amazon-research-worker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=amazon-research
+WorkingDirectory=/opt/amazon-research/current
+EnvironmentFile=/etc/amazon-research/worker.env
+ExecStart=/usr/bin/env pnpm --filter @ara/worker enqueue:daily

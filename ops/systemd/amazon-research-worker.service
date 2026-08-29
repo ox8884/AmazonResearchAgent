@@ -1,0 +1,17 @@
+[Unit]
+Description=Amazon Research Agent worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=amazon-research
+WorkingDirectory=/opt/amazon-research/current
+EnvironmentFile=/etc/amazon-research/worker.env
+ExecStart=/usr/bin/env pnpm --filter @ara/worker start
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
