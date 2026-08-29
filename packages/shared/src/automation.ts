@@ -31,6 +31,7 @@ export type DailyResearchJobPayload = z.infer<
 export const ScheduledMarketProbePayloadSchema = z.object({
   candidateId: z.uuid(),
   locale: LocaleSchema,
+  researchRunId: z.uuid(),
   purpose: ApiCallPurposeSchema
 });
 export const AnalysisVerdictEvidenceSchema = z.object({

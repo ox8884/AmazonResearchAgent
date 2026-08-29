@@ -789,7 +789,11 @@ integration('market probe job', () => {
         enqueueResume: async (input) => {
           await queue.enqueueJob({
             type: 'MARKET_PROBE',
-            payload: { candidateId: input.candidateId, locale: input.locale },
+            payload: {
+              candidateId: input.candidateId,
+              locale: input.locale,
+              purpose: input.purpose
+            },
             idempotencyKey: input.idempotencyKey,
             availableAt: input.availableAt
           });
@@ -803,7 +807,7 @@ integration('market probe job', () => {
       .single();
     const { data: jobs } = await client
       .from('jobs')
-      .select('id,type,payload,available_at,status')
+      .select('id,type,payload,available_at,status,idempotency_key')
       .like('idempotency_key', `market-probe-resume:${candidateId}:%`);
     const { data: snapshots } = await client
       .from('market_snapshots')
@@ -818,7 +822,14 @@ integration('market probe job', () => {
     expect(candidate?.state).toBe('Waiting for API Budget');
     expect(jobs).toHaveLength(1);
     expect(jobs?.[0]?.type).toBe('MARKET_PROBE');
-    expect(jobs?.[0]?.payload).toMatchObject({ candidateId, locale: 'ko' });
+    expect(jobs?.[0]?.payload).toMatchObject({
+      candidateId,
+      locale: 'ko',
+      purpose: 'normal_validation'
+    });
+    expect(jobs?.[0]?.idempotency_key).toContain(
+      `market-probe-resume:${candidateId}:normal_validation:`
+    );
     expect(jobs?.[0]?.available_at && Date.parse(jobs[0].available_at) > Date.now()).toBe(true);
     expect(snapshots ?? []).toHaveLength(0);
     expect(downstream ?? []).toHaveLength(0);

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createServerDatabaseClient } from '@ara/db';
+import { createServerDatabaseClient, type Database } from '@ara/db';
 import {
   createQueue,
   type Job,
@@ -17,6 +17,10 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const integration = supabaseUrl && serviceRoleKey ? describe : describe.skip;
 const fixturePrefix = `worker-it-daily-${randomUUID()}`;
+const fixtureYear =
+  2100 + Number.parseInt(fixturePrefix.replaceAll('-', '').slice(-8), 16) % 10_000;
+const fixtureRunDates = [`${fixtureYear}-01-01`, `${fixtureYear}-01-02`] as const;
+type AppSettingsRow = Database['public']['Tables']['app_settings']['Row'];
 function database(): QueueDatabaseClient {
   return createServerDatabaseClient({
     url: supabaseUrl ?? 'http://127.0.0.1:54321',
@@ -54,14 +58,57 @@ function makeOrchestratorJob(
     updatedAt: '2099-01-01T00:00:00.000Z'
   };
 }
+async function cleanupDailyFixtures(
+  client: QueueDatabaseClient,
+  runDates: readonly string[]
+): Promise<void> {
+  const runKeys = runDates.map((date) => `daily-research:${date}`);
+  const { data: runs, error: runError } = await client
+    .from('research_runs')
+    .select('id')
+    .in('idempotency_key', runKeys);
+  if (runError) throw runError;
+  for (const run of runs ?? []) {
+    const { error } = await client
+      .from('jobs')
+      .delete()
+      .like('idempotency_key', `daily-research:${run.id}:%`);
+    if (error) throw error;
+  }
+  const { error: parentJobError } = await client
+    .from('jobs')
+    .delete()
+    .in('idempotency_key', runKeys);
+  if (parentJobError) throw parentJobError;
+  const { error: lockError } = await client
+    .from('scheduled_run_locks')
+    .delete()
+    .in('run_date', runDates);
+  if (lockError) throw lockError;
+  const { error: researchRunError } = await client
+    .from('research_runs')
+    .delete()
+    .in('idempotency_key', runKeys);
+  if (researchRunError) throw researchRunError;
+}
 
 integration('daily research orchestration', () => {
   const client = database();
   const candidateIds: string[] = [];
   const importRunIds: string[] = [];
-  const runDates = ['2099-01-01', '2099-01-02'];
+  const runDates = [...fixtureRunDates];
+  let originalSettings: AppSettingsRow | null = null;
 
   beforeAll(async () => {
+    const { data: settings, error: readSettingsError } = await client
+      .from('app_settings')
+      .select('*')
+      .eq('id', true)
+      .maybeSingle();
+    if (readSettingsError) throw readSettingsError;
+    originalSettings = settings;
+    await cleanupDailyFixtures(client, runDates);
+
     const { error: settingsError } = await client.from('app_settings').upsert({
       id: true,
       locale: 'ko',
@@ -77,9 +124,6 @@ integration('daily research orchestration', () => {
       strong_freshness_hours: 24
     });
     if (settingsError) throw settingsError;
-
-    await client.from('jobs').delete().like('idempotency_key', `${fixturePrefix}%`);
-    await client.from('research_runs').delete().like('idempotency_key', `${fixturePrefix}%`);
 
     for (const state of ['Ready for API Validation', 'Watch']) {
       const importRunId = randomUUID();
@@ -114,13 +158,29 @@ integration('daily research orchestration', () => {
   });
 
   afterAll(async () => {
-    await client.from('jobs').delete().like('idempotency_key', `${fixturePrefix}%`);
-    await client.from('scheduled_run_locks').delete().in('run_date', runDates);
-    await client.from('research_runs').delete().like('idempotency_key', `${fixturePrefix}%`);
-    await client.from('candidate_evidence').delete().in('candidate_id', candidateIds);
-    await client.from('candidates').delete().in('id', candidateIds);
-    await client.from('import_runs').delete().in('id', importRunIds);
-    await client.from('app_settings').delete().eq('id', true);
+    await cleanupDailyFixtures(client, runDates);
+    const { error: evidenceError } = await client
+      .from('candidate_evidence')
+      .delete()
+      .in('candidate_id', candidateIds);
+    if (evidenceError) throw evidenceError;
+    const { error: candidateError } = await client
+      .from('candidates')
+      .delete()
+      .in('id', candidateIds);
+    if (candidateError) throw candidateError;
+    const { error: importError } = await client
+      .from('import_runs')
+      .delete()
+      .in('id', importRunIds);
+    if (importError) throw importError;
+    if (originalSettings) {
+      const { error } = await client.from('app_settings').upsert(originalSettings);
+      if (error) throw error;
+    } else {
+      const { error } = await client.from('app_settings').delete().eq('id', true);
+      if (error) throw error;
+    }
   });
 
   it('deduplicates a date, checkpoints selection before fanout, resumes safely, and preserves strong revalidation', async () => {
@@ -157,12 +217,13 @@ integration('daily research orchestration', () => {
 
     const { data: selectedRun, error: selectedError } = await client
       .from('research_runs')
-      .select('selected_candidate_ids, checkpoint')
+      .select('selected_candidate_ids, checkpoint, status')
       .eq('id', runId)
       .single();
     if (selectedError) throw selectedError;
     expect(selectedRun.selected_candidate_ids).toEqual(expect.arrayContaining(candidateIds));
     expect(selectedRun.checkpoint).toMatchObject({ phase: 'fanout' });
+    expect(selectedRun.status).toBe('fanout');
 
     await runDailyResearch(job, {
       client,
@@ -174,6 +235,15 @@ integration('daily research orchestration', () => {
       queue: queueFor(client),
       now: () => new Date('2099-01-01T12:00:00.000Z')
     });
+    const { data: completedRun, error: completedError } = await client
+      .from('research_runs')
+      .select('status, completed_at, checkpoint')
+      .eq('id', runId)
+      .single();
+    if (completedError) throw completedError;
+    expect(completedRun.status).toBe('completed');
+    expect(completedRun.completed_at).not.toBeNull();
+    expect(completedRun.checkpoint).toMatchObject({ phase: 'fanout_complete' });
 
     const { data: childJobs, error: childError } = await client
       .from('jobs')
@@ -192,7 +262,8 @@ integration('daily research orchestration', () => {
     );
     expect(strongJob?.payload).toMatchObject({
       candidateId: candidateIds[1],
-      purpose: 'strong_revalidation'
+      purpose: 'strong_revalidation',
+      researchRunId: runId
     });
   });
 });

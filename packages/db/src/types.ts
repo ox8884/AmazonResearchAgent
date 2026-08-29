@@ -1561,6 +1561,15 @@ export type Database = {
         Args: { job_id: string; lease_seconds: number; worker_id: string }
         Returns: boolean
       }
+      publish_daily_research_plan: {
+        Args: {
+          plan_candidate_ids: Json
+          plan_checkpoint: Json
+          plan_started_at: string
+          run_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

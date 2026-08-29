@@ -25,8 +25,41 @@ import type { EnqueueJobInput, Job, QueueDatabaseClient } from '@ara/queue';
 import { createQueue, type DurableQueue } from '@ara/queue';
 const CHICAGO_TIMEZONE = 'America/Chicago';
 const HOURS_TO_MILLISECONDS = 60 * 60 * 1_000;
+const DAILY_RESEARCH_PAGE_SIZE = 500;
 const SCHEDULED_SOURCE = 'scheduled';
 const DAILY_RESEARCH_JOB_TYPE = 'DAILY_RESEARCH' as const;
+
+export { DAILY_RESEARCH_PAGE_SIZE };
+
+type DailyResearchQueryError = {
+  readonly code?: string;
+  readonly message: string;
+};
+
+export interface DailyResearchRunRecord {
+  readonly id: string;
+  readonly logical_run_date: string;
+  readonly locale: string;
+  readonly status: string;
+  readonly selected_candidate_ids: Database['public']['Tables']['research_runs']['Row']['selected_candidate_ids'];
+  readonly checkpoint: Database['public']['Tables']['research_runs']['Row']['checkpoint'];
+  readonly started_at?: string | null;
+  readonly completed_at?: string | null;
+}
+
+export interface DailyResearchRunStore {
+  readRun(runId: string): Promise<DailyResearchRunRecord | null>;
+  publishPlan(
+    runId: string,
+    selectedCandidateIds: readonly string[],
+    checkpoint: Database['public']['Tables']['research_runs']['Row']['checkpoint'],
+    startedAt: string
+  ): Promise<boolean>;
+  updateRun(
+    runId: string,
+    update: Database['public']['Tables']['research_runs']['Update']
+  ): Promise<void>;
+}
 
 export interface DailyResearchQueue {
   enqueueJob(input: EnqueueJobInput): Promise<string>;
@@ -48,9 +81,34 @@ interface ScheduledResearchRun {
 }
 
 export interface RunDailyResearchDependencies {
-  readonly client: QueueDatabaseClient;
+  readonly client?: QueueDatabaseClient;
   readonly queue: DailyResearchQueue;
+  readonly runStore?: DailyResearchRunStore;
+  readonly selectPlan?: (now: Date) => Promise<ResearchPlan>;
   readonly now?: () => Date;
+}
+
+export async function collectDailyResearchPages<T>(
+  readPage: (
+    from: number,
+    to: number
+  ) => PromiseLike<{
+    readonly data: T[] | null;
+    readonly error: DailyResearchQueryError | null;
+  }>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += DAILY_RESEARCH_PAGE_SIZE) {
+    const page = await readPage(from, from + DAILY_RESEARCH_PAGE_SIZE - 1);
+    if (page.error) {
+      throw new DailyResearchError(`Could not read daily research page: ${errorMessage(page.error)}`);
+    }
+    const pageRows = page.data ?? [];
+    rows.push(...pageRows);
+    if (pageRows.length < DAILY_RESEARCH_PAGE_SIZE) {
+      return rows;
+    }
+  }
 }
 
 export class DailyResearchError extends Error {
@@ -259,58 +317,63 @@ async function selectResearchPlan(
   settings: ResearchSettings,
   now: Date
 ): Promise<ResearchPlan> {
-  const { data: candidates, error: candidateError } = await client
-    .from('candidates')
-    .select('id,state,preliminary_score')
-    .in('state', ['Ready for API Validation', 'Watch']);
-  if (candidateError) {
-    throw new DailyResearchError(
-      `Could not select daily research candidates: ${errorMessage(candidateError)}`
-    );
-  }
+  const candidates = await collectDailyResearchPages((from, to) =>
+    client
+      .from('candidates')
+      .select('id,state,preliminary_score')
+      .in('state', ['Ready for API Validation', 'Watch'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
 
   const candidateIds = candidates.map((candidate) => candidate.id);
-  const evidenceRows: Array<{
-    readonly id: string;
-    readonly candidate_id: string;
-    readonly created_at: string;
-    readonly payload: Database['public']['Tables']['candidate_evidence']['Row']['payload'];
-  }> = [];
-  if (candidateIds.length > 0) {
-    const { data: evidence, error: evidenceError } = await client
-      .from('candidate_evidence')
-      .select('id,candidate_id,created_at,payload')
-      .eq('kind', 'analysis_verdict')
-      .in('candidate_id', candidateIds);
-    if (evidenceError) {
-      throw new DailyResearchError(
-        `Could not read candidate analysis verdicts: ${errorMessage(evidenceError)}`
-      );
-    }
-    evidenceRows.push(...evidence);
-  }
+  const evidenceRows =
+    candidateIds.length === 0
+      ? []
+      : await collectDailyResearchPages((from, to) =>
+          client
+            .from('candidate_evidence')
+            .select('id,candidate_id,created_at,payload')
+            .eq('kind', 'analysis_verdict')
+            .in('candidate_id', candidateIds)
+            .order('candidate_id', { ascending: true })
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to)
+        );
   const latestEvidence = latestByCandidate(evidenceRows);
-  const snapshotRows: Array<{
-    readonly candidate_id: string | null;
-    readonly captured_at: string;
-  }> = [];
-  if (candidateIds.length > 0) {
-    const { data: snapshots, error: snapshotError } = await client
-      .from('market_snapshots')
-      .select('candidate_id,captured_at')
-      .in('candidate_id', candidateIds)
-      .order('captured_at', { ascending: false });
-    if (snapshotError) {
-      throw new DailyResearchError(
-        `Could not read market snapshot freshness: ${errorMessage(snapshotError)}`
-      );
-    }
-    snapshotRows.push(...snapshots);
-  }
-  const latestSnapshots = new Map<string, string>();
+
+  const snapshotRows =
+    candidateIds.length === 0
+      ? []
+      : await collectDailyResearchPages((from, to) =>
+          client
+            .from('market_snapshots')
+            .select('id,candidate_id,captured_at')
+            .in('candidate_id', candidateIds)
+            .order('candidate_id', { ascending: true })
+            .order('captured_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to)
+        );
+  const latestSnapshots = new Map<
+    string,
+    { readonly capturedAt: string; readonly id: string }
+  >();
   for (const snapshot of snapshotRows) {
-    if (snapshot.candidate_id && !latestSnapshots.has(snapshot.candidate_id)) {
-      latestSnapshots.set(snapshot.candidate_id, snapshot.captured_at);
+    if (!snapshot.candidate_id) {
+      continue;
+    }
+    const previous = latestSnapshots.get(snapshot.candidate_id);
+    if (
+      !previous ||
+      snapshot.captured_at > previous.capturedAt ||
+      (snapshot.captured_at === previous.capturedAt && snapshot.id > previous.id)
+    ) {
+      latestSnapshots.set(snapshot.candidate_id, {
+        capturedAt: snapshot.captured_at,
+        id: snapshot.id
+      });
     }
   }
 
@@ -331,7 +394,8 @@ async function selectResearchPlan(
         : bucket === ResearchPlanBucket.watch
           ? settings.watchFreshnessHours
           : settings.strongFreshnessHours;
-    const capturedAt = latestSnapshots.get(candidate.id);
+    const snapshot = latestSnapshots.get(candidate.id);
+    const capturedAt = snapshot?.capturedAt;
     return {
       id: candidate.id,
       bucket,
@@ -355,18 +419,58 @@ async function selectResearchPlan(
   });
 }
 
-async function updateRun(
-  client: QueueDatabaseClient,
-  runId: string,
-  update: Database['public']['Tables']['research_runs']['Update']
-): Promise<void> {
-  const { error } = await client
-    .from('research_runs')
-    .update(update)
-    .eq('id', runId);
-  if (error) {
-    throw new DailyResearchError(`Could not checkpoint daily research run: ${errorMessage(error)}`);
-  }
+function createDailyResearchRunStore(
+  client: QueueDatabaseClient
+): DailyResearchRunStore {
+  return {
+    async readRun(runId) {
+      const { data, error } = await client
+        .from('research_runs')
+        .select(
+          'id,logical_run_date,locale,status,selected_candidate_ids,checkpoint,started_at,completed_at'
+        )
+        .eq('id', runId)
+        .maybeSingle();
+      if (error) {
+        throw new DailyResearchError(
+          `Could not read scheduled research run: ${errorMessage(error)}`
+        );
+      }
+      return data;
+    },
+    async publishPlan(runId, selectedCandidateIds, checkpoint, startedAt) {
+      const { data, error } = await client.rpc('publish_daily_research_plan', {
+        run_id: runId,
+        plan_candidate_ids: [...selectedCandidateIds],
+        plan_checkpoint: checkpoint,
+        plan_started_at: startedAt
+      });
+      if (error) {
+        throw new DailyResearchError(
+          `Could not publish daily research plan: ${errorMessage(error)}`
+        );
+      }
+      return data;
+    },
+    async updateRun(runId, update) {
+      const { data, error } = await client
+        .from('research_runs')
+        .update(update)
+        .eq('id', runId)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        throw new DailyResearchError(
+          `Could not checkpoint daily research run: ${errorMessage(error)}`
+        );
+      }
+      if (!data) {
+        throw new DailyResearchError(
+          `Could not checkpoint daily research run ${runId}: the run was not found.`
+        );
+      }
+    }
+  };
 }
 
 function checkpointFromRun(
@@ -389,13 +493,32 @@ function checkpointFromRun(
   return parsedCheckpoint.data;
 }
 
+function isUnpublishedRun(run: DailyResearchRunRecord): boolean {
+  const parsedIds = DailyResearchSelectedCandidateIdsSchema.safeParse(
+    run.selected_candidate_ids
+  );
+  if (!parsedIds.success || parsedIds.data.length > 0) {
+    return false;
+  }
+  if (
+    typeof run.checkpoint !== 'object' ||
+    run.checkpoint === null ||
+    Array.isArray(run.checkpoint)
+  ) {
+    return false;
+  }
+  return Object.keys(run.checkpoint).length === 0;
+}
+
 function childPayload(
   item: ResearchPlanItem,
-  locale: DailyResearchJobPayload['locale']
+  locale: DailyResearchJobPayload['locale'],
+  researchRunId: string
 ): ScheduledMarketProbePayload {
   return ScheduledMarketProbePayloadSchema.parse({
     candidateId: item.id,
     locale,
+    researchRunId,
     purpose:
       item.bucket === ResearchPlanBucket.strong
         ? 'strong_revalidation'
@@ -413,14 +536,14 @@ export async function runDailyResearch(
     throw new RangeError('Cannot run daily research with an invalid Date.');
   }
 
-  const { data: run, error: runError } = await dependencies.client
-    .from('research_runs')
-    .select('id,logical_run_date,locale,selected_candidate_ids,checkpoint')
-    .eq('id', payload.researchRunId)
-    .maybeSingle();
-  if (runError) {
-    throw new DailyResearchError(`Could not read scheduled research run: ${errorMessage(runError)}`);
+  let runStore = dependencies.runStore;
+  if (!runStore) {
+    if (!dependencies.client) {
+      throw new DailyResearchError('Daily research requires a database client.');
+    }
+    runStore = createDailyResearchRunStore(dependencies.client);
   }
+  const run = await runStore.readRun(payload.researchRunId);
   if (
     !run ||
     run.logical_run_date !== payload.logicalRunDate ||
@@ -431,23 +554,47 @@ export async function runDailyResearch(
 
   let checkpoint = checkpointFromRun(run.selected_candidate_ids, run.checkpoint);
   if (!checkpoint) {
-    await updateRun(dependencies.client, run.id, {
-      status: 'planning',
-      started_at: now.toISOString()
-    });
-    const settings = await readSettings(dependencies.client);
-    const plan = await selectResearchPlan(dependencies.client, settings, now);
+    if (!isUnpublishedRun(run)) {
+      throw new DailyResearchError(
+        'Daily research run has an invalid or partially persisted plan.'
+      );
+    }
+    let plan: ResearchPlan;
+    if (dependencies.selectPlan) {
+      plan = await dependencies.selectPlan(now);
+    } else {
+      if (!dependencies.client) {
+        throw new DailyResearchError('Daily research planning requires a database client.');
+      }
+      const settings = await readSettings(dependencies.client);
+      plan = await selectResearchPlan(dependencies.client, settings, now);
+    }
     const selectedCandidateIds = plan.items.map((item) => item.id);
-    checkpoint = {
+    const candidateCheckpoint: DailyResearchCheckpoint = {
       phase: 'fanout',
       selectedItems: [...plan.items],
       enqueuedCandidateIds: []
     };
-    await updateRun(dependencies.client, run.id, {
-      status: 'fanout',
-      selected_candidate_ids: selectedCandidateIds,
-      checkpoint
-    });
+    const published = await runStore.publishPlan(
+      run.id,
+      selectedCandidateIds,
+      candidateCheckpoint,
+      now.toISOString()
+    );
+    const persistedRun = await runStore.readRun(run.id);
+    checkpoint = persistedRun
+      ? checkpointFromRun(
+          persistedRun.selected_candidate_ids,
+          persistedRun.checkpoint
+        )
+      : null;
+    if (!checkpoint) {
+      throw new DailyResearchError(
+        published
+          ? 'Daily research plan was published but could not be re-read before fanout.'
+          : 'Daily research plan was not persisted by this worker.'
+      );
+    }
   }
   if (!checkpoint) {
     throw new DailyResearchError('Daily research selection checkpoint was not created.');
@@ -458,7 +605,7 @@ export async function runDailyResearch(
     if (enqueuedCandidateIds.has(item.id)) {
       continue;
     }
-    const payloadForChild = childPayload(item, payload.locale);
+    const payloadForChild = childPayload(item, payload.locale, run.id);
     await dependencies.queue.enqueueJob({
       type: 'MARKET_PROBE',
       payload: payloadForChild,
@@ -470,7 +617,7 @@ export async function runDailyResearch(
       selectedItems: checkpoint.selectedItems,
       enqueuedCandidateIds: [...enqueuedCandidateIds]
     };
-    await updateRun(dependencies.client, run.id, {
+    await runStore.updateRun(run.id, {
       status: 'fanout',
       checkpoint
     });
@@ -481,8 +628,9 @@ export async function runDailyResearch(
     selectedItems: checkpoint.selectedItems,
     enqueuedCandidateIds: [...enqueuedCandidateIds]
   };
-  await updateRun(dependencies.client, run.id, {
-    status: checkpoint.selectedItems.length === 0 ? 'completed' : 'running',
+  await runStore.updateRun(run.id, {
+    status: 'completed',
+    completed_at: now.toISOString(),
     checkpoint
   });
   return checkpoint;

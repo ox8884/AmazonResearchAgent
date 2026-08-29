@@ -26,6 +26,13 @@ import { executeBudgetedApiCall } from './budgeted-api-call';
 import { nextBudgetResetAt } from './budget-reset';
 
 export { nextBudgetResetAt };
+export function budgetResumeIdempotencyKey(
+  candidateId: string,
+  purpose: ApiCallPurpose,
+  availableAt: string
+): string {
+  return `market-probe-resume:${candidateId}:${purpose}:${availableAt.slice(0, 10)}`;
+}
 
 const API_CLAIM_LEASE_MS = 120_000;
 const IN_FLIGHT_RECLAIM_MARGIN_MS = 1_000;
@@ -52,6 +59,7 @@ export interface MarketProbeDependencies {
   readonly client: QueueDatabaseClient;
   readonly budget: ApiBudget;
   readonly purpose?: ApiCallPurpose;
+  readonly researchRunId?: string;
   readonly queryProductDatabase: (
     phrases: readonly string[]
   ) => Promise<ProductDatabaseQueryResult>;
@@ -61,6 +69,7 @@ export interface MarketProbeDependencies {
     readonly candidateId: string;
     readonly locale: Locale;
     readonly purpose?: ApiCallPurpose;
+    readonly researchRunId?: string;
     readonly availableAt: string;
     readonly idempotencyKey: string;
   }): Promise<void>;
@@ -131,6 +140,7 @@ async function scheduleInFlightResume(input: {
   readonly candidateId: string;
   readonly locale: Locale;
   readonly purpose: ApiCallPurpose;
+  readonly researchRunId?: string;
   readonly cacheKey: string;
   readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
 }): Promise<void> {
@@ -159,6 +169,7 @@ async function scheduleInFlightResume(input: {
     candidateId: input.candidateId,
     locale: input.locale,
     purpose: input.purpose,
+    ...(input.researchRunId ? { researchRunId: input.researchRunId } : {}),
     availableAt,
     idempotencyKey
   });
@@ -171,6 +182,7 @@ async function exitUnavailableAuthorization(input: {
   readonly fromState: string;
   readonly locale: Locale;
   readonly purpose: ApiCallPurpose;
+  readonly researchRunId?: string;
   readonly cacheKey: string;
   readonly realCalls: number;
   readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
@@ -185,8 +197,13 @@ async function exitUnavailableAuthorization(input: {
       candidateId: input.candidateId,
       locale: input.locale,
       purpose: input.purpose,
+      ...(input.researchRunId ? { researchRunId: input.researchRunId } : {}),
       availableAt,
-      idempotencyKey: `market-probe-resume:${input.candidateId}:${availableAt.slice(0, 10)}`
+      idempotencyKey: budgetResumeIdempotencyKey(
+        input.candidateId,
+        input.purpose,
+        availableAt
+      )
     });
     const checkpoint = { phase: 'deferred_budget' as const, cacheKey: input.cacheKey };
     await input.onCheckpoint?.(checkpoint);
@@ -198,6 +215,7 @@ async function exitUnavailableAuthorization(input: {
       candidateId: input.candidateId,
       locale: input.locale,
       purpose: input.purpose,
+      ...(input.researchRunId ? { researchRunId: input.researchRunId } : {}),
       cacheKey: input.cacheKey,
       enqueueResume: input.enqueueResume
     });
@@ -286,6 +304,7 @@ export async function runMarketProbe(
           fromState: candidate.state,
           locale: input.locale,
           purpose,
+          ...(dependencies.researchRunId ? { researchRunId: dependencies.researchRunId } : {}),
           cacheKey,
           realCalls: 0,
           enqueueResume: dependencies.enqueueResume,
@@ -430,6 +449,7 @@ export async function runMarketProbe(
             fromState: candidate.state,
             locale: input.locale,
             purpose,
+            ...(dependencies.researchRunId ? { researchRunId: dependencies.researchRunId } : {}),
             cacheKey: expandedKey,
             realCalls,
             enqueueResume: dependencies.enqueueResume,

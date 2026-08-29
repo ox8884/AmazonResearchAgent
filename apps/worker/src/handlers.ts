@@ -275,6 +275,7 @@ export function createJobHandlers(
         client,
         budget: apiBudget,
         purpose: payload.purpose ?? 'normal_validation',
+        ...(payload.researchRunId ? { researchRunId: payload.researchRunId } : {}),
         queryProductDatabase,
         ...(prior ? { checkpoint: prior } : {}),
         enqueueResume: async (input) => {
@@ -283,6 +284,7 @@ export function createJobHandlers(
             payload: {
               candidateId: input.candidateId,
               locale: input.locale,
+              ...(input.researchRunId ? { researchRunId: input.researchRunId } : {}),
               purpose: input.purpose
             },
             idempotencyKey: input.idempotencyKey,

@@ -8,9 +8,13 @@ const sql = postgres(databaseUrl, { max: 4 });
 
 async function clearAutomationFixtures(): Promise<void> {
   await sql`delete from notifications where idempotency_key like 'db-it-automation-%'`;
-  await sql`delete from scheduled_run_locks where run_date >= date '2099-01-01'`;
+  await sql`
+    delete from scheduled_run_locks
+    where research_run_id in (
+      select id from research_runs where idempotency_key like 'db-it-automation-%'
+    )
+  `;
   await sql`delete from research_runs where idempotency_key like 'db-it-automation-%'`;
-  await sql`delete from app_settings where id`;
 }
 
 describe('automation schema', () => {
@@ -20,13 +24,23 @@ describe('automation schema', () => {
     await sql.end();
   });
 
-  // Break: a second personal settings row can exist and produces conflicting automation policy.
-  it('enforces one personal settings record', async () => {
-    await sql`insert into app_settings (id) values (true)`;
+  // Break: a test fixture can overwrite or remove a preexisting singleton settings row.
+  it('enforces one personal settings record without mutating a preexisting row', async () => {
+    const [existing] = await sql<{ id: boolean }[]>`select id from app_settings where id`;
+    let createdFixture = false;
+    if (!existing) {
+      await sql`insert into app_settings (id) values (true)`;
+      createdFixture = true;
+    }
 
-    await expect(sql`insert into app_settings (id) values (true)`).rejects.toThrow();
+    try {
+      await expect(sql`insert into app_settings (id) values (true)`).rejects.toThrow();
+    } finally {
+      if (createdFixture) {
+        await sql`delete from app_settings where id`;
+      }
+    }
   });
-
   // Break: duplicate scheduler ticks create duplicate logical research runs for one Chicago date.
   it('creates one scheduled run for one logical date', async () => {
     await sql`
@@ -38,6 +52,39 @@ describe('automation schema', () => {
       insert into research_runs (source, logical_run_date, idempotency_key)
       values ('scheduled', date '2099-01-01', 'db-it-automation-daily-2')
     `).rejects.toThrow();
+  });
+  // Break: concurrent planners can replace a previously published daily plan.
+  it('publishes a daily plan only once and preserves the winning candidate set', async () => {
+    const [run] = await sql<{ id: string }[]>`
+      insert into research_runs (source, logical_run_date, idempotency_key)
+      values ('scheduled', date '2099-01-03', 'db-it-automation-plan')
+      returning id
+    `;
+    if (!run) throw new Error('Daily plan fixture was not created.');
+    const first = await sql<{ published: boolean }[]>`
+      select publish_daily_research_plan(
+        ${run.id}::uuid,
+        ${sql.json(['candidate-a'])},
+        ${sql.json({ phase: 'fanout' })},
+        now()
+      ) as published
+    `;
+    const second = await sql<{ published: boolean }[]>`
+      select publish_daily_research_plan(
+        ${run.id}::uuid,
+        ${sql.json(['candidate-b'])},
+        ${sql.json({ phase: 'fanout' })},
+        now()
+      ) as published
+    `;
+    const [stored] = await sql<{ selected_candidate_ids: unknown }[]>`
+      select selected_candidate_ids
+      from research_runs
+      where id = ${run.id}::uuid
+    `;
+    expect(first[0]?.published).toBe(true);
+    expect(second[0]?.published).toBe(false);
+    expect(stored?.selected_candidate_ids).toEqual(['candidate-a']);
   });
 
   // Break: a retry can create a second outbound Telegram delivery for one logical event.

@@ -58,6 +58,7 @@ export type MarketSnapshot = z.infer<typeof MarketSnapshotSchema>;
 export const MarketProbeJobPayloadSchema = z.object({
   candidateId: z.uuid(),
   locale: z.enum(['ko', 'en']),
+  researchRunId: z.uuid().optional(),
   purpose: ApiCallPurposeSchema.optional()
 });
 export type MarketProbeJobPayload = z.infer<typeof MarketProbeJobPayloadSchema>;
