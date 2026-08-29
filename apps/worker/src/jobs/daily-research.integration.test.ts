@@ -376,16 +376,11 @@ integration('daily research orchestration', () => {
       if (remainingError) throw remainingError;
       expect(remainingLock?.research_run_id).toBe(foreignRun.id);
     } finally {
-      const { error: lockDeleteError } = await client
+      await client
         .from('scheduled_run_locks')
         .delete()
         .eq('research_run_id', foreignRun.id);
-      if (lockDeleteError) throw lockDeleteError;
-      const { error: runDeleteError } = await client
-        .from('research_runs')
-        .delete()
-        .eq('id', foreignRun.id);
-      if (runDeleteError) throw runDeleteError;
+      await client.from('research_runs').delete().eq('id', foreignRun.id);
     }
   });
 });

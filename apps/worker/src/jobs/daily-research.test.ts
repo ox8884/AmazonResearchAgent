@@ -33,7 +33,8 @@ class InMemoryRunStore implements DailyResearchRunStore {
     checkpoint: {}
   };
 
-  async readRun(_runId: string): Promise<DailyResearchRunRecord> {
+  async readRun(runId: string): Promise<DailyResearchRunRecord> {
+    void runId;
     return structuredClone(this.run);
   }
 
