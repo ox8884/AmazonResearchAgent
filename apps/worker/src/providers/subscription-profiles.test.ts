@@ -274,4 +274,65 @@ describe('host security profile evidence', () => {
     const second = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', reordered);
     expect(second.securityProfileDigest).toBe(first.securityProfileDigest);
   });
+
+  // Break: character-only validation accepts malformed addresses, invalid prefix lengths, or the wrong address family.
+  it.each([
+    ['malformed resolver', { resolverAddresses: [':'] }],
+    ['malformed IPv4 address', { ipv4Prefixes: ['999.2.3.4/24'] }],
+    ['malformed IPv6 address', { ipv6Prefixes: ['2001:::1/64'] }],
+    ['IPv4 prefix above 32', { ipv4Prefixes: ['1.2.3.4/999'] }],
+    ['IPv6 prefix above 128', { ipv6Prefixes: ['2001:db8::/129'] }],
+    ['IPv4 inside IPv6 prefixes', { ipv6Prefixes: ['1.2.3.4/24'] }],
+    ['IPv6 inside IPv4 prefixes', { ipv4Prefixes: ['2001:db8::/32'] }],
+    ['IPv4-mapped IPv6 resolver', { resolverAddresses: ['::ffff:192.0.2.1'] }]
+  ])('rejects %s', async (_name, networkOverride) => {
+    const base = hostEvidence();
+    await expect(loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', hostEvidence({
+      network: { ...base.network, ...networkOverride }
+    }))).rejects.toBeDefined();
+  });
+
+  // Break: semantic network equivalents retain host bits or textual spelling and produce different policy identities.
+  it('canonicalizes equivalent IPv4 and IPv6 prefixes before sorting and deduplication', async () => {
+    const base = hostEvidence();
+    const expanded = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', hostEvidence({
+      network: {
+        ...base.network,
+        acceptedHostnames: ['API.EXAMPLE.COM.', 'api.example.com'],
+        resolverAddresses: ['2001:0db8:0:0:0:0:0:1', '1.1.1.1', '2001:db8::1'],
+        ipv4Prefixes: ['203.0.113.7/24', '203.0.113.0/24'],
+        ipv6Prefixes: [
+          '2001:0db8:0000:0000:0000:0000:0001:00ff/32',
+          '2001:db8::/32'
+        ]
+      }
+    }));
+    const canonical = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', hostEvidence({
+      network: {
+        ...base.network,
+        acceptedHostnames: ['api.example.com'],
+        resolverAddresses: ['1.1.1.1', '2001:db8::1'],
+        ipv4Prefixes: ['203.0.113.0/24'],
+        ipv6Prefixes: ['2001:db8::/32']
+      }
+    }));
+    expect(expanded.hostEvidence.network).toEqual(canonical.hostEvidence.network);
+    expect(expanded.securityProfileDigest).toBe(canonical.securityProfileDigest);
+  });
+
+  // Break: repeated identical artifacts alter the digest, or conflicting evidence for one installed path is accepted.
+  it('deduplicates identical installed artifacts and rejects conflicting path evidence', async () => {
+    const base = hostEvidence();
+    const artifact = base.installedArtifacts[0];
+    if (artifact === undefined) throw new Error('Host evidence fixture requires one artifact.');
+    const single = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', base);
+    const duplicate = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', hostEvidence({
+      installedArtifacts: [artifact, { ...artifact }]
+    }));
+    expect(duplicate.hostEvidence.installedArtifacts).toEqual([artifact]);
+    expect(duplicate.securityProfileDigest).toBe(single.securityProfileDigest);
+    await expect(loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', hostEvidence({
+      installedArtifacts: [artifact, { ...artifact, mode: 0o700 }]
+    }))).rejects.toBeDefined();
+  });
 });

@@ -3,6 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { SubscriptionAdapter } from '@ara/shared';
+import {
+  canonicalIpAddress,
+  canonicalIpv4Cidr,
+  canonicalIpv6Cidr
+} from './network-canonicalization';
 
 const COMMON_ARTIFACTS = [
   'ops/subscription-providers/manage-invocation.sh',
@@ -13,7 +18,7 @@ const COMMON_ARTIFACTS = [
   'ops/nftables/amazon-research-subscription.nft'
 ] as const;
 const SHA256 = /^[0-9a-f]{64}$/u;
-const NETWORK_VALUE = /^[0-9a-f:.]+(?:\/[0-9]{1,3})?$/u;
+const NETWORK_VALUE = z.string().min(1).max(100);
 
 const InstalledArtifactSchema = z.object({
   path: z.string().startsWith('/').max(500),
@@ -55,9 +60,9 @@ const HostSecurityProfileEvidenceSchema = z.object({
   network: z.object({
     schemaVersion: z.literal(1),
     acceptedHostnames: z.array(z.string().min(1).max(253)).min(1),
-    resolverAddresses: z.array(z.string().regex(NETWORK_VALUE)).min(1),
-    ipv4Prefixes: z.array(z.string().regex(NETWORK_VALUE)).min(1),
-    ipv6Prefixes: z.array(z.string().regex(NETWORK_VALUE)).min(1)
+    resolverAddresses: z.array(NETWORK_VALUE).min(1),
+    ipv4Prefixes: z.array(NETWORK_VALUE).min(1),
+    ipv6Prefixes: z.array(NETWORK_VALUE).min(1)
   }).strict()
 }).strict();
 
@@ -96,6 +101,31 @@ function sortedUnique(values: readonly string[], normalize = (value: string) => 
   return [...new Set(values.map(normalize))].sort();
 }
 
+function sameInstalledArtifact(
+  left: HostSecurityProfileEvidence['installedArtifacts'][number],
+  right: HostSecurityProfileEvidence['installedArtifacts'][number]
+): boolean {
+  return left.path === right.path
+    && left.ownerUid === right.ownerUid
+    && left.ownerGid === right.ownerGid
+    && left.mode === right.mode
+    && left.sha256 === right.sha256;
+}
+
+function canonicalInstalledArtifacts(
+  artifacts: readonly HostSecurityProfileEvidence['installedArtifacts'][number][]
+): HostSecurityProfileEvidence['installedArtifacts'] {
+  const byPath = new Map<string, HostSecurityProfileEvidence['installedArtifacts'][number]>();
+  for (const artifact of artifacts) {
+    const existing = byPath.get(artifact.path);
+    if (existing !== undefined && !sameInstalledArtifact(existing, artifact)) {
+      throw new TypeError('Installed artifact path has conflicting evidence.');
+    }
+    byPath.set(artifact.path, artifact);
+  }
+  return [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
 function canonicalHostEvidence(
   adapter: SubscriptionAdapter,
   evidence: HostSecurityProfileEvidence
@@ -106,8 +136,7 @@ function canonicalHostEvidence(
   }
   return {
     ...parsed,
-    installedArtifacts: [...parsed.installedArtifacts]
-      .sort((left, right) => left.path.localeCompare(right.path)),
+    installedArtifacts: canonicalInstalledArtifacts(parsed.installedArtifacts),
     identity: {
       ...parsed.identity,
       ipcMembers: sortedUnique(parsed.identity.ipcMembers)
@@ -118,9 +147,9 @@ function canonicalHostEvidence(
         parsed.network.acceptedHostnames,
         (hostname) => hostname.toLowerCase().replace(/\.$/u, '')
       ),
-      resolverAddresses: sortedUnique(parsed.network.resolverAddresses, (value) => value.toLowerCase()),
-      ipv4Prefixes: sortedUnique(parsed.network.ipv4Prefixes),
-      ipv6Prefixes: sortedUnique(parsed.network.ipv6Prefixes, (value) => value.toLowerCase())
+      resolverAddresses: sortedUnique(parsed.network.resolverAddresses, canonicalIpAddress),
+      ipv4Prefixes: sortedUnique(parsed.network.ipv4Prefixes, canonicalIpv4Cidr),
+      ipv6Prefixes: sortedUnique(parsed.network.ipv6Prefixes, canonicalIpv6Cidr)
     }
   };
 }
