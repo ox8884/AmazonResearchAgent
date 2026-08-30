@@ -17,7 +17,10 @@ const analysisLease: AnalysisLeaseIdentity = {
 };
 
 function clientWith(data: unknown, error: unknown = null) {
-  return { rpc: vi.fn(async (_name: string, _args: object) => ({ data, error })) };
+  return { rpc: vi.fn(async (..._call: [string, object]) => {
+    void _call;
+    return { data, error };
+  }) };
 }
 
 describe('provider attempt repository', () => {

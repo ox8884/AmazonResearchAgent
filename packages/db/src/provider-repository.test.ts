@@ -49,10 +49,13 @@ const runtimeRow: ProviderRuntimeStateRow = {
 
 
 function settingsClient(snapshot: ProviderRow = baseSnapshot) {
-  const rpc = vi.fn(async (_name: string, _args: object) => ({
-    data: snapshot,
-    error: null
-  }));
+  const rpc = vi.fn(async (..._call: [string, object]) => {
+    void _call;
+    return {
+      data: snapshot,
+      error: null
+    };
+  });
   return {
     rpc,
     from: () => ({
