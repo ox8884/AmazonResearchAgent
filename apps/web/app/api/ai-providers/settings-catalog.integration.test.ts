@@ -3,12 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createServerDatabaseClient } from '@ara/db';
+import {
+  createProviderAttemptRepository,
+  createProviderRuntimeRepository,
+  createServerDatabaseClient
+} from '@ara/db';
 import { routeAiRequest } from '@ara/ai-router';
 import { AiRequestSchema } from '@ara/shared';
+import { createQueue } from '@ara/queue';
 import { runNormalizeJob } from '../../../../worker/src/jobs/normalize-opportunities';
 import { runProviderConnectionTest } from '../../../../worker/src/jobs/test-ai-provider';
-import { resolvePersistedProviderCatalog } from '../../../../worker/src/providers/provider-catalog';
+import {
+  resolvePersistedNormalizationTarget,
+  resolvePersistedProviderCatalog
+} from '../../../../worker/src/providers/provider-catalog';
+import { AdapterSemaphoreRegistry } from '../../../../worker/src/providers/adapter-semaphore';
+import { NormalizationExecutionCoordinator } from '../../../../worker/src/providers/normalization-execution-coordinator';
 import {
   createAdminSession,
   hashAdminPassword
@@ -254,15 +264,39 @@ integration('settings API to worker catalog', () => {
     if (decision.kind !== 'route') {
       throw new Error('Expected the settings-persisted provider to be routable.');
     }
+    const { error: enqueueError } = await client.rpc(
+      'enqueue_initial_candidate_normalization',
+      { candidate_id: fixture.candidateId, locale: 'ko', writer_mode: 'canonical' }
+    );
+    if (enqueueError) throw enqueueError;
+    const queue = createQueue(client);
+    const jobs = await queue.claimJobs(`settings-worker-${randomUUID()}`, 100, 120);
+    const job = jobs.find(
+      (candidateJob) => candidateJob.idempotencyKey === `normalize:${fixture.candidateId}:0`
+    );
+    if (!job) {
+      throw new Error('Expected the canonical normalization job to be claimed.');
+    }
+    const runtime = createProviderRuntimeRepository(client);
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts: createProviderAttemptRepository(client),
+      runtime,
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget: (selection) =>
+        resolvePersistedNormalizationTarget(client, selection, { encryptionKey })
+    });
     const result = await runNormalizeJob(
       { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
       {
         client,
-        provider: decision.provider,
-        modelId: decision.model.id,
+        coordinator,
+        catalog,
+        jobLease: job.leaseIdentity,
+        signal: new AbortController().signal,
         promptVersion: `it-${randomUUID()}`
       }
     );
+    await queue.completeJob(job.leaseIdentity, result.checkpoint);
     const { data: candidate } = await client
       .from('candidates')
       .select('state')
