@@ -1,4 +1,4 @@
-import type { Database } from '@ara/db';
+import { createMigration019CompatibilityRepository, type Database } from '@ara/db';
 import {
   AnalysisVerdictEvidenceSchema,
   DailyResearchCheckpointSchema,
@@ -486,18 +486,14 @@ function createDailyResearchRunStore(
       return data;
     },
     async updateRun(runId, update) {
-      const { data, error } = await client.rpc('advance_daily_research_checkpoint', {
-        run_id: runId,
-        next_status: update.status ?? '',
-        next_checkpoint: update.checkpoint ?? {},
-        next_completed_at: update.completed_at ?? null
+      return createMigration019CompatibilityRepository(
+        client
+      ).advanceDailyResearchCheckpoint({
+        runId,
+        nextStatus: update.status ?? '',
+        nextCheckpoint: update.checkpoint ?? {},
+        nextCompletedAt: update.completed_at ?? null
       });
-      if (error) {
-        throw new DailyResearchError(
-          `Could not checkpoint daily research run: ${errorMessage(error)}`
-        );
-      }
-      return data === true;
     }
   };
 }

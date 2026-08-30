@@ -88,6 +88,40 @@ class FakeNormalizationProvider implements AiProvider {
   }
 }
 
+class NullableEnglishProvider extends FakeNormalizationProvider {
+  override async runStructured<T>(
+    request: StructuredAiRequest<T>
+  ): Promise<AiProviderResult<T>> {
+    this.calls += 1;
+    return {
+      output: request.schema.parse({
+        classification: 'product_niche',
+        canonicalNiche: `Nullable English ${this.id}`,
+        canonicalEnglish: null,
+        catalogPhrases: ['nullable english niche'],
+        aliases: ['nullable niche'],
+        productFit: 'strong',
+        riskFlags: [],
+        confidence: 0.95,
+        reason: 'A valid niche can lack a canonical English translation.'
+      }),
+      providerId: this.id,
+      modelId: request.modelId,
+      role: request.role,
+      inputHash: request.inputHash,
+      usage: AiUsageSchema.parse({
+        inputTokens: 10,
+        outputTokens: 20,
+        totalTokens: 30,
+        requestCount: 1
+      }),
+      costClass: this.billingType,
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(1).toISOString()
+    };
+  }
+}
+
 class CapacityProvider extends FakeNormalizationProvider {
   override async runStructured<T>(
     request: StructuredAiRequest<T>
@@ -176,7 +210,26 @@ integration('opportunity normalization job', () => {
       await client.from('ai_providers').delete().eq('id', providerId);
     }
     for (const importRunId of importRuns.splice(0)) {
-      await client.from('import_runs').delete().eq('id', importRunId);
+      const { data: candidates, error: candidateReadError } = await client
+        .from('candidates')
+        .select('id')
+        .eq('import_run_id', importRunId);
+      if (candidateReadError) throw candidateReadError;
+      const normalizationKeys = (candidates ?? []).map(
+        (candidate) => `normalize:${candidate.id}`
+      );
+      if (normalizationKeys.length > 0) {
+        const { error: jobError } = await client
+          .from('jobs')
+          .delete()
+          .in('idempotency_key', normalizationKeys);
+        if (jobError) throw jobError;
+      }
+      const { error: importRunError } = await client
+        .from('import_runs')
+        .delete()
+        .eq('id', importRunId);
+      if (importRunError) throw importRunError;
     }
     const { data: clusters } = await client
       .from('niche_clusters')
@@ -595,5 +648,68 @@ integration('opportunity normalization job', () => {
     expect(usage?.[0]?.model_id).toBe('usage-model');
     expect(usage?.[0]?.role).toBe('niche_normalization');
     expect(usage?.[0]?.usage).toMatchObject({ requestCount: 2, repairAttempted: true });
+  });
+  // Break: the full candidate projection omits migration-019 generation and cannot carry a nonzero value.
+  it('selects normalization generation in the full candidate projection', async () => {
+    const provider = new FakeNormalizationProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) throw providerError;
+    const fixture = await seedCandidates(client, ['generation carrying dispenser']);
+    importRuns.push(fixture.importRunId);
+    const candidateId = fixture.candidateIds[0] ?? '';
+    const { error: generationError } = await client
+      .from('candidates')
+      .update({ normalization_generation: 7 })
+      .eq('id', candidateId);
+    if (generationError) throw generationError;
+
+    await runNormalizeJob(
+      { candidateIds: fixture.candidateIds, locale: 'ko' },
+      { client, provider, modelId: 'generation-model', promptVersion: `it-${randomUUID()}` }
+    );
+    const { data: candidate, error } = await client
+      .from('candidates')
+      .select('normalization_generation')
+      .eq('id', candidateId)
+      .single();
+    if (error) throw error;
+    expect(candidate.normalization_generation).toBe(7);
+  });
+
+  // Break: worker cluster persistence fabricates an English value instead of forwarding SQL NULL.
+  it('forwards null canonical English unchanged', async () => {
+    const provider = new NullableEnglishProvider();
+    providers.push(provider.id);
+    const { error: providerError } = await client.from('ai_providers').insert({
+      id: provider.id,
+      name: provider.id,
+      kind: 'command',
+      billing_type: 'free',
+      enabled: true,
+      config: {}
+    });
+    if (providerError) throw providerError;
+    const fixture = await seedCandidates(client, ['nullable english product']);
+    importRuns.push(fixture.importRunId);
+
+    await runNormalizeJob(
+      { candidateIds: fixture.candidateIds, locale: 'ko' },
+      { client, provider, modelId: 'nullable-model', promptVersion: `it-${randomUUID()}` }
+    );
+    const { data: cluster, error } = await client
+      .from('niche_clusters')
+      .select('canonical_english')
+      .eq('canonical_name', `Nullable English ${provider.id}`)
+      .single();
+    if (error) throw error;
+    expect(cluster.canonical_english).toBeNull();
   });
 });

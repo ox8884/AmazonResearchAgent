@@ -75,6 +75,14 @@ async function cleanupDailyFixtures(
       .like('idempotency_key', `daily-research:${run.id}:%`);
     if (error) throw error;
   }
+  const { error: digestJobError } = await client
+    .from('jobs')
+    .delete()
+    .in(
+      'idempotency_key',
+      (runs ?? []).map((run) => `send-digest:${run.id}`)
+    );
+  if (digestJobError) throw digestJobError;
   const { error: parentJobError } = await client
     .from('jobs')
     .delete()

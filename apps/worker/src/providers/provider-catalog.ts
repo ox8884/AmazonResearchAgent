@@ -13,8 +13,10 @@ import {
   type Json,
   type ModelRow,
   type ProviderRow,
+  type ProviderRuntimeStateRow,
   type ProviderSecretRow
 } from '@ara/db';
+
 import {
   decryptSecret,
   getEncryptionKeyFromEnvironment
@@ -50,7 +52,9 @@ export class ProviderCatalogError extends Error {
 
 type ConfigRecord = { [key: string]: Json | undefined };
 type ProviderModels = Map<string, readonly ModelRow[]>;
+type ProviderRuntimeStates = Map<string, ProviderRuntimeStateRow>;
 type ProviderSecrets = Map<string, ProviderSecretRow>;
+
 
 function configRecord(value: Json): ConfigRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -164,6 +168,18 @@ async function providerFromRow(
     });
   }
 
+  if (kind.data === 'subscription_command') {
+    if (
+      (row.adapter !== 'codex' && row.adapter !== 'grok') ||
+      billingType.data !== 'subscription'
+    ) {
+      throw new ProviderCatalogError('Stored subscription provider identity is invalid.');
+    }
+    throw new ProviderCatalogError(
+      'Subscription provider execution is unavailable until sandbox activation.'
+    );
+  }
+
   const profileId = configString(config, 'commandProfileId');
   const modelId = configString(config, 'modelId');
   if (!profileId || !modelId) {
@@ -179,13 +195,17 @@ async function providerFromRow(
   );
 }
 
+
+
 export interface PersistedProviderSnapshot {
   readonly adapter: AiProvider;
   readonly provider: ProviderRow;
+  readonly runtimeState: ProviderRuntimeStateRow | null;
   readonly secret: ProviderSecretRow | null;
   readonly models: readonly ModelRow[];
   readonly fingerprint: string;
 }
+
 
 export async function loadPersistedProviderSnapshot(
   client: QueueDatabaseClient,
@@ -197,14 +217,19 @@ export async function loadPersistedProviderSnapshot(
   if (!provider) {
     return null;
   }
-  const secret = (await repository.findSecret(providerId)) ?? null;
-  const models = await repository.listModels(providerId);
+  const [runtimeState, secret, models] = await Promise.all([
+    repository.findRuntimeState(providerId),
+    repository.findSecret(providerId),
+    repository.listModels(providerId)
+  ]);
   return {
     adapter: await providerFromRow(provider, secret ?? undefined, options),
     provider,
+    runtimeState,
     secret,
     models,
     fingerprint: fingerprintFromProviderConfig(
+
       provider.kind,
       provider.config,
       secretCipherId(secret)
@@ -250,6 +275,12 @@ function indexModels(models: readonly ModelRow[]): ProviderModels {
   }
   return indexed;
 }
+function indexRuntimeStates(
+  states: readonly ProviderRuntimeStateRow[]
+): ProviderRuntimeStates {
+  return new Map(states.map((state) => [state.provider_id, state]));
+}
+
 
 function indexSecrets(secrets: readonly ProviderSecretRow[]): ProviderSecrets {
   return new Map(secrets.map((secret) => [secret.provider_id, secret]));
@@ -269,9 +300,14 @@ function rolePriority(
 async function catalogEntry(
   provider: ProviderRow,
   models: readonly ModelRow[],
+  runtimeState: ProviderRuntimeStateRow | undefined,
   secrets: ProviderSecrets,
   options: PersistedProviderCatalogOptions
 ): Promise<ProviderCatalogEntry> {
+  if (provider.kind === 'subscription_command' && !runtimeState) {
+    throw new ProviderCatalogError('Subscription provider runtime state is missing.');
+  }
+
   const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
   const liveHealth = await adapter.health();
   const config = configRecord(provider.config);
@@ -321,13 +357,16 @@ export async function resolvePersistedProviderCatalog(
   options: PersistedProviderCatalogOptions = {}
 ): Promise<ProviderCatalog> {
   const repository = createProviderRepository(client);
-  const [providers, models, secrets] = await Promise.all([
+  const [providers, models, runtimeStates, secrets] = await Promise.all([
     repository.listProviders(),
     repository.listModels(),
+    repository.listRuntimeStates(),
     repository.listSecrets()
   ]);
   const modelsByProvider = indexModels(models.filter((model) => model.enabled));
+  const runtimeByProvider = indexRuntimeStates(runtimeStates);
   const secretsByProvider = indexSecrets(secrets);
+
   const entries: ProviderCatalogEntry[] = [];
   for (const provider of providers) {
     if (!provider.enabled) {
@@ -338,6 +377,7 @@ export async function resolvePersistedProviderCatalog(
         await catalogEntry(
           provider,
           modelsByProvider.get(provider.id) ?? [],
+          runtimeByProvider.get(provider.id),
           secretsByProvider,
           options
         )

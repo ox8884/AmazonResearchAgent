@@ -15,6 +15,12 @@ import type { EnqueueJobInput, Job } from '@ara/queue';
 const RUN_ID = '00000000-0000-4000-8000-000000000001';
 const DATE = '2099-01-01';
 const CANDIDATE_A = '00000000-0000-4000-8000-00000000000a';
+const PARTIAL_CHECKPOINT = {
+  phase: 'fanout' as const,
+  selectedItems: [{ id: CANDIDATE_A, bucket: ResearchPlanBucket.new }],
+  enqueuedCandidateIds: []
+};
+
 const CANDIDATE_B = '00000000-0000-4000-8000-00000000000b';
 
 type QueuedChild = {
@@ -293,5 +299,68 @@ describe('daily research orchestration', () => {
       phase: 'fanout_complete',
       enqueuedCandidateIds: [CANDIDATE_A, CANDIDATE_B]
     });
+  });
+
+  // Break: the migration-019 compatibility path replaces an absent completion time instead of forwarding SQL NULL.
+  it('forwards null daily completion unchanged', async () => {
+    const rpcCalls: Array<readonly [string, object]> = [];
+    const client = {
+      rpc: async (name: string, args: object) => {
+        rpcCalls.push([name, args]);
+        return { data: true, error: null };
+      },
+      from: (table: string) => {
+        if (table === 'research_runs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: {
+                    id: RUN_ID,
+                    logical_run_date: DATE,
+                    locale: 'ko',
+                    status: 'fanout',
+                    selected_candidate_ids: [CANDIDATE_A],
+                    checkpoint: PARTIAL_CHECKPOINT
+                  },
+                  error: null
+                })
+              })
+            })
+          };
+        }
+        if (table === 'candidates') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  order: () => ({
+                    range: async () => ({ data: [], error: null })
+                  })
+                })
+              })
+            })
+          };
+        }
+        return {
+          insert: async () => ({ data: null, error: null })
+        };
+      }
+    };
+
+    await runDailyResearch(orchestratorJob('job-null-completion'), {
+      client: client as never,
+      queue: new DeduplicatingQueue(),
+      now: () => new Date('2099-01-01T12:00:00.000Z')
+    });
+
+    expect(rpcCalls).toContainEqual([
+      'advance_daily_research_checkpoint',
+      expect.objectContaining({ next_completed_at: null })
+    ]);
+    expect(rpcCalls).toContainEqual([
+      'advance_daily_research_checkpoint',
+      expect.objectContaining({ next_completed_at: '2099-01-01T12:00:00.000Z' })
+    ]);
   });
 });

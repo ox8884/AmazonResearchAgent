@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AiProviderConfigSchema,
   AiRequestSchema,
   AiRoleSchema,
   assertPersistableModelId,
   BillingTypeSchema,
   ModelIdSchema,
+  ProviderAttemptEventTypeSchema,
   ProviderCapabilitySchema,
+  ProviderConsumptionStatusSchema,
   ProviderKindSchema,
+  ProviderRuntimeStateSchema,
   RouterModeSchema,
+  SubscriptionAdapterSchema,
+  SubscriptionFailureClassSchema,
   UnsafeModelIdError
 } from './ai';
+
 
 describe('AI provider schemas', () => {
   it('accepts every configured AI role and routing mode', () => {
@@ -44,6 +51,99 @@ describe('AI provider schemas', () => {
     expect(request.requiredCapabilities).toEqual(['structured_json']);
     expect(() => AiRoleSchema.parse('unknown_role')).toThrow();
     expect(() => ProviderKindSchema.parse('shell')).toThrow();
+  });
+  // Break: new or misspelled subscription failures become routable defaults.
+  it('parses only canonical subscription failure classes', () => {
+    expect(SubscriptionFailureClassSchema.parse('auth_expired')).toBe('auth_expired');
+    expect(SubscriptionFailureClassSchema.parse('process_spawn_failure_pre_consumption')).toBe(
+      'process_spawn_failure_pre_consumption'
+    );
+    expect(() => SubscriptionFailureClassSchema.parse('unknown')).toThrow();
+    expect(() => SubscriptionFailureClassSchema.parse('auth_error')).toThrow();
+  });
+
+  // Break: arbitrary adapter names reach worker-owned subscription dispatch.
+  it('parses only codex and grok subscription adapters', () => {
+    expect(SubscriptionAdapterSchema.options).toEqual(['codex', 'grok']);
+    expect(() => SubscriptionAdapterSchema.parse('claude')).toThrow();
+  });
+
+  // Break: subscription rows omit their adapter, use PAYG, or persist execution controls.
+  it('requires subscription kind adapter and subscription billing', () => {
+    expect(
+      AiProviderConfigSchema.parse({
+        id: 'provider-codex',
+        name: 'Codex Subscription',
+        kind: 'subscription_command',
+        adapter: 'codex',
+        billingType: 'subscription',
+        enabled: false,
+        priority: 10,
+        config: {
+          role: 'niche_normalization',
+          modelId: 'codex-subscription',
+          modelEnabled: false,
+          modelPriority: 10
+        }
+      }).adapter
+    ).toBe('codex');
+    for (const invalid of [
+      { adapter: undefined, billingType: 'subscription' },
+      { adapter: 'codex', billingType: 'payg' },
+      { adapter: 'grok', billingType: 'free' }
+    ]) {
+      expect(() =>
+        AiProviderConfigSchema.parse({
+          id: 'provider-invalid',
+          name: 'Invalid Subscription',
+          kind: 'subscription_command',
+          enabled: false,
+          priority: 10,
+          config: {
+            role: 'niche_normalization',
+            modelId: 'subscription-model',
+            modelEnabled: false,
+            modelPriority: 10
+          },
+          ...invalid
+        })
+      ).toThrow();
+    }
+    expect(() =>
+      AiProviderConfigSchema.parse({
+        id: 'provider-unsafe',
+        name: 'Unsafe Subscription',
+        kind: 'subscription_command',
+        adapter: 'grok',
+        billingType: 'subscription',
+        enabled: false,
+        priority: 10,
+        config: {
+          role: 'niche_normalization',
+          modelId: 'grok-subscription',
+          modelEnabled: false,
+          modelPriority: 10,
+          executable: '/usr/bin/grok'
+        }
+      })
+    ).toThrow();
+  });
+
+  it('exports the canonical runtime and attempt state sets', () => {
+    expect(ProviderRuntimeStateSchema.options).toEqual([
+      'authorization_required',
+      'ready',
+      'expired',
+      'needs_attention'
+    ]);
+    expect(ProviderAttemptEventTypeSchema.parse('attempt_unknown_after_crash')).toBe(
+      'attempt_unknown_after_crash'
+    );
+    expect(ProviderConsumptionStatusSchema.options).toEqual([
+      'consumed',
+      'not_consumed',
+      'unknown'
+    ]);
   });
 
   it('rejects control characters, overlong IDs, and secret reflection', () => {

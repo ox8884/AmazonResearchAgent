@@ -4,7 +4,7 @@ import {
   type AiProvider,
   type AiProviderResult
 } from '@ara/ai-router';
-import type { Database, Json } from '@ara/db';
+import { createMigration019CompatibilityRepository, type Database, type Json } from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
 import {
   buildNormalizationPrompt,
@@ -196,7 +196,7 @@ async function loadCandidates(
   const { data, error } = await client
     .from('candidates')
     .select(
-      'id,import_run_id,representative_raw_keyword_id,keyword,normalized_exact_keyword,state,rule_passed,rule_reasons,risk_flags,eligible_for_ai_normalization,preliminary_score,preliminary_score_components,created_at,updated_at,niche_cluster_id'
+      'id,import_run_id,representative_raw_keyword_id,keyword,normalized_exact_keyword,state,rule_passed,rule_reasons,risk_flags,eligible_for_ai_normalization,preliminary_score,preliminary_score_components,created_at,updated_at,niche_cluster_id,normalization_generation'
     )
     .in('id', [...candidateIds]);
   if (error) {
@@ -406,18 +406,14 @@ async function upsertCluster(
   if (!output.canonicalNiche) {
     throw new NormalizationJobError('A clusterable output needs a canonical niche.');
   }
-  const { data, error } = await client.rpc('upsert_niche_cluster', {
-    canonical_key: canonicalKey(output.canonicalNiche),
-    canonical_name: output.canonicalNiche,
-    canonical_english: output.canonicalEnglish,
+  return createMigration019CompatibilityRepository(client).upsertNicheCluster({
+    canonicalKey: canonicalKey(output.canonicalNiche),
+    canonicalName: output.canonicalNiche,
+    canonicalEnglish: output.canonicalEnglish,
     aliases: asJson(output.aliases),
-    catalog_phrases: asJson(output.catalogPhrases),
-    cluster_state: 'Ready for API Validation'
+    catalogPhrases: asJson(output.catalogPhrases),
+    clusterState: 'Ready for API Validation'
   });
-  if (error || !data) {
-    throw new NormalizationJobError('upsert niche cluster.', error);
-  }
-  return data;
 }
 
 async function persistDecision(

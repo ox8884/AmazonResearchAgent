@@ -11,6 +11,7 @@ export type {
   ProviderInsert,
   ProviderRepository,
   ProviderRow,
+  ProviderRuntimeStateRow,
   ProviderSecretInsert,
   ProviderSecretRow
 } from './provider-repository';
@@ -19,6 +20,17 @@ export {
   providerExecutionFingerprint,
   secretCipherId
 } from './execution-identity';
+export type { ProviderExecutionFingerprintInput } from './execution-identity';
+export {
+  createMigration019CompatibilityRepository,
+  Migration019CompatibilityError
+} from './migration-019-compatibility';
+export type {
+  AdvanceDailyResearchCheckpointInput,
+  Migration019CompatibilityRepository,
+  UpsertNicheClusterInput
+} from './migration-019-compatibility';
+
 
 
 export type { Database, Json } from './types';
