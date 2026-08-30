@@ -134,6 +134,40 @@ describe('subscription provider migration 019', () => {
     );
   });
 
+  // Break: the migration-019 settings RPC omits the stored nullable adapter.
+  it('returns the stored adapter in the committed settings snapshot', async () => {
+    await withDatabase(
+      async (sql) => {
+        await insertProvider(sql, {
+          id: 'http-settings-snapshot',
+          kind: 'openai_http',
+          billing: 'subscription',
+          config: { baseUrl: 'https://api.example.com/v1' },
+        });
+      },
+      async (sql) => {
+        const [result] = await sql<{ saved: Record<string, postgres.JSONValue> }[]>`
+          select save_ai_provider_settings(
+            jsonb_build_object(
+              'id', 'http-settings-snapshot',
+              'name', 'HTTP settings snapshot',
+              'kind', 'openai_http',
+              'billing_type', 'subscription',
+              'enabled', true,
+              'priority', 1,
+              'config', jsonb_build_object('baseUrl', 'https://api.example.com/v1')
+            ),
+            null,
+            '[]'::jsonb,
+            'none'
+          ) as saved
+        `;
+
+        expect(result?.saved).toHaveProperty('adapter', null);
+      },
+    );
+  });
+
   // Break: migration 019 rejects readable test-only legacy command rows.
   it('preserves a valid legacy command provider', async () => {
     await withDatabase(
