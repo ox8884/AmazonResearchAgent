@@ -1757,6 +1757,17 @@ export type Database = {
         Args: { lease_seconds: number; lock_owner: string }
         Returns: boolean
       }
+      activate_subscription_provider: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          model_id: string
+          provider_id: string
+          terms_digest: string
+        }
+        Returns: Json
+      }
       advance_daily_research_checkpoint: {
         Args: {
           next_checkpoint: Json
@@ -1765,6 +1776,18 @@ export type Database = {
           run_id: string
         }
         Returns: boolean
+      }
+      apply_ai_provider_runtime_failure: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          failure_class: string
+          model_id: string
+          provider_id: string
+          retry_after_seconds?: number
+        }
+        Returns: Json
       }
       authorize_api_call: {
         Args: {
@@ -1865,6 +1888,38 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      commit_ai_provider_acceptance_probe: {
+        Args: {
+          adapter: string
+          binary_identity_digest: string
+          bounded_behavior_digest: string
+          capability_digest: string
+          containment_digest: string
+          credential_source_digest: string
+          evidence: Json
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          framing_digest: string
+          model_id: string
+          provider_id: string
+          readiness_policy_version: string
+          security_profile_version: string
+          terms_digest: string
+        }
+        Returns: Json
+      }
+      commit_ai_provider_probe: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_probe_generation: number
+          expected_settings_revision: number
+          model_id: string
+          provider_id: string
+        }
+        Returns: Json
+      }
       complete_ai_analysis: {
         Args: {
           analysis_id: string
@@ -1888,6 +1943,26 @@ export type Database = {
         Args: { max_attempts: number; window_seconds: number }
         Returns: boolean
       }
+      deactivate_subscription_provider: {
+        Args: { provider_id: string }
+        Returns: Json
+      }
+      enqueue_ai_provider_probe_locked: {
+        Args: {
+          provider_row: Database["public"]["Tables"]["ai_providers"]["Row"]
+          runtime_row: Database["public"]["Tables"]["ai_provider_runtime_state"]["Row"]
+        }
+        Returns: Json
+      }
+      expire_ai_provider_ready_lease: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          provider_id: string
+        }
+        Returns: Json
+      }
       fail_ai_analysis: {
         Args: {
           analysis_id: string
@@ -1907,8 +1982,27 @@ export type Database = {
         }
         Returns: boolean
       }
+      fence_ai_provider_auth: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          provider_id: string
+        }
+        Returns: Json
+      }
       heartbeat_job: {
         Args: { job_id: string; lease_seconds: number; worker_id: string }
+        Returns: boolean
+      }
+      is_ai_provider_routable: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          model_id: string
+          provider_id: string
+        }
         Returns: boolean
       }
       jsonb_text_array_union: {
@@ -1959,6 +2053,15 @@ export type Database = {
       renew_ai_analysis_lease: {
         Args: { analysis_id: string; lease_seconds: number; worker_id: string }
         Returns: boolean
+      }
+      request_ai_provider_probe: {
+        Args: {
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          provider_id: string
+        }
+        Returns: Json
       }
       save_ai_provider_settings: {
         Args: {

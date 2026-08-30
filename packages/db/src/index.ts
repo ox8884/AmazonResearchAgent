@@ -30,6 +30,19 @@ export type {
   Migration019CompatibilityRepository,
   UpsertNicheClusterInput
 } from './migration-019-compatibility';
+export {
+  createProviderRuntimeRepository,
+  ProviderRuntimeRepositoryError,
+  READINESS_MAX_AGE_SECONDS,
+  READINESS_POLICY_VERSION,
+  SECURITY_PROFILE_VERSION
+} from './provider-runtime-repository';
+export type {
+  AcceptanceProbeInput,
+  ProbeRequest,
+  ProviderRuntimeRepository,
+  RuntimeMutationResult
+} from './provider-runtime-repository';
 
 
 

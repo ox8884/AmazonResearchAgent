@@ -115,7 +115,7 @@ export interface ProviderRepository {
     }[];
     readonly expectedRevision?: number | null;
   }): Promise<ProviderRow>;
-  recordExecutionProbe(input: {
+  recordHttpExecutionProbe(input: {
     readonly providerId: string;
     readonly expectedFingerprint: string;
     readonly probe: Json;
@@ -273,14 +273,14 @@ export function createProviderRepository(
     },
 
 
-    async recordExecutionProbe(input) {
+    async recordHttpExecutionProbe(input) {
       const { data, error } = await client.rpc('record_ai_provider_execution_probe', {
         provider_id: input.providerId,
         expected_fingerprint: input.expectedFingerprint,
         probe: input.probe
       });
       if (error) {
-        throw new ProviderRepositoryError('record provider execution probe', error);
+        throw new ProviderRepositoryError('record HTTP provider execution probe', error);
       }
       return data === true;
     }

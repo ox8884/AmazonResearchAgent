@@ -122,7 +122,7 @@ export async function runProviderConnectionTest(
   ): Promise<void> {
     await options.beforePersist?.();
     const checkedAt = new Date().toISOString();
-    await repository.recordExecutionProbe({
+    await repository.recordHttpExecutionProbe({
       providerId,
       expectedFingerprint: fingerprint,
       probe: {

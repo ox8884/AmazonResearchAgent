@@ -721,7 +721,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
 
   // Break: a probe for config A is written onto config B.
   it('records an execution probe only when the config fingerprint still matches', async () => {
-    const providerId = await seedProvider();
+    const providerId = await seedProvider('openai_http');
     await sql`
       update ai_providers
       set config = '{"executionIdentity":"fingerprint-a"}'::jsonb
