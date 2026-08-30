@@ -6,7 +6,10 @@ import {
 } from '@ara/notifications';
 import { LocaleSchema } from '@ara/shared';
 import type { QueueDatabaseClient } from '@ara/queue';
-
+import {
+  loadDailyDigestSnapshot,
+  researchRunIdFromNotifications
+} from './digest-snapshot';
 export async function runSendDigest(
   client: QueueDatabaseClient,
   options: {
@@ -50,7 +53,11 @@ export async function runSendDigest(
         ? row.payload.summary
         : row.event_type
   }));
-  const text = renderDailyDigest({ events }, locale);
+  const researchRunId = researchRunIdFromNotifications(rows ?? [], options.researchRunId);
+  const snapshot = researchRunId
+    ? await loadDailyDigestSnapshot(client, researchRunId, locale)
+    : undefined;
+  const text = renderDailyDigest({ events, ...(snapshot ? { snapshot } : {}) }, locale);
   const token = options.botToken ?? process.env.TELEGRAM_BOT_TOKEN ?? '';
   try {
     await sendTelegramMessage(settings.telegram_chat_id, text, {

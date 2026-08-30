@@ -591,7 +591,7 @@ async function enqueueDigestBestEffort(
         event_type: 'DAILY_SUMMARY',
         locale,
         idempotency_key: `daily-summary:${researchRunId}`,
-        payload: { summary: `research run ${researchRunId}` }
+        payload: { researchRunId, summary: `research run ${researchRunId}` }
       });
     }
   } catch (error) {
