@@ -149,6 +149,16 @@ function nullableString(value: Json | undefined, operation: string): string | nu
   return value;
 }
 
+const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function nullableUuid(value: Json | undefined, operation: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !canonicalUuidPattern.test(value)) {
+    throw new ProviderAttemptRepositoryError(operation);
+  }
+  return value;
+}
+
 function requiredString(value: Json | undefined, operation: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new ProviderAttemptRepositoryError(operation);
@@ -358,8 +368,8 @@ export function createProviderAttemptRepository(
       }
       return {
         attemptedProviderIds: object.attempted_provider_ids,
-        pendingWinnerAttemptId: nullableString(object.pending_winner_attempt_id, operation),
-        fallbackParentAttemptId: nullableString(object.fallback_parent_attempt_id, operation)
+        pendingWinnerAttemptId: nullableUuid(object.pending_winner_attempt_id, operation),
+        fallbackParentAttemptId: nullableUuid(object.fallback_parent_attempt_id, operation)
       };
     }
   };

@@ -202,6 +202,28 @@ async function seedCandidateAndLeases(
   };
 }
 
+async function seedClaimedJobForFixture(fixture: Fixture): Promise<Lease> {
+  const jobId = randomUUID();
+  await sql`
+    insert into jobs (id, type, payload, status, idempotency_key)
+    values (
+      ${jobId}, 'NORMALIZE_OPPORTUNITIES',
+      ${sql.json({ candidateIds: [fixture.candidateId], locale: 'ko' })},
+      'queued', ${`normalize:${fixture.candidateId}:cross-job:${jobId}`}
+    )
+  `;
+  const [job] = await sql<{ id: string; leased_by: string; attempts: number }[]>`
+    select id, leased_by, attempts from claim_jobs('worker-b', 100, 120)
+    where id = ${jobId}
+  `;
+  if (!job) throw new Error('Cross-job normalization fixture was not claimed.');
+  return {
+    job_id: job.id,
+    job_lease_owner: job.leased_by,
+    job_lease_epoch: job.attempts,
+  };
+}
+
 async function beginAttempt(fixture: Fixture, fallbackParentAttemptId: string | null = null) {
   const [row] = await sql<{ result: {
     attempt_id: string;
@@ -472,6 +494,55 @@ describe('provider attempt transactions', () => {
       where attempt_id = ${second.attempt_id} and event_type = 'attempt_started'
     `;
     expect(child?.fallback_parent_attempt_id).toBe(first.attempt_id);
+  });
+
+  // Break: reconciliation exposes a fallback parent owned by another current job.
+  it('does not reconcile a crash-unknown parent from another job', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await sql`
+      select reconcile_ai_provider_attempts(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}
+      )
+    `;
+    const currentJob = await seedClaimedJobForFixture(fixture);
+
+    const [reconciliation] = await sql<{ result: {
+      attempted_provider_ids: string[];
+      pending_winner_attempt_id: string | null;
+      fallback_parent_attempt_id: string | null;
+    } }[]>`
+      select reconcile_ai_provider_attempts(
+        ${currentJob.job_id}, ${currentJob.job_lease_owner}, ${currentJob.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}
+      ) as result
+    `;
+
+    expect(reconciliation?.result.fallback_parent_attempt_id).toBeNull();
+    expect(reconciliation?.result.fallback_parent_attempt_id).not.toBe(first.attempt_id);
+  });
+
+  // Break: begin authorizes a parent owned by another job with the same analysis tuple.
+  it('rejects a crash-unknown parent from another job during begin', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await sql`
+      select reconcile_ai_provider_attempts(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}
+      )
+    `;
+    const currentJob = await seedClaimedJobForFixture(fixture);
+    const grok = await seedReadyProvider('grok');
+
+    await expect(beginAttempt(
+      { ...fixture, ...grok, job: currentJob },
+      first.attempt_id,
+    )).rejects.toThrow(/fallback_parent_rejected/u);
   });
 
   // Break: a raw unresolved start is used as a distinct-provider parent before reconciliation.

@@ -734,6 +734,7 @@ begin
     select * into parent_start from public.provider_attempt_events e
     where e.attempt_id = fallback_parent_attempt_id
       and e.logical_analysis_id = analysis_id
+      and e.job_id = job_id
       and e.event_type = 'attempt_started';
     select * into parent_row from public.provider_attempt_events e
     where e.attempt_id = fallback_parent_attempt_id
@@ -1708,6 +1709,7 @@ begin
   join public.provider_attempt_events o
     on o.attempt_id = s.attempt_id and o.event_type <> 'attempt_started'
   where s.logical_analysis_id = analysis_id
+    and s.job_id = job_id
     and s.event_type = 'attempt_started'
     and s.attempt_sequence = (
       select max(latest.attempt_sequence)

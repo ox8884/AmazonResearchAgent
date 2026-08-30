@@ -91,28 +91,66 @@ describe('provider attempt repository', () => {
     })).rejects.toThrow('Could not begin provider attempt.');
   });
 
-  // Break: reconciliation drops the durable latest fallback parent across process restart.
-  it('parses the exact durable fallback parent from reconciliation', async () => {
-    const fallbackParentAttemptId = '00000000-0000-4000-8000-000000000003';
+  // Break: reconciliation drops valid nullable UUID evidence or trusts malformed values.
+  it('parses valid reconciliation UUIDs and explicit nulls', async () => {
+    const pendingWinnerAttemptId = '00000000-0000-4000-8000-000000000003';
+    const fallbackParentAttemptId = '00000000-0000-4000-8000-000000000004';
     const repository = createProviderAttemptRepository(clientWith({
       attempted_provider_ids: ['codex-subscription'],
-      pending_winner_attempt_id: null,
+      pending_winner_attempt_id: pendingWinnerAttemptId,
       fallback_parent_attempt_id: fallbackParentAttemptId
     }) as never);
 
     await expect(repository.reconcile({ jobLease, analysisLease })).resolves.toEqual({
       attemptedProviderIds: ['codex-subscription'],
-      pendingWinnerAttemptId: null,
+      pendingWinnerAttemptId,
       fallbackParentAttemptId
+    });
+
+    const nullRepository = createProviderAttemptRepository(clientWith({
+      attempted_provider_ids: [],
+      pending_winner_attempt_id: null,
+      fallback_parent_attempt_id: null
+    }) as never);
+    await expect(nullRepository.reconcile({ jobLease, analysisLease })).resolves.toEqual({
+      attemptedProviderIds: [],
+      pendingWinnerAttemptId: null,
+      fallbackParentAttemptId: null
     });
   });
 
-  // Break: malformed DB fallback-parent evidence is silently treated as no parent.
-  it('fails closed on a malformed reconciliation fallback parent', async () => {
+  // Break: malformed pending-winner evidence crosses the repository boundary as trusted state.
+  it.each([
+    ['not-a-uuid'],
+    [42],
+    [true],
+    [{ attemptId: '00000000-0000-4000-8000-000000000003' }],
+    [['00000000-0000-4000-8000-000000000003']],
+    [undefined]
+  ])('fails closed on malformed reconciliation pending winner %j', async (pendingWinnerAttemptId) => {
+    const repository = createProviderAttemptRepository(clientWith({
+      attempted_provider_ids: ['codex-subscription'],
+      pending_winner_attempt_id: pendingWinnerAttemptId,
+      fallback_parent_attempt_id: null
+    }) as never);
+
+    await expect(repository.reconcile({ jobLease, analysisLease }))
+      .rejects.toThrow('Could not reconcile provider attempts.');
+  });
+
+  // Break: malformed fallback-parent evidence crosses the repository boundary as trusted state.
+  it.each([
+    ['not-a-uuid'],
+    [42],
+    [false],
+    [{ attemptId: '00000000-0000-4000-8000-000000000004' }],
+    [['00000000-0000-4000-8000-000000000004']],
+    [undefined]
+  ])('fails closed on malformed reconciliation fallback parent %j', async (fallbackParentAttemptId) => {
     const repository = createProviderAttemptRepository(clientWith({
       attempted_provider_ids: ['codex-subscription'],
       pending_winner_attempt_id: null,
-      fallback_parent_attempt_id: 42
+      fallback_parent_attempt_id: fallbackParentAttemptId
     }) as never);
 
     await expect(repository.reconcile({ jobLease, analysisLease }))
