@@ -27,7 +27,7 @@ test('logs in and opens Korean and English AI settings', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1, name: 'AI provider settings' })).toBeVisible();
 });
 
-test('saves an HTTP product without redisplaying the secret', async ({ page }) => {
+test('preserves write-only HTTP secrets without redisplaying plaintext', async ({ page }) => {
   let providers: unknown[] = [];
   let submitted: Record<string, unknown> | null = null;
   await page.route('**/api/ai-providers', async (route) => {
@@ -75,6 +75,8 @@ test('saves an HTTP product without redisplaying the secret', async ({ page }) =
 
   await expect(page.getByText('••••alue')).toBeVisible();
   await expect(page.getByText('secret-value')).toHaveCount(0);
+  expect(JSON.stringify(providers)).not.toContain('secret-value');
+  expect(providers[0]).not.toHaveProperty('apiKey');
   expect(submitted).toMatchObject({
     product: 'openai_compatible_api',
     name: 'My Provider',

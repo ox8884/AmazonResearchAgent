@@ -7,7 +7,8 @@ import {
   createServerDatabaseClient,
   fingerprintFromProviderConfig,
   secretCipherId,
-  type Json
+  type Json,
+  type ProviderRow
 } from '@ara/db';
 
 import { routeAiRequest } from '@ara/ai-router';
@@ -631,6 +632,44 @@ integration('persisted provider catalog', () => {
         : undefined
     ).not.toBe(true);
     expect(decision.kind).not.toBe('route');
+  });
+
+  // Break: unsupported persisted provider families or mixed-version shapes fall through to an executable adapter.
+  it('fails closed on unknown mixed-version provider kinds', async () => {
+    const repository = createProviderRepository(database);
+    const base: ProviderRow = {
+      id: `mixed-version-${randomUUID()}`,
+      name: 'Unsupported mixed-version provider',
+      kind: 'future_provider',
+      adapter: null,
+      billing_type: 'subscription',
+      enabled: true,
+      priority: 1,
+      config: { commandProfileId: 'legacy-command', modelId: 'legacy-model' },
+      settings_revision: 1,
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString()
+    };
+    const catalog = await resolvePersistedProviderCatalog(null, {
+      providerRepository: {
+        ...repository,
+        listProviders: async () => [
+          base,
+          {
+            ...base,
+            id: `${base.id}-subscription`,
+            kind: 'subscription_command',
+            adapter: null,
+            config: { commandProfileId: 'legacy-command', modelId: 'legacy-model' }
+          }
+        ],
+        listModels: async () => [],
+        listRuntimeStates: async () => [],
+        listSecrets: async () => []
+      }
+    });
+
+    expect(catalog.entries).toEqual([]);
   });
 });
 

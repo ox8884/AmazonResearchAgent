@@ -32,10 +32,14 @@ describe('worker provider URL policy', () => {
     ).resolves.toMatchObject({ protocol: 'https:' });
 
     await rejects('http://8.8.8.8/v1', 'public');
+    await rejects('ftp://8.8.8.8/v1', 'public');
+    await rejects('https://0.0.0.0/v1', 'public');
     await rejects('https://10.0.0.8/v1', 'public');
     await rejects('https://100.64.0.8/v1', 'public');
     await rejects('https://127.0.0.1/v1', 'public');
     await rejects('https://169.254.169.254/latest', 'public');
+    await rejects('https://224.0.0.1/v1', 'public');
+    await rejects('https://[fe80::1]/v1', 'public');
   });
 
   // Break: private/Tailscale providers become unusable, or private scope can reach worker loopback.
@@ -81,6 +85,7 @@ describe('worker provider URL policy', () => {
     await rejects('http://[fd00:ec2::254]/latest', 'private');
   });
 
+  // Break: DNS is resolved again after validation or the original hostname is lost for Host/TLS SNI.
   it('pins the connect host to the lookup used for validation', async () => {
     let lookups = 0;
     const resolve: ProviderAddressResolver = async () => {
@@ -112,7 +117,8 @@ describe('worker provider URL policy', () => {
       { address: '127.0.0.1' }
     ]);
     const response = await fetchPinned(
-      `http://provider.example:${address.port}/v1/models`
+      `http://provider.example:${address.port}/v1/models`,
+      { headers: { host: 'attacker.example' } }
     );
     server.close();
     expect(response.status).toBe(200);

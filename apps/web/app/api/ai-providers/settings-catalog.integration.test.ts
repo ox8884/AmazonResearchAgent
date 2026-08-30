@@ -201,16 +201,17 @@ integration('settings API to worker catalog', () => {
     }
   });
 
-  // Break: saved settings never become a live worker catalog route, or plaintext leaks.
-  it('persists an authenticated provider and normalizes through the worker catalog', async () => {
+  // Break: blank-key edits delete ciphertext, replacement keys retain old ciphertext, or plaintext leaks.
+  it('preserves encrypted HTTP provider behavior through blank and replacement key updates', async () => {
     mock = await MockOpenAiServer.start();
     const providerId = `settings-provider-${randomUUID()}`;
+    const providerName = `Settings integration provider ${providerId}`;
     providerIds.push(providerId);
 
     const saved = await authenticatedRequest('POST', {
       product: 'openai_compatible_api',
       id: providerId,
-      name: 'Settings integration provider',
+      name: providerName,
       billingType: 'subscription',
       baseUrl: mock.baseUrl,
       networkScope: 'loopback',
@@ -219,11 +220,13 @@ integration('settings API to worker catalog', () => {
       roles: ['niche_normalization'],
       enabled: true
     });
+    expect(saved.status).toBe(201);
     const savedBody = await saved.json() as {
       provider: {
         id: string;
         secretLast4: string | null;
         roles: readonly string[];
+        settingsRevision: number;
         models: readonly { id: string }[];
       };
     };
@@ -235,11 +238,64 @@ integration('settings API to worker catalog', () => {
       .select('id,kind,config')
       .eq('id', providerId)
       .single();
-    const { data: secretRow } = await client
+    const initialSecretSummary = await client
       .from('provider_secrets')
       .select('ciphertext,last4')
       .eq('provider_id', providerId)
       .single();
+    if (initialSecretSummary.error) throw initialSecretSummary.error;
+    const secretRow = initialSecretSummary.data;
+    const initialSecret = await client
+      .from('provider_secrets')
+      .select('ciphertext,iv,auth_tag,last4')
+      .eq('provider_id', providerId)
+      .single();
+    if (initialSecret.error) throw initialSecret.error;
+    const blankSaved = await authenticatedRequest('POST', {
+      product: 'openai_compatible_api',
+      id: providerId,
+      name: providerName,
+      billingType: 'subscription',
+      baseUrl: mock.baseUrl,
+      networkScope: 'loopback',
+      apiKey: '   ',
+      modelId: 'settings-model',
+      roles: ['niche_normalization'],
+      enabled: true,
+      settingsRevision: savedBody.provider.settingsRevision
+    });
+    const blankSavedBody = await blankSaved.json() as {
+      provider: { settingsRevision: number; secretLast4: string | null };
+    };
+    const blankSecret = await client
+      .from('provider_secrets')
+      .select('ciphertext,iv,auth_tag,last4')
+      .eq('provider_id', providerId)
+      .single();
+    if (blankSecret.error) throw blankSecret.error;
+    const replacementSecretValue = 'replacement-settings-secret';
+    const replacementSaved = await authenticatedRequest('POST', {
+      product: 'openai_compatible_api',
+      id: providerId,
+      name: providerName,
+      billingType: 'subscription',
+      baseUrl: mock.baseUrl,
+      networkScope: 'loopback',
+      apiKey: replacementSecretValue,
+      modelId: 'settings-model',
+      roles: ['niche_normalization'],
+      enabled: true,
+      settingsRevision: blankSavedBody.provider.settingsRevision
+    });
+    const replacementSavedBody = await replacementSaved.json() as {
+      provider: { secretLast4: string | null };
+    };
+    const replacementSecret = await client
+      .from('provider_secrets')
+      .select('ciphertext,iv,auth_tag,last4')
+      .eq('provider_id', providerId)
+      .single();
+    if (replacementSecret.error) throw replacementSecret.error;
     const { data: modelRow } = await client
       .from('ai_models')
       .select('model_id,enabled')
@@ -305,6 +361,8 @@ integration('settings API to worker catalog', () => {
 
     expect(saved.status).toBe(201);
     expect(listed.status).toBe(200);
+    expect(blankSaved.status).toBe(201);
+    expect(replacementSaved.status).toBe(201);
     expect(savedBody.provider.id).toBe(providerId);
     expect(savedBody.provider.secretLast4).toBe('alue');
     expect(savedBody.provider.roles).toEqual(['niche_normalization']);
@@ -315,6 +373,13 @@ integration('settings API to worker catalog', () => {
     expect(JSON.stringify(providerRow)).not.toContain(PLAINTEXT_SECRET);
     expect(secretRow?.ciphertext).not.toContain(PLAINTEXT_SECRET);
     expect(secretRow?.last4).toBe('alue');
+    expect(blankSavedBody.provider.secretLast4).toBe('alue');
+    expect(blankSecret.data).toEqual(initialSecret.data);
+    expect(replacementSavedBody.provider.secretLast4).toBe('cret');
+    expect(replacementSecret.data.last4).toBe('cret');
+    expect(replacementSecret.data.ciphertext).not.toBe(initialSecret.data.ciphertext);
+    expect(JSON.stringify(replacementSecret.data)).not.toContain(replacementSecretValue);
+    expect(JSON.stringify(replacementSavedBody)).not.toContain(replacementSecretValue);
     expect(modelRow).toMatchObject({ model_id: 'settings-model', enabled: true });
     expect(decision.providerId).toBe(providerId);
     expect(JSON.stringify(catalog)).not.toContain(PLAINTEXT_SECRET);

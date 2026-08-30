@@ -231,4 +231,38 @@ describe('OpenAI-compatible HTTP provider', () => {
       message: 'Provider response exceeded the size limit.'
     });
   });
+
+  // Break: a provider that never responds can hold a worker indefinitely.
+  it('bounds provider request timeouts', async () => {
+    let requestCount = 0;
+    const hangingFetch: typeof fetch = async (input, init) => {
+      requestCount += 1;
+      const signal = input instanceof Request ? input.signal : init?.signal;
+      if (!signal) {
+        throw new Error('Expected ky to attach a timeout signal.');
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    const provider = new OpenAiHttpProvider({
+      id: 'timeout-http',
+      baseUrl: 'https://provider.example/v1',
+      billingType: 'free',
+      requiresSecret: false,
+      timeoutMs: 10,
+      fetch: hangingFetch
+    });
+
+    await expect(provider.listModels()).rejects.toMatchObject({
+      name: 'OpenAiHttpError',
+      retryable: true
+    });
+    expect(requestCount).toBeGreaterThan(0);
+    expect(requestCount).toBeLessThanOrEqual(3);
+  });
 });

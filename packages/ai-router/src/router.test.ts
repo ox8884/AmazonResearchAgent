@@ -125,7 +125,8 @@ describe('AI routing policy', () => {
     }
   });
 
-  it('selects the configured role priority before a lower-cost later provider', () => {
+  // Break: routing returns a model or billing identity owned by a different provider entry.
+  it('preserves provider, model, and billing ownership while applying role priority', () => {
     const preferred = provider('preferred', 'subscription');
     const cheaper = provider('cheaper', 'free');
     const decision = routeAiRequest(
@@ -155,7 +156,12 @@ describe('AI routing policy', () => {
     expect(decision.kind).toBe('route');
     if (decision.kind === 'route') {
       expect(decision.providerId).toBe('preferred');
-      expect(decision.model.id).toBe('preferred-model');
+      expect(decision.provider.billingType).toBe('subscription');
+      expect(decision.model).toMatchObject({
+        providerId: 'preferred',
+        id: 'preferred-model',
+        billingType: 'subscription'
+      });
     }
   });
 

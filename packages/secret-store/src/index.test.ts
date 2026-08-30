@@ -6,10 +6,12 @@ import {
 } from './index';
 
 describe('encrypted provider secret store', () => {
-  it('round trips with AES-256-GCM and exposes only the last four characters', () => {
+  // Break: HTTP provider keys are serialized in plaintext or lose authenticated encryption metadata.
+  it('preserves encrypted HTTP provider behavior with bounded public metadata', () => {
     const encrypted = encryptSecret('super-secret-value', Buffer.alloc(32, 7));
 
     expect(decryptSecret(encrypted, Buffer.alloc(32, 7))).toBe('super-secret-value');
+    expect(JSON.stringify(encrypted)).not.toContain('super-secret-value');
     expect(encrypted.ciphertext).not.toContain('super-secret-value');
     expect(encrypted.last4).toBe('alue');
     expect(Buffer.from(encrypted.iv, 'base64')).toHaveLength(12);

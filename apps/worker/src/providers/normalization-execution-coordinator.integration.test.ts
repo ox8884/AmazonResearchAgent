@@ -27,6 +27,47 @@ type ReadyProvider = {
   readonly fingerprint: string;
 };
 
+type ExecutionProvider = {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly fingerprint: string;
+};
+
+async function seedHttpProvider(client: QueueDatabaseClient): Promise<ExecutionProvider> {
+  const suffix = randomUUID();
+  const providerId = `http-integration-${suffix}`;
+  const modelId = `http-model-${suffix}`;
+  const fingerprint = `http-fingerprint-${suffix}`;
+  const { error: providerError } = await client.from('ai_providers').insert({
+    id: providerId,
+    name: providerId,
+    kind: 'openai_http',
+    adapter: null,
+    billing_type: 'free',
+    enabled: true,
+    priority: 0,
+    config: {
+      baseUrl: 'https://provider.example/v1',
+      networkScope: 'public',
+      roles: ['niche_normalization'],
+      executionIdentity: fingerprint
+    },
+    settings_revision: 1
+  });
+  if (providerError) throw providerError;
+  const { error: modelError } = await client.from('ai_models').insert({
+    provider_id: providerId,
+    model_id: modelId,
+    display_name: modelId,
+    capabilities: ['structured_json'],
+    billing_type: 'free',
+    enabled: true,
+    priority: 0
+  });
+  if (modelError) throw modelError;
+  return { providerId, modelId, fingerprint };
+}
+
 const normalizationOutput: KeywordNormalization = {
   classification: 'product_niche',
   canonicalNiche: 'Batter / Pancake Dispenser',
@@ -132,64 +173,74 @@ async function seedReadyProvider(
   return { providerId, modelId, adapter, fingerprint };
 }
 
+function executionCatalog(
+  providers: readonly {
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly billingType: 'free' | 'subscription' | 'payg';
+    readonly priority: number;
+  }[]
+): ProviderCatalog {
+  return {
+    entries: providers.map(({ providerId, modelId, billingType, priority }) => {
+      const provider: AiProvider = {
+        id: providerId,
+        billingType,
+        async health() {
+          return {
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            reason: null,
+            retryAfterSeconds: null
+          };
+        },
+        async listModels() { return []; },
+        async runStructured() {
+          throw new Error('Coordinator target must own execution.');
+        }
+      };
+      return {
+        provider,
+        enabled: true,
+        priority,
+        roles: ['niche_normalization'],
+        health: {
+          available: true,
+          checkedAt: new Date(0).toISOString(),
+          reason: null,
+          retryAfterSeconds: null
+        },
+        models: [{
+          providerId,
+          id: modelId,
+          displayName: modelId,
+          capabilities: ['structured_json'],
+          billingType,
+          qualityRank: priority
+        }]
+      };
+    })
+  };
+}
+
 function catalog(
   codex: ReadyProvider,
   grok: ReadyProvider,
   paygProviderId: string
 ): ProviderCatalog {
-  const entry = (
-    providerId: string,
-    modelId: string,
-    billingType: 'subscription' | 'payg',
-    priority: number
-  ): ProviderCatalog['entries'][number] => {
-    const provider: AiProvider = {
-      id: providerId,
-      billingType,
-      async health() {
-        return {
-          available: true,
-          checkedAt: new Date(0).toISOString(),
-          reason: null,
-          retryAfterSeconds: null
-        };
-      },
-      async listModels() { return []; },
-      async runStructured() {
-        throw new Error('Coordinator target must own execution.');
-      }
-    };
-    return {
-      provider,
-      enabled: true,
-      priority,
-      roles: ['niche_normalization'],
-      health: {
-        available: true,
-        checkedAt: new Date(0).toISOString(),
-        reason: null,
-        retryAfterSeconds: null
-      },
-      models: [{
-        providerId,
-        id: modelId,
-        displayName: modelId,
-        capabilities: ['structured_json'],
-        billingType,
-        qualityRank: priority
-      }]
-    };
-  };
-  return {
-    entries: [
-      entry(codex.providerId, codex.modelId, 'subscription', 0),
-      entry(grok.providerId, grok.modelId, 'subscription', 1),
-      entry(paygProviderId, `${paygProviderId}-model`, 'payg', 0)
-    ]
-  };
+  return executionCatalog([
+    { ...codex, billingType: 'subscription', priority: 0 },
+    { ...grok, billingType: 'subscription', priority: 1 },
+    {
+      providerId: paygProviderId,
+      modelId: `${paygProviderId}-model`,
+      billingType: 'payg',
+      priority: 0
+    }
+  ]);
 }
 
-async function seedExecution(client: QueueDatabaseClient, codex: ReadyProvider) {
+async function seedExecution(client: QueueDatabaseClient, selected: ExecutionProvider) {
   const suffix = randomUUID();
   const importRunId = randomUUID();
   const rawId = randomUUID();
@@ -253,8 +304,8 @@ async function seedExecution(client: QueueDatabaseClient, codex: ReadyProvider) 
     analysis_input_hash: inputHash,
     worker_id: analysisOwner,
     lease_seconds: 120,
-    provider_id: codex.providerId,
-    model_id: codex.modelId,
+    provider_id: selected.providerId,
+    model_id: selected.modelId,
     analysis_locale: 'ko',
     prompt_version: 'niche-normalization-v1',
     input_payload: {
@@ -462,5 +513,301 @@ integration('normalization coordinator authority cutover', () => {
     if (candidateError) throw candidateError;
     expect(candidate?.state).toBe('Ready for API Validation');
     expect(candidate?.niche_cluster_id).toBeTruthy();
+  });
+
+  // Break: an HTTP failure is lost, replayed, or attributed as the winner instead of the Codex fallback.
+  it('finalizes HTTP failure then Codex winner with immutable accounting', async () => {
+    const client = databaseClient();
+    const http = await seedHttpProvider(client);
+    const codex = await seedReadyProvider(client, 'codex');
+    const fixture = await seedExecution(client, http);
+    const paygProviderId = `payg-http-fallback-${randomUUID()}`;
+    const calls = { http: 0, codex: 0, payg: 0 };
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts: createProviderAttemptRepository(client),
+      runtime: createProviderRuntimeRepository(client),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget: async (selection): Promise<NormalizationExecutionTarget> => {
+        if (selection.providerId === http.providerId) {
+          return {
+            ...http,
+            adapter: null,
+            expectedSettingsRevision: 1,
+            expectedAuthGeneration: 0,
+            expectedExecutionFingerprint: http.fingerprint,
+            execute: async () => {
+              calls.http += 1;
+              throw Object.assign(new Error('HTTP transient failure'), {
+                failureClass: 'transient_network' as const
+              });
+            }
+          };
+        }
+        if (selection.providerId === paygProviderId) {
+          calls.payg += 1;
+          throw new Error('PAYG must remain excluded.');
+        }
+        if (selection.providerId !== codex.providerId) {
+          throw new Error('Unexpected provider selection.');
+        }
+        return {
+          providerId: codex.providerId,
+          modelId: codex.modelId,
+          adapter: codex.adapter,
+          expectedSettingsRevision: 1,
+          expectedAuthGeneration: 0,
+          expectedExecutionFingerprint: codex.fingerprint,
+          execute: async (_attemptId, request) => {
+            calls.codex += 1;
+            return {
+              output: request.schema.parse(normalizationOutput),
+              providerId: codex.providerId,
+              modelId: codex.modelId,
+              role: request.role,
+              inputHash: request.inputHash,
+              usage: {
+                inputTokens: null,
+                outputTokens: null,
+                totalTokens: null,
+                requestCount: 1
+              },
+              costClass: 'subscription',
+              startedAt: new Date(0).toISOString(),
+              completedAt: new Date(1).toISOString()
+            } satisfies AiProviderResult<KeywordNormalization>;
+          }
+        };
+      }
+    });
+
+    await expect(coordinator.execute({
+      jobLease: fixture.jobLease,
+      analysisLease: fixture.analysisLease,
+      candidateId: fixture.candidateId,
+      expectedCandidateState: 'AI Screening',
+      normalizationGeneration: 0,
+      locale: 'ko',
+      prompt: 'normalize this keyword',
+      inputHash: fixture.inputHash,
+      catalog: executionCatalog([
+        { ...http, billingType: 'free', priority: 0 },
+        { ...codex, billingType: 'subscription', priority: 1 },
+        {
+          providerId: paygProviderId,
+          modelId: `${paygProviderId}-model`,
+          billingType: 'payg',
+          priority: 0
+        }
+      ]),
+      signal: new AbortController().signal
+    })).resolves.toEqual({
+      kind: 'finalized',
+      targetState: 'Ready for API Validation'
+    });
+
+    expect(calls).toEqual({ http: 1, codex: 1, payg: 0 });
+    const { data: events, error: eventsError } = await client
+      .from('provider_attempt_events')
+      .select('attempt_id,attempt_sequence,event_type,provider_id,model_id,billing_type,fallback_parent_attempt_id,consumption_status,result_class')
+      .eq('logical_analysis_id', fixture.analysisLease.analysisId)
+      .order('attempt_sequence')
+      .order('created_at');
+    if (eventsError) throw eventsError;
+    expect(events?.map((event) => ({
+      sequence: event.attempt_sequence,
+      eventType: event.event_type,
+      providerId: event.provider_id,
+      modelId: event.model_id,
+      billingType: event.billing_type,
+      parent: event.fallback_parent_attempt_id,
+      consumption: event.consumption_status,
+      resultClass: event.result_class
+    }))).toEqual([
+      {
+        sequence: 1,
+        eventType: 'attempt_started',
+        providerId: http.providerId,
+        modelId: http.modelId,
+        billingType: 'free',
+        parent: null,
+        consumption: null,
+        resultClass: null
+      },
+      {
+        sequence: 1,
+        eventType: 'attempt_failed',
+        providerId: http.providerId,
+        modelId: http.modelId,
+        billingType: 'free',
+        parent: null,
+        consumption: 'unknown',
+        resultClass: 'transient_network'
+      },
+      {
+        sequence: 2,
+        eventType: 'attempt_started',
+        providerId: codex.providerId,
+        modelId: codex.modelId,
+        billingType: 'subscription',
+        parent: events?.[0]?.attempt_id,
+        consumption: null,
+        resultClass: null
+      },
+      {
+        sequence: 2,
+        eventType: 'attempt_succeeded',
+        providerId: codex.providerId,
+        modelId: codex.modelId,
+        billingType: 'subscription',
+        parent: events?.[0]?.attempt_id,
+        consumption: 'consumed',
+        resultClass: 'success'
+      }
+    ]);
+    const winnerAttemptId = events?.find((event) => event.event_type === 'attempt_succeeded')?.attempt_id;
+    const { data: analysis, error: analysisError } = await client
+      .from('ai_analyses')
+      .select('status,winning_attempt_id,provider_id,model_id,cost_class,usage')
+      .eq('id', fixture.analysisLease.analysisId)
+      .single();
+    if (analysisError) throw analysisError;
+    expect(analysis).toEqual({
+      status: 'completed',
+      winning_attempt_id: winnerAttemptId,
+      provider_id: codex.providerId,
+      model_id: codex.modelId,
+      cost_class: 'subscription',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        requestCount: 1
+      }
+    });
+    const { data: usageRows, error: usageError } = await client
+      .from('ai_usage')
+      .select('provider_id,model_id,cost_class,usage')
+      .eq('analysis_id', fixture.analysisLease.analysisId);
+    if (usageError) throw usageError;
+    expect(usageRows).toEqual([{
+      provider_id: codex.providerId,
+      model_id: codex.modelId,
+      cost_class: 'subscription',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        requestCount: 1
+      }
+    }]);
+  });
+
+  // Break: a staged subscription success is ignored after restart and executes a provider again.
+  it('reclaims a staged winner without provider replay or fake USD', async () => {
+    const client = databaseClient();
+    const codex = await seedReadyProvider(client, 'codex');
+    const fixture = await seedExecution(client, codex);
+    const attempts = createProviderAttemptRepository(client);
+    const staged = await attempts.begin({
+      jobLease: fixture.jobLease,
+      analysisLease: fixture.analysisLease,
+      providerId: codex.providerId,
+      modelId: codex.modelId,
+      expectedSettingsRevision: 1,
+      expectedAuthGeneration: 0,
+      expectedExecutionFingerprint: codex.fingerprint,
+      fallbackParentAttemptId: null
+    });
+    await attempts.appendOutcome({
+      attemptId: staged.attemptId,
+      jobLease: fixture.jobLease,
+      analysisLease: fixture.analysisLease,
+      eventType: 'attempt_succeeded',
+      consumptionStatus: 'consumed',
+      resultClass: 'success',
+      proofCategory: null,
+      latencyMs: 1,
+      inputTokens: null,
+      outputTokens: null,
+      providerRequestCount: 1,
+      safeMetadata: {},
+      output: normalizationOutput,
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        requestCount: 1
+      }
+    });
+    const executeCalls = { count: 0 };
+    const freshCoordinator = new NormalizationExecutionCoordinator({
+      attempts: createProviderAttemptRepository(client),
+      runtime: createProviderRuntimeRepository(client),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget: async () => {
+        executeCalls.count += 1;
+        throw new Error('A staged winner must bypass provider resolution.');
+      }
+    });
+
+    await expect(freshCoordinator.execute({
+      jobLease: fixture.jobLease,
+      analysisLease: fixture.analysisLease,
+      candidateId: fixture.candidateId,
+      expectedCandidateState: 'AI Screening',
+      normalizationGeneration: 0,
+      locale: 'ko',
+      prompt: 'normalize this keyword',
+      inputHash: fixture.inputHash,
+      catalog: executionCatalog([
+        { ...codex, billingType: 'subscription', priority: 0 }
+      ]),
+      signal: new AbortController().signal
+    })).resolves.toEqual({
+      kind: 'finalized',
+      targetState: 'Ready for API Validation'
+    });
+
+    expect(executeCalls.count).toBe(0);
+    const { data: events, error: eventsError } = await client
+      .from('provider_attempt_events')
+      .select('attempt_id,attempt_sequence,event_type,provider_id,billing_type')
+      .eq('logical_analysis_id', fixture.analysisLease.analysisId)
+      .order('created_at');
+    if (eventsError) throw eventsError;
+    expect(events).toEqual([
+      {
+        attempt_id: staged.attemptId,
+        attempt_sequence: 1,
+        event_type: 'attempt_started',
+        provider_id: codex.providerId,
+        billing_type: 'subscription'
+      },
+      {
+        attempt_id: staged.attemptId,
+        attempt_sequence: 1,
+        event_type: 'attempt_succeeded',
+        provider_id: codex.providerId,
+        billing_type: 'subscription'
+      }
+    ]);
+    const { data: analysis, error: analysisError } = await client
+      .from('ai_analyses')
+      .select('status,winning_attempt_id,provider_id,cost_class,usage')
+      .eq('id', fixture.analysisLease.analysisId)
+      .single();
+    if (analysisError) throw analysisError;
+    expect(analysis).toMatchObject({
+      status: 'completed',
+      winning_attempt_id: staged.attemptId,
+      provider_id: codex.providerId,
+      cost_class: 'subscription',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        requestCount: 1
+      }
+    });
   });
 });
