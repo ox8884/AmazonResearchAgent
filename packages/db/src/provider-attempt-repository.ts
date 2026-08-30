@@ -92,6 +92,7 @@ export type CandidateDeferralResult = {
 export type AttemptReconciliation = {
   readonly attemptedProviderIds: readonly string[];
   readonly pendingWinnerAttemptId: string | null;
+  readonly fallbackParentAttemptId: string | null;
 };
 
 export interface ProviderAttemptRepository {
@@ -357,7 +358,8 @@ export function createProviderAttemptRepository(
       }
       return {
         attemptedProviderIds: object.attempted_provider_ids,
-        pendingWinnerAttemptId: nullableString(object.pending_winner_attempt_id, operation)
+        pendingWinnerAttemptId: nullableString(object.pending_winner_attempt_id, operation),
+        fallbackParentAttemptId: nullableString(object.fallback_parent_attempt_id, operation)
       };
     }
   };

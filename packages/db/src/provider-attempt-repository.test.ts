@@ -90,4 +90,32 @@ describe('provider attempt repository', () => {
       fallbackParentAttemptId: null
     })).rejects.toThrow('Could not begin provider attempt.');
   });
+
+  // Break: reconciliation drops the durable latest fallback parent across process restart.
+  it('parses the exact durable fallback parent from reconciliation', async () => {
+    const fallbackParentAttemptId = '00000000-0000-4000-8000-000000000003';
+    const repository = createProviderAttemptRepository(clientWith({
+      attempted_provider_ids: ['codex-subscription'],
+      pending_winner_attempt_id: null,
+      fallback_parent_attempt_id: fallbackParentAttemptId
+    }) as never);
+
+    await expect(repository.reconcile({ jobLease, analysisLease })).resolves.toEqual({
+      attemptedProviderIds: ['codex-subscription'],
+      pendingWinnerAttemptId: null,
+      fallbackParentAttemptId
+    });
+  });
+
+  // Break: malformed DB fallback-parent evidence is silently treated as no parent.
+  it('fails closed on a malformed reconciliation fallback parent', async () => {
+    const repository = createProviderAttemptRepository(clientWith({
+      attempted_provider_ids: ['codex-subscription'],
+      pending_winner_attempt_id: null,
+      fallback_parent_attempt_id: 42
+    }) as never);
+
+    await expect(repository.reconcile({ jobLease, analysisLease }))
+      .rejects.toThrow('Could not reconcile provider attempts.');
+  });
 });

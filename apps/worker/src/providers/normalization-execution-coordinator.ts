@@ -213,7 +213,10 @@ export class NormalizationExecutionCoordinator {
     }
 
     const excluded = new Set(reconciliation.attemptedProviderIds);
-    let fallbackParentAttemptId: string | null = null;
+    let fallbackParentAttemptId = reconciliation.fallbackParentAttemptId;
+    if (excluded.size > 0 && fallbackParentAttemptId === null) {
+      return this.defer(request);
+    }
     for (;;) {
       throwIfAborted(request.signal);
       const decision = routeAiRequest(AiRequestSchema.parse({

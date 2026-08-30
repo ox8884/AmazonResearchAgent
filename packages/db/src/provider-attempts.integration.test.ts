@@ -387,6 +387,77 @@ describe('provider attempt transactions', () => {
     ]);
   });
 
+  // Break: a restarted coordinator cannot recover the durable eligible fallback parent.
+  it('reconciles the exact failed parent and authorizes a distinct fallback after restart', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(
+      fixture,
+      first.attempt_id,
+      'attempt_failed',
+      'unknown',
+      'capacity_exhausted',
+    );
+    await applyRuntimeFailure(fixture, first.attempt_id, 'capacity_exhausted');
+
+    const [reconciliation] = await sql<{ result: {
+      attempted_provider_ids: string[];
+      pending_winner_attempt_id: string | null;
+      fallback_parent_attempt_id: string | null;
+    } }[]>`
+      select reconcile_ai_provider_attempts(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}
+      ) as result
+    `;
+    expect(reconciliation?.result).toEqual({
+      attempted_provider_ids: [fixture.providerId],
+      pending_winner_attempt_id: null,
+      fallback_parent_attempt_id: first.attempt_id,
+    });
+
+    const grok = await seedReadyProvider('grok');
+    await expect(beginAttempt(
+      { ...fixture, ...grok },
+      reconciliation?.result.fallback_parent_attempt_id ?? null,
+    )).resolves.toMatchObject({ attempt_sequence: 2, provider_id: grok.providerId });
+  });
+
+  // Break: crash-unknown evidence is promoted into a DB-rejected fallback parent.
+  it('reconciles a bare start as excluded crash-unknown with no fallback parent', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    const [reconciliation] = await sql<{ result: {
+      attempted_provider_ids: string[];
+      pending_winner_attempt_id: string | null;
+      fallback_parent_attempt_id: string | null;
+    } }[]>`
+      select reconcile_ai_provider_attempts(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}
+      ) as result
+    `;
+    expect(reconciliation?.result).toEqual({
+      attempted_provider_ids: [fixture.providerId],
+      pending_winner_attempt_id: null,
+      fallback_parent_attempt_id: null,
+    });
+    const [outcome] = await sql<{ event_type: string; result_class: string }[]>`
+      select event_type, result_class from provider_attempt_events
+      where attempt_id = ${first.attempt_id} and event_type <> 'attempt_started'
+    `;
+    expect(outcome).toEqual({
+      event_type: 'attempt_unknown_after_crash',
+      result_class: 'worker_process_loss',
+    });
+
+    const grok = await seedReadyProvider('grok');
+    await expect(beginAttempt({ ...fixture, ...grok }, null))
+      .rejects.toThrow(/fallback_parent_rejected/u);
+  });
+
   it('stages one winner and finalizes analysis and usage exactly once', async () => {
     const fixture = await seedCandidateAndLeases();
     const attempt = await beginAttempt(fixture);

@@ -107,7 +107,8 @@ function attemptRepository(overrides: Partial<ProviderAttemptRepository> = {}): 
   return {
     reconcile: vi.fn(async () => ({
       attemptedProviderIds: [],
-      pendingWinnerAttemptId: null
+      pendingWinnerAttemptId: null,
+      fallbackParentAttemptId: null
     })),
     begin: vi.fn(async (input) => ({
       attemptId: input.providerId === 'codex'
@@ -270,6 +271,72 @@ describe('NormalizationExecutionCoordinator', () => {
         fallbackParentAttemptId: '00000000-0000-4000-8000-000000000101'
       })
     );
+  });
+
+  // Break: a fresh coordinator loses the durable parent and sends a null parent after restart.
+  it('resumes with the DB-derived parent and routes only the distinct unpaid fallback', async () => {
+    const fallbackParentAttemptId = '00000000-0000-4000-8000-000000000101';
+    const attempts = attemptRepository({
+      reconcile: vi.fn(async () => ({
+        attemptedProviderIds: ['codex'],
+        pendingWinnerAttemptId: null,
+        fallbackParentAttemptId
+      }))
+    });
+    const resolveTarget = vi.fn(async () => target('grok', async () => ({
+      output,
+      providerId: 'grok',
+      modelId: 'grok-model',
+      role: 'niche_normalization' as const,
+      inputHash: 'input-hash',
+      usage,
+      costClass: 'subscription' as const,
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(1).toISOString()
+    })));
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts,
+      runtime: runtimeRepository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget
+    });
+
+    await expect(coordinator.execute(request())).resolves.toMatchObject({ kind: 'finalized' });
+    expect(resolveTarget).toHaveBeenCalledOnce();
+    expect(resolveTarget).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'grok'
+    }));
+    expect(attempts.begin).toHaveBeenCalledOnce();
+    expect(attempts.begin).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'grok',
+      fallbackParentAttemptId
+    }));
+  });
+
+  // Break: crash-unknown evidence starts a distinct provider with a null, DB-rejected parent.
+  it('defers without routing when reconciliation has attempts but no eligible parent', async () => {
+    const attempts = attemptRepository({
+      reconcile: vi.fn(async () => ({
+        attemptedProviderIds: ['codex'],
+        pendingWinnerAttemptId: null,
+        fallbackParentAttemptId: null
+      }))
+    });
+    const resolveTarget = vi.fn();
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts,
+      runtime: runtimeRepository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget
+    });
+
+    await expect(coordinator.execute(request())).resolves.toMatchObject({
+      kind: 'deferred',
+      targetState: 'Waiting for AI Capacity'
+    });
+    expect(resolveTarget).not.toHaveBeenCalled();
+    expect(attempts.begin).not.toHaveBeenCalled();
+    expect(attempts.deferCandidate).toHaveBeenCalledOnce();
   });
 
   // Break: reconciliation ignores a staged winner and consumes the provider again after a crash.

@@ -1643,6 +1643,7 @@ declare
   job_row public.jobs%rowtype;
   analysis_row public.ai_analyses%rowtype;
   attempted_provider_ids jsonb;
+  fallback_parent_attempt_id uuid;
 begin
   job_row := public.assert_current_job_lease(job_id, job_lease_owner, job_lease_epoch);
   analysis_row := public.assert_current_analysis_lease(
@@ -1678,7 +1679,8 @@ begin
      or analysis_row.winning_attempt_id is not null then
     return jsonb_build_object(
       'attempted_provider_ids', '[]'::jsonb,
-      'pending_winner_attempt_id', analysis_row.pending_winner_attempt_id
+      'pending_winner_attempt_id', analysis_row.pending_winner_attempt_id,
+      'fallback_parent_attempt_id', null
     );
   end if;
 
@@ -1691,9 +1693,42 @@ begin
       select 1 from public.provider_attempt_events o
       where o.attempt_id = s.attempt_id and o.event_type = 'attempt_not_consumed'
     );
+
+  select s.attempt_id into fallback_parent_attempt_id
+  from public.provider_attempt_events s
+  join public.provider_attempt_events o
+    on o.attempt_id = s.attempt_id and o.event_type <> 'attempt_started'
+  where s.logical_analysis_id = analysis_id
+    and s.event_type = 'attempt_started'
+    and s.attempt_sequence = (
+      select max(latest.attempt_sequence)
+      from public.provider_attempt_events latest
+      where latest.logical_analysis_id = analysis_id
+        and latest.event_type = 'attempt_started'
+    )
+    and (
+      (
+        o.event_type = 'attempt_failed'
+        and o.result_class in (
+          'auth_expired', 'capacity_exhausted', 'rate_limited',
+          'transient_network', 'client_transient', 'timeout'
+        )
+      )
+      or (
+        o.event_type = 'attempt_not_consumed'
+        and o.result_class = 'pre_spawn_failure'
+        and o.proof_category in (
+          'spawn_rejected_before_child', 'sandbox_not_started',
+          'profile_verification_failed_before_spawn',
+          'semaphore_cancelled_before_authorization'
+        )
+      )
+    );
+
   return jsonb_build_object(
     'attempted_provider_ids', attempted_provider_ids,
-    'pending_winner_attempt_id', analysis_row.pending_winner_attempt_id
+    'pending_winner_attempt_id', analysis_row.pending_winner_attempt_id,
+    'fallback_parent_attempt_id', fallback_parent_attempt_id
   );
 end;
 $$;
