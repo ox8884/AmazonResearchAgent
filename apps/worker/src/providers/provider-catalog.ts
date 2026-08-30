@@ -13,6 +13,8 @@ import {
   type Json,
   type ModelRow,
   type ProviderRow,
+  type ProviderRepository,
+  type ProviderRuntimeRepository,
   type ProviderRuntimeStateRow,
   type ProviderSecretRow
 } from '@ara/db';
@@ -30,7 +32,8 @@ import {
   type AiModelDescriptor,
   type AiRole,
   type BillingType,
-  type ProviderCapability
+  type ProviderCapability,
+  type SubscriptionAdapter
 } from '@ara/shared';
 
 import { resolveApprovedCommandProfile } from './command-profiles';
@@ -41,6 +44,15 @@ import {
 
 export interface PersistedProviderCatalogOptions {
   readonly encryptionKey?: Buffer;
+  readonly subscriptionAdapters?: Partial<Record<SubscriptionAdapter, AiProvider>>;
+  readonly runtimeRepository?: Pick<
+    ProviderRuntimeRepository,
+    'isRoutable' | 'expireReadyLease'
+  >;
+  readonly providerRepository?: Pick<
+    ProviderRepository,
+    'listProviders' | 'listModels' | 'listRuntimeStates' | 'listSecrets'
+  >;
 }
 
 export class ProviderCatalogError extends Error {
@@ -297,15 +309,95 @@ function rolePriority(
   return result;
 }
 
+function bindProviderIdentity(providerId: string, adapter: AiProvider): AiProvider {
+  return {
+    id: providerId,
+    billingType: adapter.billingType,
+    health: () => adapter.health(),
+    async listModels() {
+      return (await adapter.listModels()).map((model) => ({ ...model, providerId }));
+    },
+    async runStructured(request) {
+      const result = await adapter.runStructured(request);
+      return { ...result, providerId };
+    }
+  };
+}
+
+async function subscriptionCatalogEntry(
+  provider: ProviderRow,
+  models: readonly ModelRow[],
+  runtimeState: ProviderRuntimeStateRow | undefined,
+  options: PersistedProviderCatalogOptions
+): Promise<ProviderCatalogEntry | null> {
+  if (
+    !runtimeState ||
+    (provider.adapter !== 'codex' && provider.adapter !== 'grok') ||
+    !provider.enabled
+  ) {
+    return null;
+  }
+  const accepted = options.subscriptionAdapters?.[provider.adapter];
+  const runtime = options.runtimeRepository;
+  if (!accepted || !runtime) return null;
+  const bindings = {
+    providerId: provider.id,
+    expectedSettingsRevision: provider.settings_revision,
+    expectedAuthGeneration: runtimeState.auth_generation,
+    expectedExecutionFingerprint: runtimeState.execution_fingerprint
+  };
+  if (
+    runtimeState.settings_revision !== provider.settings_revision ||
+    runtimeState.security_profile_version !== 'subscription-isolation-v1' ||
+    runtimeState.readiness_policy_version !== 'ready-lease-v1' ||
+    runtimeState.credential_source_digest === null ||
+    runtimeState.binary_identity_digest === null ||
+    runtimeState.terms_digest === null ||
+    runtimeState.capability_attestation_id === null ||
+    runtimeState.containment_attestation_id === null
+  ) {
+    return null;
+  }
+  const persistedModels: AiModelDescriptor[] = [];
+  for (const model of models.filter((candidate) => candidate.enabled)) {
+    if (await runtime.isRoutable({ ...bindings, modelId: model.model_id })) {
+      persistedModels.push(modelFromRow(model, 'subscription'));
+    }
+  }
+  if (persistedModels.length === 0) {
+    await runtime.expireReadyLease(bindings);
+    return null;
+  }
+  const bound = bindProviderIdentity(provider.id, accepted);
+  const roles = configRoles(configRecord(provider.config));
+  return {
+    provider: bound,
+    enabled: true,
+    priority: provider.priority,
+    health: {
+      available: true,
+      checkedAt: runtimeState.checked_at ?? runtimeState.updated_at,
+      reason: null,
+      retryAfterSeconds: null
+    },
+    models: persistedModels,
+    roles,
+    rolePriority: rolePriority(roles, provider.priority)
+  };
+}
+
 async function catalogEntry(
   provider: ProviderRow,
   models: readonly ModelRow[],
   runtimeState: ProviderRuntimeStateRow | undefined,
   secrets: ProviderSecrets,
   options: PersistedProviderCatalogOptions
-): Promise<ProviderCatalogEntry> {
-  if (provider.kind === 'subscription_command' && !runtimeState) {
-    throw new ProviderCatalogError('Subscription provider runtime state is missing.');
+): Promise<ProviderCatalogEntry | null> {
+  if (provider.kind === 'subscription_command') {
+    return subscriptionCatalogEntry(provider, models, runtimeState, options);
+  }
+  if (runtimeState && provider.kind !== 'subscription_command') {
+    throw new ProviderCatalogError('Non-subscription provider has runtime state.');
   }
 
   const adapter = await providerFromRow(provider, secrets.get(provider.id), options);
@@ -353,10 +445,14 @@ async function catalogEntry(
 }
 
 export async function resolvePersistedProviderCatalog(
-  client: QueueDatabaseClient,
+  client: QueueDatabaseClient | null,
   options: PersistedProviderCatalogOptions = {}
 ): Promise<ProviderCatalog> {
-  const repository = createProviderRepository(client);
+  const repository = options.providerRepository ??
+    (client ? createProviderRepository(client) : undefined);
+  if (!repository) {
+    throw new TypeError('A database client or provider repository is required.');
+  }
   const [providers, models, runtimeStates, secrets] = await Promise.all([
     repository.listProviders(),
     repository.listModels(),
@@ -373,15 +469,14 @@ export async function resolvePersistedProviderCatalog(
       continue;
     }
     try {
-      entries.push(
-        await catalogEntry(
-          provider,
-          modelsByProvider.get(provider.id) ?? [],
-          runtimeByProvider.get(provider.id),
-          secretsByProvider,
-          options
-        )
+      const entry = await catalogEntry(
+        provider,
+        modelsByProvider.get(provider.id) ?? [],
+        runtimeByProvider.get(provider.id),
+        secretsByProvider,
+        options
       );
+      if (entry) entries.push(entry);
     } catch (error: unknown) {
       if (error instanceof Error) {
         continue;

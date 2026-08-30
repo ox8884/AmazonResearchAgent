@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ProviderRuntimeRepository } from '@ara/db';
 import {
   routeAiRequest,
   type AiProvider,
@@ -18,12 +19,23 @@ import {
   type SubscriptionAdapter
 } from '@ara/shared';
 
-import { createQueue, type Job, type JobType, type QueueDatabaseClient } from '@ara/queue';
+import {
+  createQueue,
+  parseProbeAiProviderReadinessPayload,
+  type Job,
+  type JobType,
+  type QueueDatabaseClient
+} from '@ara/queue';
 import {
   runImportJob,
   type ImportSourceFile
 } from './jobs/import-opportunity-csv';
 import { runProviderConnectionTest } from './jobs/test-ai-provider';
+import {
+  runProviderReadinessProbe,
+  type ProviderProbeInspector,
+  type ProviderProbeTarget
+} from './jobs/probe-ai-provider-readiness';
 import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe';
 import { runDeepValidation } from './jobs/deep-validation';
 import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
@@ -98,6 +110,11 @@ class DeferredAiProvider implements AiProvider {
 }
 
 const deferredAiProvider = new DeferredAiProvider();
+export interface ProviderProbeResolution {
+  readonly target: ProviderProbeTarget;
+  readonly currentProbeGeneration: number;
+  readonly inspector: ProviderProbeInspector;
+}
 
 export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
@@ -107,6 +124,10 @@ export interface JobHandlerOptions {
   readonly resolveSubscriptionAdapter?: (
     provider: AiProvider
   ) => SubscriptionAdapter | undefined;
+  readonly providerRuntime?: ProviderRuntimeRepository;
+  readonly resolveProviderProbe?: (
+    providerId: string
+  ) => Promise<ProviderProbeResolution>;
   readonly apiBudget?: ApiBudget;
   readonly queryProductDatabase?: (
     phrases: readonly string[]
@@ -265,6 +286,25 @@ export function createJobHandlers(
       const result = await runProviderConnectionTest(payload.providerId, client);
       await resolveCatalog(true);
       const checkpoint = { phase: 'completed', providerTest: result };
+      context.setCheckpoint(checkpoint);
+      return checkpoint;
+    };
+  }
+  const providerRuntime = options.providerRuntime;
+  const resolveProviderProbe = options.resolveProviderProbe;
+  const probeSemaphores = options.adapterSemaphores;
+  if (providerRuntime && resolveProviderProbe && probeSemaphores) {
+    handlers.PROBE_AI_PROVIDER_READINESS = async (job, context) => {
+      const payload = parseProbeAiProviderReadinessPayload(job.payload);
+      const resolution = await resolveProviderProbe(payload.providerId);
+      const result = await runProviderReadinessProbe({
+        payload,
+        ...resolution,
+        runtime: providerRuntime,
+        semaphores: probeSemaphores,
+        signal: context.signal
+      });
+      const checkpoint = { phase: 'completed', providerProbe: result };
       context.setCheckpoint(checkpoint);
       return checkpoint;
     };

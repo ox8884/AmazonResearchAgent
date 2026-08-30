@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DuplicateJobError,
   DurableQueue,
+  parseProbeAiProviderReadinessPayload,
+  providerReadinessProbeKey,
   type Job,
   type JobInsert,
   type JobLeaseIdentity,
@@ -113,5 +115,32 @@ describe('job lease epochs', () => {
     );
     expect(heartbeat).toHaveBeenCalledWith(lease, 120);
     expect(checkpoint).toHaveBeenCalledWith(lease, { phase: 'saved' }, 120);
+  });
+});
+
+describe('provider readiness probe identity', () => {
+  // Break: unchanged bindings collapse a later probe generation onto a completed job.
+  it('includes generation in the strict database-compatible key', () => {
+    const first = parseProbeAiProviderReadinessPayload({
+      providerId: 'provider-a',
+      settingsRevision: 4,
+      authGeneration: 2,
+      executionFingerprint: 'fingerprint-a',
+      probeGeneration: 8
+    });
+    const second = { ...first, probeGeneration: 9 };
+    expect(providerReadinessProbeKey(first)).toBe(
+      'provider-probe:provider-a:4:2:fingerprint-a:8'
+    );
+    expect(providerReadinessProbeKey(second)).not.toBe(providerReadinessProbeKey(first));
+  });
+
+  // Break: malformed or caller-extended payloads bypass handler binding checks.
+  it.each([
+    { providerId: '', settingsRevision: 1, authGeneration: 0, executionFingerprint: 'fp', probeGeneration: 1 },
+    { providerId: 'p', settingsRevision: -1, authGeneration: 0, executionFingerprint: 'fp', probeGeneration: 1 },
+    { providerId: 'p', settingsRevision: 1, authGeneration: 0, executionFingerprint: 'fp', probeGeneration: 1, extra: true }
+  ])('rejects malformed payload %#', (payload) => {
+    expect(() => parseProbeAiProviderReadinessPayload(payload)).toThrow();
   });
 });

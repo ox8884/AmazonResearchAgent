@@ -8,6 +8,7 @@ export type JobType =
   | 'IMPORT_OPPORTUNITY_CSV'
   | 'NORMALIZE_OPPORTUNITIES'
   | 'TEST_AI_PROVIDER_CONNECTION'
+  | 'PROBE_AI_PROVIDER_READINESS'
   | 'MARKET_PROBE'
   | 'DEEP_VALIDATION'
   | 'ENRICH_STRONG_POTENTIAL'
@@ -40,6 +41,71 @@ export interface Job {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProbeAiProviderReadinessPayload {
+  readonly providerId: string;
+  readonly settingsRevision: number;
+  readonly authGeneration: number;
+  readonly executionFingerprint: string;
+  readonly probeGeneration: number;
+}
+
+function requiredProbeString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredProbeGeneration(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+export function parseProbeAiProviderReadinessPayload(
+  value: unknown
+): ProbeAiProviderReadinessPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Provider readiness payload must be an object');
+  }
+  const property = (name: string): unknown =>
+    Object.getOwnPropertyDescriptor(value, name)?.value;
+  const expected = [
+    'providerId',
+    'settingsRevision',
+    'authGeneration',
+    'executionFingerprint',
+    'probeGeneration'
+  ];
+  if (Object.keys(value).some((key) => !expected.includes(key))) {
+    throw new TypeError('Provider readiness payload contains unknown fields');
+  }
+  return {
+    providerId: requiredProbeString(property('providerId'), 'providerId'),
+    settingsRevision: requiredProbeGeneration(property('settingsRevision'), 'settingsRevision'),
+    authGeneration: requiredProbeGeneration(property('authGeneration'), 'authGeneration'),
+    executionFingerprint: requiredProbeString(
+      property('executionFingerprint'),
+      'executionFingerprint'
+    ),
+    probeGeneration: requiredProbeGeneration(property('probeGeneration'), 'probeGeneration')
+  };
+}
+
+export function providerReadinessProbeKey(
+  payload: ProbeAiProviderReadinessPayload
+): string {
+  return [
+    'provider-probe',
+    payload.providerId,
+    payload.settingsRevision,
+    payload.authGeneration,
+    payload.executionFingerprint,
+    payload.probeGeneration
+  ].join(':');
 }
 
 export interface EnqueueJobInput {

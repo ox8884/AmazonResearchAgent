@@ -11,6 +11,8 @@ export {
   heartbeatJob,
   JobLeaseLostError,
   QueueOperationError,
+  parseProbeAiProviderReadinessPayload,
+  providerReadinessProbeKey,
   SupabaseQueueRepository
 } from './queue';
 export type {
@@ -18,6 +20,7 @@ export type {
   Job,
   JobInsert,
   JobLeaseIdentity,
+  ProbeAiProviderReadinessPayload,
   JobStatus,
   JobType,
   QueueDatabaseClient,

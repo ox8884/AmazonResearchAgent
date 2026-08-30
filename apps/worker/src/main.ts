@@ -1,6 +1,9 @@
 import { hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { createServerDatabaseClient } from '@ara/db';
+import {
+  createProviderRuntimeRepository,
+  createServerDatabaseClient
+} from '@ara/db';
 import { formatLog } from '@ara/shared';
 import {
   createQueue,
@@ -18,6 +21,7 @@ import {
 } from './providers/provider-catalog';
 import { AdapterSemaphoreRegistry } from './providers/adapter-semaphore';
 import type { JobHandlerOptions } from './handlers';
+import { ProviderSetupRequiredError } from './jobs/probe-ai-provider-readiness';
 const WORKER_PROCESS_COUNT = 1;
 const DISTRIBUTED_ADAPTER_COORDINATION = false;
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
@@ -272,8 +276,9 @@ export async function main(): Promise<void> {
     url: requiredEnvironment('SUPABASE_URL'),
     serviceRoleKey: requiredEnvironment('SUPABASE_SERVICE_ROLE_KEY')
   });
+  const providerRuntime = createProviderRuntimeRepository(client);
   const providerCatalog = new ProviderCatalogCache(() =>
-    resolvePersistedProviderCatalog(client)
+    resolvePersistedProviderCatalog(client, { runtimeRepository: providerRuntime })
   );
   const composition = createWorkerComposition();
   const queue = createQueue(client);
@@ -287,6 +292,10 @@ export async function main(): Promise<void> {
       queue,
       handlers: createJobHandlers(client, {
         ...composition.handlerOptions,
+        providerRuntime,
+        resolveProviderProbe: async () => {
+          throw new ProviderSetupRequiredError();
+        },
         resolveProviderCatalog: (forceRefresh) =>
           providerCatalog.resolve(forceRefresh)
       }),

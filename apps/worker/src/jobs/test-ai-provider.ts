@@ -1,4 +1,8 @@
-import { createProviderRepository } from '@ara/db';
+import {
+  createProviderRepository,
+  createProviderRuntimeRepository,
+  type ProviderRepository
+} from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
 import { assertPersistableModelId, UnsafeModelIdError } from '@ara/shared';
 
@@ -17,6 +21,13 @@ import { decryptSecret, getEncryptionKeyFromEnvironment } from '@ara/secret-stor
 
 
 export interface ProviderTestOptions extends PersistedProviderCatalogOptions {
+  readonly providerLookup?: Pick<
+    ProviderRepository,
+    'findProvider' | 'findRuntimeState'
+  >;
+  readonly requestSubscriptionProbe?: (
+    input: Parameters<ReturnType<typeof createProviderRuntimeRepository>['requestProbe']>[0]
+  ) => Promise<unknown>;
   afterSnapshot?(): Promise<void>;
   beforePersist?(): Promise<void>;
 }
@@ -77,10 +88,37 @@ function executionErrorCategory(error: unknown): string {
 
 export async function runProviderConnectionTest(
   providerId: string,
-  client: QueueDatabaseClient,
+  client: QueueDatabaseClient | null,
   options: ProviderTestOptions = {}
 ): Promise<ProviderTestResult> {
   const started = Date.now();
+  const providerRepository = client ? createProviderRepository(client) : undefined;
+  const providerLookup = options.providerLookup ?? providerRepository;
+  if (!providerLookup) {
+    throw new TypeError('A database client or provider lookup is required.');
+  }
+  const storedProvider = await providerLookup.findProvider(providerId);
+  if (storedProvider?.kind === 'subscription_command') {
+    const runtime = await providerLookup.findRuntimeState(providerId);
+    if (!runtime || runtime.settings_revision !== storedProvider.settings_revision) {
+      return unavailableResult(providerId, started, 'provider_setup_required');
+    }
+    const requestProbe = options.requestSubscriptionProbe ??
+      (client ? createProviderRuntimeRepository(client).requestProbe : undefined);
+    if (!requestProbe) {
+      throw new TypeError('A database client or subscription probe requester is required.');
+    }
+    await requestProbe({
+      providerId,
+      expectedSettingsRevision: storedProvider.settings_revision,
+      expectedAuthGeneration: runtime.auth_generation,
+      expectedExecutionFingerprint: runtime.execution_fingerprint
+    });
+    return unavailableResult(providerId, started, 'provider_probe_requested');
+  }
+  if (!client || !providerRepository) {
+    throw new TypeError('HTTP provider tests require a database client.');
+  }
   let snapshot;
   try {
     snapshot = await loadPersistedProviderSnapshot(client, providerId, options);
@@ -95,7 +133,7 @@ export async function runProviderConnectionTest(
   }
   await options.afterSnapshot?.();
 
-  const repository = createProviderRepository(client);
+  const repository = providerRepository;
   const adapter = snapshot.adapter;
   const provider = snapshot.provider;
   const existing = snapshot.models;
