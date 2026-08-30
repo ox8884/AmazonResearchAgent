@@ -17,6 +17,7 @@ const securityProfile = 'subscription-isolation-v1';
 const readinessPolicy = 'ready-lease-v1';
 
 type Evidence = {
+  readonly securityProfileDigest: string;
   readonly termsDigest: string;
   readonly credentialSourceDigest: string;
   readonly binaryIdentityDigest: string;
@@ -43,6 +44,7 @@ async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promis
   const fingerprint = `fingerprint-${suffix}`;
   const termsDigest = `terms-${suffix}`;
   const evidence = {
+    securityProfileDigest: suffix.replaceAll('-', '').padEnd(64, '0'),
     termsDigest,
     credentialSourceDigest: `credential-${suffix}`,
     binaryIdentityDigest: `binary-${suffix}`,
@@ -70,11 +72,11 @@ async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promis
   await sql`
     select commit_ai_provider_acceptance_probe(
       ${providerId}, ${modelId}, ${adapter}, 1, 0, ${fingerprint},
-      ${securityProfile}, ${readinessPolicy}, ${evidence.termsDigest},
-      ${evidence.credentialSourceDigest}, ${evidence.binaryIdentityDigest},
-      ${evidence.capabilityDigest}, ${evidence.framingDigest},
-      ${evidence.boundedBehaviorDigest}, ${evidence.containmentDigest},
-      '{"verified":true}'::jsonb
+      ${securityProfile}, ${evidence.securityProfileDigest}, ${readinessPolicy},
+      ${evidence.termsDigest}, ${evidence.credentialSourceDigest},
+      ${evidence.binaryIdentityDigest}, ${evidence.capabilityDigest},
+      ${evidence.framingDigest}, ${evidence.boundedBehaviorDigest},
+      ${evidence.containmentDigest}, '{"verified":true}'::jsonb
     )
   `;
   return {
@@ -104,10 +106,10 @@ async function commitReady(fixture: Fixture, generation: number): Promise<void> 
     select commit_ai_provider_probe(
       ${fixture.providerId}, ${fixture.modelId}, ${fixture.settingsRevision},
       ${fixture.authGeneration}, ${fixture.fingerprint}, ${generation},
-      ${fixture.evidence.termsDigest}, ${fixture.evidence.credentialSourceDigest},
-      ${fixture.evidence.binaryIdentityDigest}, ${fixture.evidence.capabilityDigest},
-      ${fixture.evidence.framingDigest}, ${fixture.evidence.boundedBehaviorDigest},
-      ${fixture.evidence.containmentDigest}
+      ${fixture.evidence.termsDigest}, ${fixture.evidence.securityProfileDigest},
+      ${fixture.evidence.credentialSourceDigest}, ${fixture.evidence.binaryIdentityDigest},
+      ${fixture.evidence.capabilityDigest}, ${fixture.evidence.framingDigest},
+      ${fixture.evidence.boundedBehaviorDigest}, ${fixture.evidence.containmentDigest}
     )
   `;
 }
@@ -325,10 +327,10 @@ describe('subscription provider runtime CAS', () => {
         select commit_ai_provider_probe(
           ${fixture.providerId}, ${fixture.modelId}, ${values[0]}, ${values[1]},
           ${values[2]}, ${values[3]},
-          ${fixture.evidence.termsDigest}, ${fixture.evidence.credentialSourceDigest},
-          ${fixture.evidence.binaryIdentityDigest}, ${fixture.evidence.capabilityDigest},
-          ${fixture.evidence.framingDigest}, ${fixture.evidence.boundedBehaviorDigest},
-          ${fixture.evidence.containmentDigest}
+          ${fixture.evidence.termsDigest}, ${fixture.evidence.securityProfileDigest},
+          ${fixture.evidence.credentialSourceDigest}, ${fixture.evidence.binaryIdentityDigest},
+          ${fixture.evidence.capabilityDigest}, ${fixture.evidence.framingDigest},
+          ${fixture.evidence.boundedBehaviorDigest}, ${fixture.evidence.containmentDigest}
         )
       `).rejects.toThrow(/provider_probe_cas_conflict/);
     }
@@ -343,15 +345,25 @@ describe('subscription provider runtime CAS', () => {
       select commit_ai_provider_probe(
         ${fixture.providerId}, ${fixture.modelId}, ${fixture.settingsRevision},
         ${fixture.authGeneration}, ${fixture.fingerprint}, ${request.probe_generation},
-        ${evidence.termsDigest}, ${evidence.credentialSourceDigest},
-        ${evidence.binaryIdentityDigest}, ${evidence.capabilityDigest},
-        ${evidence.framingDigest}, ${evidence.boundedBehaviorDigest},
-        ${evidence.containmentDigest}
+        ${evidence.termsDigest}, ${evidence.securityProfileDigest},
+        ${evidence.credentialSourceDigest}, ${evidence.binaryIdentityDigest},
+        ${evidence.capabilityDigest}, ${evidence.framingDigest},
+        ${evidence.boundedBehaviorDigest}, ${evidence.containmentDigest}
       )
     `;
+    const [acceptedRuntime] = await sql<{
+      capability_attestation_id: string;
+      containment_attestation_id: string;
+    }[]>`
+      select capability_attestation_id, containment_attestation_id
+      from ai_provider_runtime_state where provider_id = ${fixture.providerId}
+    `;
     for (const drift of [
+      { securityProfileDigest: '0'.repeat(64) },
+      { termsDigest: 'terms-drift' },
       { binaryIdentityDigest: 'binary-drift' },
       { credentialSourceDigest: 'credential-drift' },
+      { capabilityDigest: 'capability-drift' },
       { containmentDigest: 'containment-drift' },
       { framingDigest: 'framing-drift' },
       { boundedBehaviorDigest: 'bounded-drift' }
@@ -363,14 +375,19 @@ describe('subscription provider runtime CAS', () => {
         state: string;
         available: boolean;
         ready_valid_until: string | null;
+        capability_attestation_id: string;
+        containment_attestation_id: string;
       }[]>`
-        select state, available, ready_valid_until
+        select state, available, ready_valid_until,
+          capability_attestation_id, containment_attestation_id
         from ai_provider_runtime_state where provider_id = ${fixture.providerId}
       `;
       expect(runtime).toEqual({
         state: 'authorization_required',
         available: false,
-        ready_valid_until: null
+        ready_valid_until: null,
+        capability_attestation_id: acceptedRuntime?.capability_attestation_id,
+        containment_attestation_id: acceptedRuntime?.containment_attestation_id
       });
     }
     await expect(commit(fixture.evidence)).resolves.toBeDefined();

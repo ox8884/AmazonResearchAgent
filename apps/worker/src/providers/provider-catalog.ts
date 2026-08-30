@@ -324,6 +324,8 @@ function bindProviderIdentity(providerId: string, adapter: AiProvider): AiProvid
   };
 }
 
+const SHA256_DIGEST = /^[0-9a-f]{64}$/u;
+
 async function subscriptionCatalogEntry(
   provider: ProviderRow,
   models: readonly ModelRow[],
@@ -349,6 +351,8 @@ async function subscriptionCatalogEntry(
   if (
     runtimeState.settings_revision !== provider.settings_revision ||
     runtimeState.security_profile_version !== 'subscription-isolation-v1' ||
+    runtimeState.security_profile_digest === null ||
+    !SHA256_DIGEST.test(runtimeState.security_profile_digest) ||
     runtimeState.readiness_policy_version !== 'ready-lease-v1' ||
     runtimeState.credential_source_digest === null ||
     runtimeState.binary_identity_digest === null ||

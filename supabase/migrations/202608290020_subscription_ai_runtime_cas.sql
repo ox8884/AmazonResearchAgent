@@ -1,3 +1,46 @@
+alter table public.ai_provider_runtime_state
+  add column security_profile_digest text;
+alter table public.ai_provider_containment_attestations
+  add column security_profile_digest text;
+do $$
+declare
+  legacy_constraint text;
+begin
+  select constraint_row.conname into legacy_constraint
+  from pg_catalog.pg_constraint as constraint_row
+  join pg_catalog.pg_class as relation_row
+    on relation_row.oid = constraint_row.conrelid
+  join pg_catalog.pg_namespace as namespace_row
+    on namespace_row.oid = relation_row.relnamespace
+  where namespace_row.nspname = 'public'
+    and relation_row.relname = 'ai_provider_containment_attestations'
+    and constraint_row.contype = 'u'
+    and (
+      select array_agg(attribute_row.attname order by key_column.ordinality)
+      from unnest(constraint_row.conkey) with ordinality as key_column(attnum, ordinality)
+      join pg_catalog.pg_attribute as attribute_row
+        on attribute_row.attrelid = constraint_row.conrelid
+       and attribute_row.attnum = key_column.attnum
+    ) = array['provider_id', 'execution_fingerprint', 'containment_digest']::name[]
+  limit 1;
+  if legacy_constraint is null then
+    raise exception 'legacy containment attestation constraint missing';
+  end if;
+  execute format(
+    'alter table public.ai_provider_containment_attestations drop constraint %I',
+    legacy_constraint
+  );
+end;
+$$;
+alter table public.ai_provider_containment_attestations
+  add constraint ai_provider_containment_attestation_binding_key
+  unique (
+    provider_id,
+    execution_fingerprint,
+    security_profile_digest,
+    containment_digest
+  );
+
 create or replace function public.enforce_ai_provider_billing_and_secret()
 returns trigger
 language plpgsql
@@ -152,6 +195,7 @@ create or replace function public.commit_ai_provider_acceptance_probe(
   expected_auth_generation bigint,
   expected_execution_fingerprint text,
   security_profile_version text,
+  security_profile_digest text,
   readiness_policy_version text,
   terms_digest text,
   credential_source_digest text,
@@ -182,6 +226,7 @@ begin
      or provider_row.enabled or provider_row.adapter is distinct from adapter
      or provider_row.settings_revision is distinct from expected_settings_revision
      or terms_digest is null or btrim(terms_digest) = ''
+     or security_profile_digest is null or security_profile_digest !~ '^[0-9a-f]{64}$'
      or evidence is null or jsonb_typeof(evidence) <> 'object' then
     raise exception 'provider_acceptance_rejected';
   end if;
@@ -223,12 +268,13 @@ begin
 
   insert into public.ai_provider_containment_attestations (
     provider_id, adapter, settings_revision, auth_generation, execution_fingerprint,
-    security_profile_version, containment_digest, evidence
+    security_profile_version, security_profile_digest, containment_digest, evidence
   ) values (
     commit_ai_provider_acceptance_probe.provider_id,
     commit_ai_provider_acceptance_probe.adapter,
     expected_settings_revision, expected_auth_generation, expected_execution_fingerprint,
     commit_ai_provider_acceptance_probe.security_profile_version,
+    commit_ai_provider_acceptance_probe.security_profile_digest,
     commit_ai_provider_acceptance_probe.containment_digest, evidence
   ) on conflict do nothing
   returning id into containment_id;
@@ -237,19 +283,21 @@ begin
     from public.ai_provider_containment_attestations c
     where c.provider_id = commit_ai_provider_acceptance_probe.provider_id
       and c.execution_fingerprint = expected_execution_fingerprint
+      and c.security_profile_digest = commit_ai_provider_acceptance_probe.security_profile_digest
       and c.containment_digest = commit_ai_provider_acceptance_probe.containment_digest;
   end if;
 
   insert into public.ai_provider_runtime_state (
     provider_id, state, available, reason, settings_revision, execution_fingerprint,
-    auth_generation, security_profile_version, readiness_policy_version,
-    credential_source_digest, binary_identity_digest, capability_attestation_id,
-    containment_attestation_id, terms_digest
+    auth_generation, security_profile_version, security_profile_digest,
+    readiness_policy_version, credential_source_digest, binary_identity_digest,
+    capability_attestation_id, containment_attestation_id, terms_digest
   ) values (
     commit_ai_provider_acceptance_probe.provider_id,
     'authorization_required', false, 'acceptance_recorded',
     expected_settings_revision, expected_execution_fingerprint, expected_auth_generation,
     commit_ai_provider_acceptance_probe.security_profile_version,
+    commit_ai_provider_acceptance_probe.security_profile_digest,
     commit_ai_provider_acceptance_probe.readiness_policy_version,
     commit_ai_provider_acceptance_probe.credential_source_digest,
     commit_ai_provider_acceptance_probe.binary_identity_digest,
@@ -260,6 +308,7 @@ begin
     settings_revision = excluded.settings_revision,
     execution_fingerprint = excluded.execution_fingerprint,
     security_profile_version = excluded.security_profile_version,
+    security_profile_digest = excluded.security_profile_digest,
     readiness_policy_version = excluded.readiness_policy_version,
     credential_source_digest = excluded.credential_source_digest,
     binary_identity_digest = excluded.binary_identity_digest,
@@ -303,6 +352,7 @@ begin
      or runtime_row.auth_generation is distinct from expected_auth_generation
      or runtime_row.execution_fingerprint is distinct from expected_execution_fingerprint
      or runtime_row.terms_digest is distinct from terms_digest
+     or runtime_row.security_profile_digest is null
      or runtime_row.credential_source_digest is null
      or runtime_row.binary_identity_digest is null then
     raise exception 'provider_activation_rejected';
@@ -320,7 +370,8 @@ begin
     and c.settings_revision = expected_settings_revision
     and c.auth_generation = expected_auth_generation
     and c.execution_fingerprint = expected_execution_fingerprint
-    and c.security_profile_version = runtime_row.security_profile_version;
+    and c.security_profile_version = runtime_row.security_profile_version
+    and c.security_profile_digest = runtime_row.security_profile_digest;
   if capability_row.id is null or containment_row.id is null then
     raise exception 'provider_activation_evidence_stale';
   end if;
@@ -372,6 +423,7 @@ create or replace function public.commit_ai_provider_probe(
   expected_execution_fingerprint text,
   expected_probe_generation bigint,
   terms_digest text,
+  security_profile_digest text,
   credential_source_digest text,
   binary_identity_digest text,
   capability_digest text,
@@ -419,6 +471,7 @@ begin
   from public.ai_provider_containment_attestations c
   where c.id = runtime_row.containment_attestation_id;
   if runtime_row.terms_digest is distinct from terms_digest
+     or runtime_row.security_profile_digest is distinct from security_profile_digest
      or runtime_row.credential_source_digest is distinct from credential_source_digest
      or runtime_row.binary_identity_digest is distinct from binary_identity_digest
      or capability_row.id is null
@@ -436,6 +489,7 @@ begin
      or containment_row.auth_generation is distinct from expected_auth_generation
      or containment_row.execution_fingerprint is distinct from expected_execution_fingerprint
      or containment_row.security_profile_version is distinct from runtime_row.security_profile_version
+     or containment_row.security_profile_digest is distinct from security_profile_digest
      or containment_row.containment_digest is distinct from containment_digest then
     raise exception 'provider_probe_evidence_mismatch';
   end if;
@@ -488,6 +542,8 @@ as $$
       and x.auth_generation = r.auth_generation
       and x.execution_fingerprint = r.execution_fingerprint
       and x.security_profile_version = r.security_profile_version
+      and r.security_profile_digest is not null
+      and x.security_profile_digest = r.security_profile_digest
   );
 $$;
 
@@ -729,10 +785,10 @@ $$;
 
 alter function public.enqueue_ai_provider_probe_locked(public.ai_providers, public.ai_provider_runtime_state) owner to ara_provider_authority;
 alter function public.request_ai_provider_probe(text, integer, bigint, text) owner to ara_provider_authority;
-alter function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) owner to ara_provider_authority;
+alter function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, text, jsonb) owner to ara_provider_authority;
 alter function public.activate_subscription_provider(text, text, integer, bigint, text, text) owner to ara_provider_authority;
 alter function public.deactivate_subscription_provider(text) owner to ara_provider_authority;
-alter function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) owner to ara_provider_authority;
+alter function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text, text) owner to ara_provider_authority;
 alter function public.is_ai_provider_routable(text, text, integer, bigint, text) owner to ara_provider_authority;
 alter function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) owner to ara_provider_authority;
 alter function public.fence_ai_provider_auth(text, integer, bigint, text) owner to ara_provider_authority;
@@ -740,19 +796,19 @@ alter function public.expire_ai_provider_ready_lease(text, integer, bigint, text
 
 revoke all on function public.enqueue_ai_provider_probe_locked(public.ai_providers, public.ai_provider_runtime_state) from public, anon, authenticated;
 revoke all on function public.request_ai_provider_probe(text, integer, bigint, text) from public, anon, authenticated;
-revoke all on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
+revoke all on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
 revoke all on function public.activate_subscription_provider(text, text, integer, bigint, text, text) from public, anon, authenticated;
 revoke all on function public.deactivate_subscription_provider(text) from public, anon, authenticated;
-revoke all on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) from public, anon, authenticated;
+revoke all on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text, text) from public, anon, authenticated;
 revoke all on function public.is_ai_provider_routable(text, text, integer, bigint, text) from public, anon, authenticated;
 revoke all on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) from public, anon, authenticated;
 revoke all on function public.fence_ai_provider_auth(text, integer, bigint, text) from public, anon, authenticated;
 revoke all on function public.expire_ai_provider_ready_lease(text, integer, bigint, text) from public, anon, authenticated;
 grant execute on function public.request_ai_provider_probe(text, integer, bigint, text) to service_role;
-grant execute on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) to service_role;
+grant execute on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, text, jsonb) to service_role;
 grant execute on function public.activate_subscription_provider(text, text, integer, bigint, text, text) to service_role;
 grant execute on function public.deactivate_subscription_provider(text) to service_role;
-grant execute on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) to service_role;
+grant execute on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text, text) to service_role;
 grant execute on function public.is_ai_provider_routable(text, text, integer, bigint, text) to service_role;
 grant execute on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) to service_role;
 grant execute on function public.fence_ai_provider_auth(text, integer, bigint, text) to service_role;

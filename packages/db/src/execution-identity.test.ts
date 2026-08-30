@@ -14,7 +14,7 @@ describe('provider execution identity', () => {
       binaryVersion: '1.0.0',
       executionProfileId: 'codex-profile-v1',
       systemdUnitDigest: 'unit-a',
-      sandboxPolicyDigest: 'sandbox-a',
+      securityProfileDigest: 'security-profile-a',
       authHomeIdentity: 'ara-codex:/var/lib/ara-codex',
       authGeneration: 3,
       settingsRevision: 4,
@@ -29,7 +29,7 @@ describe('provider execution identity', () => {
     for (const [key, value] of [
       ['authGeneration', 5],
       ['systemdUnitDigest', 'unit-b'],
-      ['sandboxPolicyDigest', 'sandbox-b'],
+      ['securityProfileDigest', 'security-profile-b'],
       ['endpointAllowlistDigest', 'endpoint-b'],
       ['containmentBinding', 'containment-b'],
       ['capabilityBinding', 'capability-b'],

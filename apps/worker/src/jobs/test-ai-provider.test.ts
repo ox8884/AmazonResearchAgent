@@ -29,6 +29,7 @@ const runtime: ProviderRuntimeStateRow = {
   settings_revision: 4,
   execution_fingerprint: 'fingerprint-a',
   security_profile_version: 'subscription-isolation-v1',
+  security_profile_digest: null,
   readiness_policy_version: 'ready-lease-v1',
   credential_source_digest: null,
   binary_identity_digest: null,

@@ -26,6 +26,7 @@ export interface ProviderProbeTarget {
 }
 
 export interface ProviderInspectionEvidence {
+  readonly securityProfileDigest: string;
   readonly termsDigest: string;
   readonly credentialSourceDigest: string;
   readonly binaryIdentityDigest: string;
@@ -140,6 +141,7 @@ export async function runProviderAcceptanceProbe(
     modelId: dependencies.target.modelId,
     adapter: dependencies.target.adapter,
     securityProfileVersion: SECURITY_PROFILE_VERSION,
+    securityProfileDigest: inspection.securityProfileDigest,
     readinessPolicyVersion: READINESS_POLICY_VERSION,
     termsDigest: inspection.termsDigest,
     credentialSourceDigest: inspection.credentialSourceDigest,
@@ -192,6 +194,7 @@ export async function runProviderReadinessProbe(
     ...bindingInput(dependencies.target),
     modelId: dependencies.target.modelId,
     expectedProbeGeneration: dependencies.payload.probeGeneration,
+    securityProfileDigest: inspection.securityProfileDigest,
     termsDigest: inspection.termsDigest,
     credentialSourceDigest: inspection.credentialSourceDigest,
     binaryIdentityDigest: inspection.binaryIdentityDigest,

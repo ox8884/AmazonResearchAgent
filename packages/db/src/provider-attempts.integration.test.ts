@@ -76,6 +76,7 @@ async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<P
   const framingDigest = `framing-${suffix}`;
   const boundedDigest = `bounded-${suffix}`;
   const containmentDigest = `containment-${suffix}`;
+  const securityProfileDigest = suffix.replaceAll('-', '').padEnd(64, '0');
   await sql`
     insert into ai_providers (
       id, name, kind, adapter, billing_type, enabled, config, settings_revision
@@ -95,8 +96,8 @@ async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<P
   await sql`
     select commit_ai_provider_acceptance_probe(
       ${providerId}, ${modelId}, ${adapter}, 1, 0, ${fingerprint},
-      'subscription-isolation-v1', 'ready-lease-v1', ${termsDigest},
-      ${credentialDigest}, ${binaryDigest}, ${capabilityDigest},
+      'subscription-isolation-v1', ${securityProfileDigest}, 'ready-lease-v1',
+      ${termsDigest}, ${credentialDigest}, ${binaryDigest}, ${capabilityDigest},
       ${framingDigest}, ${boundedDigest}, ${containmentDigest},
       '{"verified":true}'::jsonb
     )
@@ -110,9 +111,9 @@ async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<P
   await sql`
     select commit_ai_provider_probe(
       ${providerId}, ${modelId}, 1, 0, ${fingerprint},
-      ${activated.result.probe_generation}, ${termsDigest}, ${credentialDigest},
-      ${binaryDigest}, ${capabilityDigest}, ${framingDigest}, ${boundedDigest},
-      ${containmentDigest}
+      ${activated.result.probe_generation}, ${termsDigest}, ${securityProfileDigest},
+      ${credentialDigest}, ${binaryDigest}, ${capabilityDigest}, ${framingDigest},
+      ${boundedDigest}, ${containmentDigest}
     )
   `;
   await sql`update jobs set status = 'completed' where id = ${activated.result.job_id}`;

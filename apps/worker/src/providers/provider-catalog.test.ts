@@ -69,6 +69,7 @@ const runtimeState: ProviderRuntimeStateRow = {
   settings_revision: 1,
   execution_fingerprint: 'fp-a',
   security_profile_version: 'subscription-isolation-v1',
+  security_profile_digest: 'a'.repeat(64),
   readiness_policy_version: 'ready-lease-v1',
   credential_source_digest: 'credential-a',
   binary_identity_digest: 'binary-a',
@@ -217,6 +218,33 @@ describe('provider catalog family dispatch', () => {
       providerId: 'provider-a',
       modelId: 'gpt-5.6'
     }));
+  });
+
+  it('rejects missing host security identity before DB routing', async () => {
+    fixtures.providers = [{ ...providerBase, kind: 'subscription_command', adapter: 'codex' }];
+    fixtures.models = [{
+      id: 'model-row', provider_id: 'provider-a', model_id: 'gpt-5.6', display_name: 'GPT 5.6',
+      capabilities: ['structured_json'], billing_type: 'subscription', quality_rank: 1,
+      enabled: true, priority: 1, origin: 'manual', created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString()
+    }];
+    fixtures.runtimeStates = [{ ...runtimeState, security_profile_digest: null }];
+    const accepted = {
+      id: 'codex', billingType: 'subscription',
+      async health() { return { available: true, checkedAt: '', reason: null, retryAfterSeconds: null }; },
+      async listModels() { return []; },
+      async runStructured() { throw new Error('not invoked'); }
+    } satisfies AiProvider;
+    const runtime = {
+      isRoutable: vi.fn(async () => true),
+      expireReadyLease: vi.fn(async () => null)
+    };
+    await expect(resolvePersistedProviderCatalog(null, {
+      providerRepository: fixtureProviderRepository(),
+      subscriptionAdapters: { codex: accepted },
+      runtimeRepository: runtime
+    })).resolves.toEqual({ entries: [] });
+    expect(runtime.isRoutable).not.toHaveBeenCalled();
   });
 
   // Break: stale DB lease remains in catalog instead of requesting a new generation.

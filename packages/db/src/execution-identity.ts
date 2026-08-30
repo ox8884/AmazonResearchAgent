@@ -28,7 +28,7 @@ type SubscriptionExecutionFingerprintInput = {
   readonly binaryVersion: string;
   readonly executionProfileId: string;
   readonly systemdUnitDigest: string;
-  readonly sandboxPolicyDigest: string;
+  readonly securityProfileDigest: string;
   readonly authHomeIdentity: string;
   readonly authGeneration: number;
   readonly settingsRevision: number;
@@ -48,7 +48,14 @@ export type ProviderExecutionFingerprintInput =
 export function providerExecutionFingerprint(
   input: ProviderExecutionFingerprintInput
 ): string {
-  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const canonical = input.kind === 'subscription_command'
+    ? {
+      ...input,
+      sandboxPolicyDigest: input.securityProfileDigest,
+      securityProfileDigest: undefined
+    }
+    : input;
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
 

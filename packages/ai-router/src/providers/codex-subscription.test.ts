@@ -37,7 +37,7 @@ const profile: CodexExecutionProfile = {
     profileId: 'codex-subscription-v1',
     unitTemplate: 'amazon-research-codex@.service',
     invocationRoot: '/run/amazon-research/subscription/codex',
-    policyDigest: '7b0782727c8faf441f813e8d8a1263074394cc8cb06a55cbc7d3a9783475b18d'
+    policyDigest: 'd670bbd85f35e20dda56fb8f51abb5e55fb9d16e902e9c12f6b73f2253ea2fbe'
   }
 };
 

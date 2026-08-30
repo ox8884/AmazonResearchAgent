@@ -308,6 +308,7 @@ export type Database = {
           id: string
           provider_id: string
           security_profile_version: string
+          security_profile_digest: string | null
           settings_revision: number
         }
         Insert: {
@@ -320,6 +321,7 @@ export type Database = {
           id?: string
           provider_id: string
           security_profile_version: string
+          security_profile_digest?: string | null
           settings_revision: number
         }
         Update: {
@@ -332,6 +334,7 @@ export type Database = {
           id?: string
           provider_id?: string
           security_profile_version?: string
+          security_profile_digest?: string | null
           settings_revision?: number
         }
         Relationships: [
@@ -364,6 +367,7 @@ export type Database = {
           reason: string | null
           retry_not_before: string | null
           security_profile_version: string
+          security_profile_digest: string | null
           settings_revision: number
           state: string
           terms_digest: string | null
@@ -389,6 +393,7 @@ export type Database = {
           reason?: string | null
           retry_not_before?: string | null
           security_profile_version: string
+          security_profile_digest?: string | null
           settings_revision: number
           state?: string
           terms_digest?: string | null
@@ -414,6 +419,7 @@ export type Database = {
           reason?: string | null
           retry_not_before?: string | null
           security_profile_version?: string
+          security_profile_digest?: string | null
           settings_revision?: number
           state?: string
           terms_digest?: string | null
@@ -2135,6 +2141,7 @@ export type Database = {
           provider_id: string
           readiness_policy_version: string
           security_profile_version: string
+          security_profile_digest: string
           terms_digest: string
         }
         Returns: Json
@@ -2150,6 +2157,7 @@ export type Database = {
           expected_execution_fingerprint: string
           expected_probe_generation: number
           expected_settings_revision: number
+          security_profile_digest: string
           framing_digest: string
           model_id: string
           provider_id: string

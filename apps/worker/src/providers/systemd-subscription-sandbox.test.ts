@@ -12,7 +12,7 @@ import type {
 } from './systemd-subscription-sandbox';
 import { SystemdSubscriptionSandbox } from './systemd-subscription-sandbox';
 import { subscriptionSystemctlArguments } from './systemd-subscription-controller';
-import { loadSubscriptionSandboxPolicy } from './subscription-sandbox-policy';
+import { loadSubscriptionSandboxArtifacts } from './subscription-sandbox-policy';
 
 const roots: string[] = [];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -537,13 +537,13 @@ describe('subscription sandbox host policy', () => {
 
   it('binds immutable host artifacts into adapter policy digests', async () => {
     const [codex, codexAgain, grok] = await Promise.all([
-      loadSubscriptionSandboxPolicy(repositoryRoot, 'codex'),
-      loadSubscriptionSandboxPolicy(repositoryRoot, 'codex'),
-      loadSubscriptionSandboxPolicy(repositoryRoot, 'grok')
+      loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex'),
+      loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex'),
+      loadSubscriptionSandboxArtifacts(repositoryRoot, 'grok')
     ]);
-    expect(codex.digest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(codexAgain.digest).toBe(codex.digest);
-    expect(grok.digest).not.toBe(codex.digest);
+    expect(codex.artifactDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(codexAgain.artifactDigest).toBe(codex.artifactDigest);
+    expect(grok.artifactDigest).not.toBe(codex.artifactDigest);
     expect(codex.artifacts.map((artifact) => artifact.path)).toContain(
       'ops/systemd/amazon-research-codex@.service'
     );
@@ -552,7 +552,7 @@ describe('subscription sandbox host policy', () => {
   it.each(['codex', 'grok'] as const)(
     'enforces fixed %s unit isolation',
     async (adapter) => {
-      const policy = await loadSubscriptionSandboxPolicy(repositoryRoot, adapter);
+      const policy = await loadSubscriptionSandboxArtifacts(repositoryRoot, adapter);
       const unitArtifact = policy.artifacts.find(
         (artifact) => artifact.path.endsWith(`${adapter}@.service`)
       );
@@ -582,7 +582,7 @@ describe('subscription sandbox host policy', () => {
   );
 
   it('enforces cross-adapter polkit and IPv4 IPv6 nftables rejection', async () => {
-    const policy = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex');
+    const policy = await loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex');
     const polkit = policy.artifacts.find((artifact) => artifact.path.includes('/polkit/'))?.content ?? '';
     const nftables = policy.artifacts.find((artifact) => artifact.path.includes('/nftables/'))?.content ?? '';
     expect(polkit).toContain("subject.user !== 'amazon-research'");
@@ -596,7 +596,7 @@ describe('subscription sandbox host policy', () => {
   });
 
   it('keeps lifecycle helper bounded and root GC liveness aware', async () => {
-    const policy = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex');
+    const policy = await loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex');
     const helper = policy.artifacts.find((artifact) => artifact.path.endsWith('manage-invocation.sh'))?.content ?? '';
     const gc = policy.artifacts.find((artifact) => artifact.path.endsWith('-gc.service'))?.content ?? '';
     expect(helper).toContain("install -d -o amazon-research -g \"$GROUP\" -m 2770");

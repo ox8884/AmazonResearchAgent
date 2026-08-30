@@ -37,6 +37,7 @@ function inspector(overrides: Partial<ProviderProbeInspector> = {}): ProviderPro
   return {
     async inspect() {
       return {
+        securityProfileDigest: '0'.repeat(64),
         termsDigest: '1'.repeat(64),
         credentialSourceDigest: '2'.repeat(64),
         binaryIdentityDigest: '3'.repeat(64),
@@ -80,6 +81,7 @@ describe('subscription readiness orchestration', () => {
       ...bindings,
       adapter: 'codex',
       modelId: 'gpt-5.6',
+      securityProfileDigest: '0'.repeat(64),
       containmentDigest: expect.stringMatching(/^[0-9a-f]{64}$/u)
     }));
   });
@@ -140,6 +142,7 @@ describe('subscription readiness orchestration', () => {
       ...bindings,
       modelId: 'gpt-5.6',
       expectedProbeGeneration: 9,
+      securityProfileDigest: '0'.repeat(64),
       termsDigest: '1'.repeat(64),
       credentialSourceDigest: '2'.repeat(64),
       binaryIdentityDigest: '3'.repeat(64),
@@ -193,6 +196,7 @@ describe('subscription readiness orchestration', () => {
       inspector: inspector({
         async inspect() {
           return {
+            securityProfileDigest: '0'.repeat(64),
             termsDigest: 'not-a-digest',
             credentialSourceDigest: '2'.repeat(64),
             binaryIdentityDigest: '3'.repeat(64),

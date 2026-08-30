@@ -22,7 +22,7 @@ export const GROK_SUBSCRIPTION_IDENTITY = Object.freeze({
   authHomePath: '/var/lib/amazon-research/subscription/grok',
   invocationRoot: '/run/amazon-research/subscription/grok',
   unitTemplate: 'amazon-research-grok@.service' as const,
-  policyDigest: 'ef953f76994eb6ce44481b106097dca3962612244d1e9410326ee6061f0a3e2c',
+  policyDigest: '6e8af952452830aff30cc6bfd0af9d8b89ab5eff8f23b8c67ee57fa223b72b90',
   acceptedModelId: null,
   acceptedBinaryVersion: null,
   acceptedBinarySha256: null

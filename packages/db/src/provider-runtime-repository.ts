@@ -36,6 +36,7 @@ export type AcceptanceProbeInput = RuntimeBindings & {
   readonly modelId: string;
   readonly adapter: SubscriptionAdapter;
   readonly securityProfileVersion: string;
+  readonly securityProfileDigest: string;
   readonly readinessPolicyVersion: string;
   readonly termsDigest: string;
   readonly credentialSourceDigest: string;
@@ -50,6 +51,7 @@ export type AcceptanceProbeInput = RuntimeBindings & {
 export type ReadinessProbeInput = RuntimeBindings & {
   readonly modelId: string;
   readonly expectedProbeGeneration: number;
+  readonly securityProfileDigest: string;
   readonly termsDigest: string;
   readonly credentialSourceDigest: string;
   readonly binaryIdentityDigest: string;
@@ -148,6 +150,7 @@ export function createProviderRuntimeRepository(
         model_id: input.modelId,
         adapter: input.adapter,
         security_profile_version: input.securityProfileVersion,
+        security_profile_digest: input.securityProfileDigest,
         readiness_policy_version: input.readinessPolicyVersion,
         terms_digest: input.termsDigest,
         credential_source_digest: input.credentialSourceDigest,
@@ -188,6 +191,7 @@ export function createProviderRuntimeRepository(
         ...bindings(input),
         model_id: input.modelId,
         expected_probe_generation: input.expectedProbeGeneration,
+        security_profile_digest: input.securityProfileDigest,
         terms_digest: input.termsDigest,
         credential_source_digest: input.credentialSourceDigest,
         binary_identity_digest: input.binaryIdentityDigest,

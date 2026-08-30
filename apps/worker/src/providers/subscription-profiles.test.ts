@@ -11,10 +11,69 @@ import {
   createGrokExecutionProfile,
   inspectSubscriptionBinary
 } from './subscription-profiles';
-import { loadSubscriptionSandboxPolicy } from './subscription-sandbox-policy';
+import {
+  loadSubscriptionSandboxArtifacts,
+  loadSubscriptionSandboxPolicy,
+  type HostSecurityProfileEvidence
+} from './subscription-sandbox-policy';
 
 const roots: string[] = [];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+function hostEvidence(
+  overrides: Partial<HostSecurityProfileEvidence> = {}
+): HostSecurityProfileEvidence {
+  return {
+    schemaVersion: 1,
+    adapter: 'codex',
+    installedArtifacts: [{
+      path: '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
+      ownerUid: 0,
+      ownerGid: 0,
+      mode: 0o500,
+      sha256: '1'.repeat(64)
+    }],
+    identity: {
+      adapterUid: 501,
+      adapterGid: 501,
+      ipcGid: 601,
+      ipcMembers: ['amazon-research', 'ara-codex'],
+      workerUid: 500
+    },
+    authHome: {
+      adapter: 'codex',
+      path: '/var/lib/amazon-research/subscription/codex',
+      ownerUid: 501,
+      ownerGid: 501,
+      mode: 0o700
+    },
+    executable: {
+      path: '/usr/local/libexec/amazon-research/codex-subscription-client',
+      ownerUid: 501,
+      ownerGid: 501,
+      mode: 0o500,
+      version: '1.0.0',
+      sha256: '2'.repeat(64),
+      profileId: 'codex-subscription-v1',
+      modelId: 'gpt-5.6'
+    },
+    hostCapabilities: {
+      systemdVersion: '255',
+      unifiedCgroupV2: true,
+      polkitProfile: 'subscription-polkit-v1',
+      nftablesProfile: 'subscription-nftables-v1',
+      containmentProfile: 'subscription-containment-v1'
+    },
+    network: {
+      schemaVersion: 1,
+      acceptedHostnames: ['api.example.com'],
+      resolverAddresses: ['1.1.1.1'],
+      ipv4Prefixes: ['203.0.113.0/24'],
+      ipv6Prefixes: ['2001:db8::/32']
+    },
+    ...overrides
+  };
+}
 
 async function binaryFixture(): Promise<string> {
   const root = join(tmpdir(), `ara-codex-binary-${randomUUID()}`);
@@ -46,8 +105,8 @@ describe('Codex subscription execution profile', () => {
 
   // Break: profile digest no longer identifies the committed Task-5 artifacts.
   it('pins the current Codex sandbox artifact digest', async () => {
-    const policy = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex');
-    expect(policy.digest).toBe(CODEX_SUBSCRIPTION_MANIFEST.policyDigest);
+    const policy = await loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex');
+    expect(policy.artifactDigest).toBe(CODEX_SUBSCRIPTION_MANIFEST.policyDigest);
   });
 
   // Break: binary identity checks accept wrong owner mode version or digest.
@@ -162,10 +221,57 @@ describe('Grok subscription execution profile', () => {
   // Break: Grok silently reuses the Codex sandbox policy attestation.
   it('pins a distinct Grok sandbox artifact digest', async () => {
     const [codex, grok] = await Promise.all([
-      loadSubscriptionSandboxPolicy(repositoryRoot, 'codex'),
-      loadSubscriptionSandboxPolicy(repositoryRoot, 'grok')
+      loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex'),
+      loadSubscriptionSandboxArtifacts(repositoryRoot, 'grok')
     ]);
-    expect(grok.digest).toBe(GROK_SUBSCRIPTION_MANIFEST.policyDigest);
-    expect(grok.digest).not.toBe(codex.digest);
+    expect(grok.artifactDigest).toBe(GROK_SUBSCRIPTION_MANIFEST.policyDigest);
+    expect(grok.artifactDigest).not.toBe(codex.artifactDigest);
+  });
+});
+
+describe('host security profile evidence', () => {
+  // Break: material installed, identity, auth, executable, capability, or network drift keeps one digest.
+  it('changes the policy digest for every material host-profile drift', async () => {
+    const base = hostEvidence();
+    const [installedArtifact] = base.installedArtifacts;
+    if (installedArtifact === undefined) throw new Error('Host evidence fixture requires one artifact.');
+    const accepted = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', base);
+    const variants = [
+      hostEvidence({ installedArtifacts: [{ ...installedArtifact, mode: 0o700 }] }),
+      hostEvidence({ installedArtifacts: [{ ...installedArtifact, ownerUid: 9 }] }),
+      hostEvidence({ identity: { ...base.identity, ipcMembers: ['ara-codex'] } }),
+      hostEvidence({ authHome: { ...base.authHome, mode: 0o750 } }),
+      hostEvidence({ executable: { ...base.executable, sha256: '3'.repeat(64) } }),
+      hostEvidence({ hostCapabilities: { ...base.hostCapabilities, unifiedCgroupV2: false } }),
+      hostEvidence({ network: { ...base.network, acceptedHostnames: ['other.example.com'] } }),
+      hostEvidence({ network: { ...base.network, resolverAddresses: ['8.8.8.8'] } }),
+      hostEvidence({ network: { ...base.network, ipv4Prefixes: ['198.51.100.0/24'] } }),
+      hostEvidence({ network: { ...base.network, ipv6Prefixes: ['2001:db8:1::/48'] } })
+    ];
+    for (const variant of variants) {
+      const changed = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', variant);
+      expect(changed.securityProfileDigest).not.toBe(accepted.securityProfileDigest);
+    }
+  });
+
+  // Break: ordering-only differences produce different canonical policy identities.
+  it('canonicalizes equivalent sorted host profiles to one digest', async () => {
+    const base = hostEvidence({
+      network: {
+        ...hostEvidence().network,
+        acceptedHostnames: ['b.example.com', 'a.example.com'],
+        resolverAddresses: ['8.8.8.8', '1.1.1.1']
+      }
+    });
+    const reordered = hostEvidence({
+      network: {
+        ...base.network,
+        acceptedHostnames: [...base.network.acceptedHostnames].reverse(),
+        resolverAddresses: [...base.network.resolverAddresses].reverse()
+      }
+    });
+    const first = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', base);
+    const second = await loadSubscriptionSandboxPolicy(repositoryRoot, 'codex', reordered);
+    expect(second.securityProfileDigest).toBe(first.securityProfileDigest);
   });
 });
