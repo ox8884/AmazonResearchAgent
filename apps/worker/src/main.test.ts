@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from '@ara/queue';
 import {
+  assertSubscriptionWorkerTopology,
+  createWorkerComposition,
   redactSecrets,
   retryDelayMilliseconds,
   runJob,
@@ -201,6 +203,26 @@ describe('worker job execution', () => {
   it('redacts supported secret formats', () => {
     expect(redactSecrets('Bearer abc sk-secret sb_secret_value')).toBe(
       'Bearer [REDACTED] [REDACTED] [REDACTED]'
+    );
+  });
+
+  // Break: subscription execution starts with multiple worker processes and only local permits.
+  it('rejects multi-process subscription topology without distributed coordination', () => {
+    expect(() => assertSubscriptionWorkerTopology({
+      workerProcessCount: 2,
+      distributedCoordination: false
+    })).toThrow(/one worker process/u);
+    expect(() => assertSubscriptionWorkerTopology({
+      workerProcessCount: 2,
+      distributedCoordination: true
+    })).not.toThrow();
+  });
+
+  // Break: each handler construction receives a different adapter registry.
+  it('constructs one adapter semaphore registry for the worker composition', () => {
+    const composition = createWorkerComposition();
+    expect(composition.adapterSemaphores).toBe(
+      composition.handlerOptions.adapterSemaphores
     );
   });
 });

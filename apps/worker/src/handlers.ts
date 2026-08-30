@@ -14,7 +14,8 @@ import {
   MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
-  TestAiProviderConnectionJobPayloadSchema
+  TestAiProviderConnectionJobPayloadSchema,
+  type SubscriptionAdapter
 } from '@ara/shared';
 
 import { createQueue, type Job, type JobType, type QueueDatabaseClient } from '@ara/queue';
@@ -27,7 +28,10 @@ import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe'
 import { runDeepValidation } from './jobs/deep-validation';
 import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
 import { runSendDigest } from './jobs/send-digest';
-import { runNormalizeJob } from './jobs/normalize-opportunities';
+import {
+  runNormalizeJob,
+  type NormalizeJobResult
+} from './jobs/normalize-opportunities';
 import { runDailyResearch } from './jobs/daily-research';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
@@ -41,6 +45,7 @@ import {
 } from './jungle-scout-runtime';
 import type { ApiBudget } from '@ara/api-budget';
 import type { KeywordMetrics, ProductDatabaseQueryResult } from '@ara/jungle-scout';
+import type { AdapterSemaphoreRegistry } from './providers/adapter-semaphore';
 
 
 
@@ -98,6 +103,10 @@ export interface JobHandlerOptions {
   readonly normalizationProvider?: AiProvider;
   readonly normalizationCatalog?: ProviderCatalog;
   readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
+  readonly adapterSemaphores?: AdapterSemaphoreRegistry;
+  readonly resolveSubscriptionAdapter?: (
+    provider: AiProvider
+  ) => SubscriptionAdapter | undefined;
   readonly apiBudget?: ApiBudget;
   readonly queryProductDatabase?: (
     phrases: readonly string[]
@@ -217,17 +226,32 @@ export function createJobHandlers(
       }
 
       throwIfAborted(context.signal);
-      const result = await runNormalizeJob(
-        { candidateIds: payload.candidateIds, locale: payload.locale },
-        {
-          client,
-          provider,
-          modelId,
-          workerId: `normalization:${job.id}`,
-          promptVersion: payload.promptVersion,
-          onCheckpoint: (value) => context.saveCheckpoint(value)
+      const adapter = options.resolveSubscriptionAdapter?.(provider);
+      const run = async (): Promise<NormalizeJobResult> =>
+        runNormalizeJob(
+          { candidateIds: payload.candidateIds, locale: payload.locale },
+          {
+            client,
+            provider,
+            modelId,
+            workerId: `normalization:${job.id}`,
+            promptVersion: payload.promptVersion,
+            onCheckpoint: (value) => context.saveCheckpoint(value)
+          }
+        );
+      let result: NormalizeJobResult;
+      if (adapter === undefined) {
+        result = await run();
+      } else {
+        if (options.adapterSemaphores === undefined) {
+          throw new Error('Subscription adapter semaphore registry is required.');
         }
-      );
+        result = await options.adapterSemaphores.withPermit(
+          adapter,
+          context.signal,
+          run
+        );
+      }
       if (result.deferredCount > 0) {
         throw new DeferredAiCapacityError();
       }

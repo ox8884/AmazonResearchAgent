@@ -16,6 +16,10 @@ import {
   ProviderCatalogCache,
   resolvePersistedProviderCatalog
 } from './providers/provider-catalog';
+import { AdapterSemaphoreRegistry } from './providers/adapter-semaphore';
+import type { JobHandlerOptions } from './handlers';
+const WORKER_PROCESS_COUNT = 1;
+const DISTRIBUTED_ADAPTER_COORDINATION = false;
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
 
 export interface WorkerQueue {
@@ -222,6 +226,47 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
+export interface SubscriptionWorkerTopology {
+  readonly workerProcessCount: number;
+  readonly distributedCoordination: boolean;
+}
+
+export function assertSubscriptionWorkerTopology(
+  topology: SubscriptionWorkerTopology
+): void {
+  if (
+    !Number.isInteger(topology.workerProcessCount) ||
+    topology.workerProcessCount < 1
+  ) {
+    throw new RangeError('Worker process count must be a positive integer.');
+  }
+  if (
+    topology.workerProcessCount > 1 &&
+    !topology.distributedCoordination
+  ) {
+    throw new Error(
+      'Subscription execution requires one worker process without distributed coordination.'
+    );
+  }
+}
+
+export interface WorkerComposition {
+  readonly adapterSemaphores: AdapterSemaphoreRegistry;
+  readonly handlerOptions: JobHandlerOptions;
+}
+
+export function createWorkerComposition(): WorkerComposition {
+  assertSubscriptionWorkerTopology({
+    workerProcessCount: WORKER_PROCESS_COUNT,
+    distributedCoordination: DISTRIBUTED_ADAPTER_COORDINATION
+  });
+  const adapterSemaphores = new AdapterSemaphoreRegistry();
+  return {
+    adapterSemaphores,
+    handlerOptions: { adapterSemaphores }
+  };
+}
+
 export async function main(): Promise<void> {
   const client = createServerDatabaseClient({
     url: requiredEnvironment('SUPABASE_URL'),
@@ -230,6 +275,7 @@ export async function main(): Promise<void> {
   const providerCatalog = new ProviderCatalogCache(() =>
     resolvePersistedProviderCatalog(client)
   );
+  const composition = createWorkerComposition();
   const queue = createQueue(client);
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -240,6 +286,7 @@ export async function main(): Promise<void> {
     await runWorkerLoop({
       queue,
       handlers: createJobHandlers(client, {
+        ...composition.handlerOptions,
         resolveProviderCatalog: (forceRefresh) =>
           providerCatalog.resolve(forceRefresh)
       }),
