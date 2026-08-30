@@ -35,18 +35,30 @@ describe('provider connection test route', () => {
     fixtures.enqueueJob.mockResolvedValue('job-123');
   });
 
-  // Break: Vercel executes browser-supplied URLs or commands instead of enqueueing a provider ID.
-  it('strips execution fields and enqueues only the saved provider identifier', async () => {
+  // Break: browser-supplied execution or activation fields survive request parsing.
+  it('rejects implementation details instead of stripping them', async () => {
     const response = await POST(
       new Request('https://app.example.test/api/ai-providers/test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           providerId: 'provider-safe',
-          baseUrl: 'http://169.254.169.254/latest',
-          executable: 'powershell.exe',
-          fixedArgs: ['-Command', 'Get-ChildItem Env:']
+          executable: 'powershell.exe'
         })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(fixtures.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // Break: Test starts provider work in the web process instead of queueing DB-owned probe logic.
+  it('enqueues only the saved provider identifier for worker-owned probe semantics', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ providerId: 'provider-safe' })
       })
     );
 

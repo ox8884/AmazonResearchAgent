@@ -1,5 +1,23 @@
 import type { Locale } from './domain';
 
+export const AI_PROVIDER_PRODUCT_OPTIONS = [
+  { value: 'codex_subscription', label: 'OpenAI Codex Subscription' },
+  { value: 'grok_subscription', label: 'Grok Subscription' },
+  { value: 'openai_compatible_api', label: 'OpenAI-Compatible API' }
+] as const;
+
+export type AiProviderProduct = typeof AI_PROVIDER_PRODUCT_OPTIONS[number]['value'];
+
+export function aiProviderProductFields(product: AiProviderProduct) {
+  const isHttp = product === 'openai_compatible_api';
+  return {
+    httpCredentials: isHttp,
+    modelConfiguration: isHttp,
+    roleSelection: isHttp,
+    activation: isHttp
+  } as const;
+}
+
 export const DEFAULT_LOCALE: Locale = 'ko';
 
 export type CopyKey =
@@ -63,6 +81,7 @@ export type CopyKey =
   | 'providerName'
   | 'billingType'
   | 'providerKind'
+  | 'providerProduct'
   | 'baseUrl'
   | 'apiKey'
   | 'modelId'
@@ -72,6 +91,19 @@ export type CopyKey =
   | 'commandProfile'
   | 'saveProvider'
   | 'testConnection'
+  | 'disableProvider'
+  | 'subscriptionLabel'
+  | 'subscriptionRole'
+  | 'subscriptionModel'
+  | 'subscriptionStatus'
+  | 'lastProbe'
+  | 'setupRequired'
+  | 'authorizationExpired'
+  | 'probePending'
+  | 'temporarilyUnavailable'
+  | 'providerDisabled'
+  | 'operatorAuthorizationGuidance'
+  | 'httpTestCostWarning'
   | 'providerSaved'
   | 'secretStored'
   | 'connectionReady'
@@ -172,10 +204,11 @@ export const COPY = {
     uploadInvalidFile: '비어 있지 않은 CSV 파일만 선택할 수 있습니다.',
     navAiSettings: 'AI 설정',
     aiSettingsTitle: 'AI Provider 설정',
-    aiSettingsDescription: 'AI provider를 추가하고 역할별 실행 경로를 관리합니다.',
-    providerName: 'Provider name',
-    billingType: 'Billing type',
-    providerKind: 'Provider kind',
+    aiSettingsDescription: '구독 Provider와 OpenAI-compatible API를 제품 단위로 안전하게 관리합니다.',
+    providerName: 'Provider 이름',
+    billingType: '결제 방식',
+    providerKind: 'Provider 종류',
+    providerProduct: 'AI 제품',
     baseUrl: 'Base URL',
     apiKey: 'API Key',
     modelId: 'Model ID',
@@ -185,6 +218,19 @@ export const COPY = {
     commandProfile: 'Command profile',
     saveProvider: '저장',
     testConnection: '연결 테스트',
+    disableProvider: '비활성화',
+    subscriptionLabel: 'Subscription',
+    subscriptionRole: '고정 역할',
+    subscriptionModel: '모델',
+    subscriptionStatus: '권한 상태',
+    lastProbe: '마지막 상태 확인',
+    setupRequired: '설정 필요',
+    authorizationExpired: '재인증 필요',
+    probePending: '상태 확인 대기',
+    temporarilyUnavailable: '일시적으로 사용할 수 없음',
+    providerDisabled: '비활성화됨',
+    operatorAuthorizationGuidance: '운영 서버에서 승인된 절차로 인증 또는 재인증하세요. 브라우저에서는 계정 인증이나 활성화를 수행하지 않습니다.',
+    httpTestCostWarning: '연결 테스트는 실제 completion을 실행할 수 있으며 API quota 또는 비용을 사용할 수 있습니다.',
     providerSaved: 'Provider 설정을 저장했습니다.',
     secretStored: '저장된 key',
     connectionReady: 'Provider 연결 가능',
@@ -282,10 +328,11 @@ export const COPY = {
     uploadInvalidFile: 'Choose non-empty CSV files only.',
     navAiSettings: 'AI settings',
     aiSettingsTitle: 'AI provider settings',
-    aiSettingsDescription: 'Add providers and manage role-specific execution routes.',
+    aiSettingsDescription: 'Manage subscription providers and OpenAI-compatible APIs as product choices.',
     providerName: 'Provider name',
     billingType: 'Billing type',
     providerKind: 'Provider kind',
+    providerProduct: 'AI product',
     baseUrl: 'Base URL',
     apiKey: 'API Key',
     modelId: 'Model ID',
@@ -295,6 +342,19 @@ export const COPY = {
     commandProfile: 'Command profile',
     saveProvider: 'Save',
     testConnection: 'Test connection',
+    disableProvider: 'Disable',
+    subscriptionLabel: 'Subscription',
+    subscriptionRole: 'Fixed role',
+    subscriptionModel: 'Model',
+    subscriptionStatus: 'Authorization status',
+    lastProbe: 'Last health check',
+    setupRequired: 'Setup Required',
+    authorizationExpired: 'Reauthorization Required',
+    probePending: 'Probe Pending',
+    temporarilyUnavailable: 'Temporarily Unavailable',
+    providerDisabled: 'Disabled',
+    operatorAuthorizationGuidance: 'Authorize or reauthorize through the approved operator procedure on the worker host. The browser never authenticates accounts or activates subscription access.',
+    httpTestCostWarning: 'Test Connection can issue a real completion and consume API quota or cost.',
     providerSaved: 'Provider settings saved.',
     secretStored: 'Stored key',
     connectionReady: 'Provider available',
