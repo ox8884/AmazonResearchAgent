@@ -26,6 +26,7 @@ class FakeTransport implements SubscriptionProcessTransport<
 > {
   readonly isolation = 'systemd-subscription-sandbox-v1' as const;
   calls = 0;
+  readonly attemptIds: string[] = [];
 
   constructor(
     private readonly result: SubscriptionResultEnvelope,
@@ -38,6 +39,7 @@ class FakeTransport implements SubscriptionProcessTransport<
     signal: AbortSignal
   ): Promise<SubscriptionResultEnvelope> {
     this.calls += 1;
+    this.attemptIds.push(invocation.attemptId);
     signal.throwIfAborted();
     return this.preserveAttemptId
       ? this.result
@@ -58,6 +60,7 @@ function result(overrides: Partial<SubscriptionResultEnvelope> = {}): Subscripti
 }
 
 const request = {
+  attemptId: '00000000-0000-4000-8000-000000000401',
   role: 'niche_normalization' as const,
   modelId: 'grok-fixture-model',
   locale: 'en' as const,
@@ -88,7 +91,7 @@ describe('GrokSubscriptionAdapter', () => {
       profile,
       transport: new FakeTransport(result())
     });
-    await expect(adapter.runRaw(request)).resolves.toMatchObject({
+    await expect(adapter.runAuthorizedRaw(request)).resolves.toMatchObject({
       providerId: 'grok-subscription-v1',
       modelId: 'grok-fixture-model',
       rawOutput: { classification: 'product_niche', confidence: 0.8 },
@@ -98,9 +101,24 @@ describe('GrokSubscriptionAdapter', () => {
       profile,
       transport: new FakeTransport(result(), true)
     });
-    await expect(mismatched.runRaw(request)).rejects.toMatchObject({
+    await expect(mismatched.runAuthorizedRaw(request)).rejects.toMatchObject({
       failureClass: 'unsafe_unknown'
     });
+  });
+
+  // Break: Grok execution replaces the DB-authorized identity with an adapter UUID.
+  it('uses the caller-authorized attempt UUID as the exact transport identity', async () => {
+    const attemptId = '00000000-0000-4000-8000-000000000456';
+    const transport = new FakeTransport(result());
+    const adapter = new GrokSubscriptionAdapter({
+      profile: createGrokSubscriptionFixtureProfile('grok-fixture-model'),
+      transport
+    });
+    await expect(adapter.runAuthorizedRaw({
+      ...request,
+      attemptId
+    })).resolves.toMatchObject({ providerId: 'grok-subscription-v1' });
+    expect(transport.attemptIds).toEqual([attemptId]);
   });
 
   // Break: Grok framing accepts arrays, trailing prose, or multiple JSON values.
@@ -144,8 +162,20 @@ describe('GrokSubscriptionAdapter', () => {
       profile: createGrokSubscriptionFixtureProfile('grok-fixture-model'),
       transport: new FakeTransport(result())
     });
-    await expect(adapter.runRaw(request, controller.signal)).rejects.toMatchObject({
+    await expect(adapter.runAuthorizedRaw(request, controller.signal)).rejects.toMatchObject({
       failureClass
     });
+  });
+  it('rejects a malformed authorized attempt UUID before transport', async () => {
+    const transport = new FakeTransport(result());
+    const adapter = new GrokSubscriptionAdapter({
+      profile: createGrokSubscriptionFixtureProfile('grok-fixture-model'),
+      transport
+    });
+    await expect(adapter.runAuthorizedRaw({
+      ...request,
+      attemptId: 'not-an-attempt-uuid'
+    })).rejects.toBeDefined();
+    expect(transport.calls).toBe(0);
   });
 });

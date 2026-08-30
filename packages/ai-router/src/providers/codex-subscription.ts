@@ -1,13 +1,14 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AiUsageSchema, type AiModelDescriptor } from '@ara/shared';
 import {
   type ProviderHealth,
-  type RawAiProvider,
-  type RawAiProviderResult,
-  type RawStructuredAiRequest
+  type RawAiProviderResult
 } from '../provider';
-import type { SubscriptionResultEnvelope } from './subscription-process';
+import {
+  AuthorizedSubscriptionAttemptIdSchema,
+  type AuthorizedSubscriptionRawRequest,
+  type SubscriptionResultEnvelope
+} from './subscription-process';
 import {
   CODEX_SUBSCRIPTION_IDENTITY,
   CodexSubscriptionError,
@@ -95,7 +96,7 @@ export function parseCodexNormalizationOutput(rawOutput: string): Record<string,
   return result.data;
 }
 
-export class CodexSubscriptionAdapter implements RawAiProvider {
+export class CodexSubscriptionAdapter {
   readonly id: string;
   readonly billingType = 'subscription' as const;
   readonly profile: CodexExecutionProfile;
@@ -138,8 +139,8 @@ export class CodexSubscriptionAdapter implements RawAiProvider {
     }];
   }
 
-  async runRaw(
-    request: RawStructuredAiRequest,
+  async runAuthorizedRaw(
+    request: AuthorizedSubscriptionRawRequest,
     signal: AbortSignal = new AbortController().signal
   ): Promise<RawAiProviderResult> {
     if (
@@ -153,7 +154,7 @@ export class CodexSubscriptionAdapter implements RawAiProvider {
         false
       );
     }
-    const attemptId = randomUUID();
+    const attemptId = AuthorizedSubscriptionAttemptIdSchema.parse(request.attemptId);
     const startedAt = new Date().toISOString();
     let result: SubscriptionResultEnvelope;
     try {

@@ -56,6 +56,7 @@ class FakeTransport implements SubscriptionProcessTransport<
   readonly isolation = 'systemd-subscription-sandbox-v1' as const;
   calls = 0;
 
+  readonly attemptIds: string[] = [];
   constructor(
     private readonly result: SubscriptionResultEnvelope,
     private readonly preserveAttemptId = false
@@ -66,6 +67,7 @@ class FakeTransport implements SubscriptionProcessTransport<
     invocation: { readonly attemptId: string },
     signal: AbortSignal
   ): Promise<SubscriptionResultEnvelope> {
+    this.attemptIds.push(invocation.attemptId);
     this.calls += 1;
     signal.throwIfAborted();
     return this.preserveAttemptId
@@ -106,7 +108,8 @@ describe('CodexSubscriptionAdapter', () => {
   it('fails closed until the exact profile is activated', async () => {
     const transport = new FakeTransport(result());
     const adapter = new CodexSubscriptionAdapter({ profile, transport });
-    await expect(adapter.runRaw({
+    await expect(adapter.runAuthorizedRaw({
+      attemptId: '00000000-0000-4000-8000-000000000101',
       role: 'niche_normalization',
       modelId: 'gpt-5.6',
       locale: 'en',
@@ -122,6 +125,7 @@ describe('CodexSubscriptionAdapter', () => {
   it('executes the enabled fixed profile and rejects an attempt-id mismatch', async () => {
     const enabledProfile = { ...profile, activation: 'enabled' as const };
     const request = {
+      attemptId: '00000000-0000-4000-8000-000000000102',
       role: 'niche_normalization' as const,
       modelId: 'gpt-5.6',
       locale: 'en' as const,
@@ -132,7 +136,7 @@ describe('CodexSubscriptionAdapter', () => {
     };
     const transport = new FakeTransport(result());
     const adapter = new CodexSubscriptionAdapter({ profile: enabledProfile, transport });
-    await expect(adapter.runRaw(request)).resolves.toMatchObject({
+    await expect(adapter.runAuthorizedRaw(request)).resolves.toMatchObject({
       providerId: 'codex-subscription-v1',
       modelId: 'gpt-5.6',
       rawOutput: { classification: 'product_niche', confidence: 0.9 },
@@ -142,9 +146,30 @@ describe('CodexSubscriptionAdapter', () => {
       profile: enabledProfile,
       transport: new FakeTransport(result(), true)
     });
-    await expect(mismatched.runRaw(request)).rejects.toMatchObject({
+    await expect(mismatched.runAuthorizedRaw(request)).rejects.toMatchObject({
       failureClass: 'unsafe_unknown'
     });
+  });
+
+  // Break: subscription execution invents a second UUID after durable authorization.
+  it('uses the caller-authorized attempt UUID as the exact transport identity', async () => {
+    const attemptId = '00000000-0000-4000-8000-000000000123';
+    const transport = new FakeTransport(result());
+    const adapter = new CodexSubscriptionAdapter({
+      profile: { ...profile, activation: 'enabled' },
+      transport
+    });
+    await expect(adapter.runAuthorizedRaw({
+      attemptId,
+      role: 'niche_normalization',
+      modelId: 'gpt-5.6',
+      locale: 'en',
+      prompt: 'normalize',
+      inputHash: 'a'.repeat(64),
+      schema: {},
+      isRepair: false
+    })).resolves.toMatchObject({ providerId: 'codex-subscription-v1' });
+    expect(transport.attemptIds).toEqual([attemptId]);
   });
 
   // Break: runRaw drops cancellation or timeout before the sandbox transport boundary.
@@ -158,7 +183,8 @@ describe('CodexSubscriptionAdapter', () => {
       profile: { ...profile, activation: 'enabled' },
       transport: new FakeTransport(result())
     });
-    await expect(adapter.runRaw({
+    await expect(adapter.runAuthorizedRaw({
+      attemptId: '00000000-0000-4000-8000-000000000103',
       role: 'niche_normalization',
       modelId: 'gpt-5.6',
       locale: 'en',
@@ -168,6 +194,25 @@ describe('CodexSubscriptionAdapter', () => {
       isRepair: false
     }, controller.signal)).rejects.toMatchObject({ failureClass });
   });
+  it('rejects a malformed authorized attempt UUID before transport', async () => {
+    const transport = new FakeTransport(result());
+    const adapter = new CodexSubscriptionAdapter({
+      profile: { ...profile, activation: 'enabled' },
+      transport
+    });
+    await expect(adapter.runAuthorizedRaw({
+      attemptId: 'not-an-attempt-uuid',
+      role: 'niche_normalization',
+      modelId: 'gpt-5.6',
+      locale: 'en',
+      prompt: 'normalize',
+      inputHash: 'a'.repeat(64),
+      schema: {},
+      isRepair: false
+    })).rejects.toBeDefined();
+    expect(transport.calls).toBe(0);
+  });
+
 
   // Break: framing accepts trailing prose or multiple unrelated JSON values.
   it('strictly parses one normalization JSON object without trailing data', () => {

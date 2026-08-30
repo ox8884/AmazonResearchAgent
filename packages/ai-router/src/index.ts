@@ -42,6 +42,7 @@ export {
   writeAtomicIpcJson
 } from './providers/subscription-process';
 export type {
+  AuthorizedSubscriptionRawRequest,
   SubscriptionProcessTransport,
   SubscriptionRequestEnvelope,
   SubscriptionResultEnvelope,

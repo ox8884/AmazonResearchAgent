@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   AiUsageSchema,
@@ -7,14 +6,14 @@ import {
 } from '@ara/shared';
 import type {
   ProviderHealth,
-  RawAiProvider,
-  RawAiProviderResult,
-  RawStructuredAiRequest
+  RawAiProviderResult
 } from '../provider';
 import { SubscriptionSandboxError } from './subscription-errors';
-import type {
-  SubscriptionProcessTransport,
-  SubscriptionResultEnvelope
+import {
+  AuthorizedSubscriptionAttemptIdSchema,
+  type AuthorizedSubscriptionRawRequest,
+  type SubscriptionProcessTransport,
+  type SubscriptionResultEnvelope
 } from './subscription-process';
 
 export const GROK_SUBSCRIPTION_IDENTITY = Object.freeze({
@@ -228,7 +227,7 @@ function validateProfile(profile: GrokExecutionProfile): void {
   }
 }
 
-export class GrokSubscriptionAdapter implements RawAiProvider {
+export class GrokSubscriptionAdapter {
   readonly id: string;
   readonly billingType = 'subscription' as const;
 
@@ -258,12 +257,15 @@ export class GrokSubscriptionAdapter implements RawAiProvider {
     return [{ providerId: this.id, id: this.options.profile.modelId, displayName: this.options.profile.modelId, capabilities: ['structured_json', 'health'], billingType: 'subscription', qualityRank: 100 }];
   }
 
-  async runRaw(request: RawStructuredAiRequest, signal: AbortSignal = new AbortController().signal): Promise<RawAiProviderResult> {
+  async runAuthorizedRaw(
+    request: AuthorizedSubscriptionRawRequest,
+    signal: AbortSignal = new AbortController().signal
+  ): Promise<RawAiProviderResult> {
     const profile = this.options.profile;
     if (profile.activation !== 'enabled' || request.role !== 'niche_normalization' || request.modelId !== profile.modelId) {
       throw new GrokSetupRequiredError();
     }
-    const attemptId = randomUUID();
+    const attemptId = AuthorizedSubscriptionAttemptIdSchema.parse(request.attemptId);
     const startedAt = new Date().toISOString();
     let result: SubscriptionResultEnvelope;
     try {

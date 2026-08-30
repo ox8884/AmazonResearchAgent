@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { RawStructuredAiRequest } from '../provider';
 
 export { SubscriptionIpcError } from './subscription-errors';
 export {
@@ -23,6 +24,11 @@ export const IPC_LIMITS = {
   frame: 256 * 1024,
   aggregateOutput: 2 * 1024 * 1024
 } as const;
+
+export const AuthorizedSubscriptionAttemptIdSchema = z.uuid();
+export type AuthorizedSubscriptionRawRequest = RawStructuredAiRequest & {
+  readonly attemptId: string;
+};
 
 export const SubscriptionRequestEnvelopeSchema = z.object({
   version: z.literal(1),
