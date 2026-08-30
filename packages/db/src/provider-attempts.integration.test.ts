@@ -298,6 +298,7 @@ beforeAll(async () => {
       allowed_mime_types text[]
     );
   `);
+  await sql.unsafe(`alter default privileges in schema public grant all on tables to service_role`);
   const files = (await readdir(migrationsDirectory))
     .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
     .sort();
@@ -1089,6 +1090,177 @@ describe('provider attempt transactions', () => {
       await connection`select set_config('app.subscription_activation', 'on', true)`;
       return connection`update ai_providers set enabled = true where id = ${disabled.providerId}`;
     })).rejects.toThrow(/requires_activation|permission denied/i);
+  });
+
+  // Break: service_role bypasses canonical finalization and writes the immutable ledger directly.
+  it('allows authoritative finalization but denies direct service_role ledger mutations', async () => {
+    const authorized = await seedCandidateAndLeases();
+    const authorizedAttempt = await beginAttempt(authorized);
+    await appendSuccess(authorized, authorizedAttempt.attempt_id);
+    await finalizeAnalysis(authorized, authorizedAttempt.attempt_id);
+    const [finalization] = await asServiceRole((connection) => connection<{
+      result: { kind: string; target_state: string };
+    }[]>`
+      select finalize_normalized_candidate(
+        ${authorized.job.job_id}, ${authorized.job.job_lease_owner},
+        ${authorized.job.job_lease_epoch}, ${authorized.analysis.analysis_id},
+        ${authorized.analysis.analysis_lease_owner},
+        ${authorized.analysis.analysis_lease_epoch}, ${authorized.candidateId},
+        'AI Screening', 0
+      ) as result
+    `);
+    expect(finalization?.result).toMatchObject({
+      kind: 'committed',
+      target_state: 'Ready for API Validation',
+    });
+
+    const direct = await seedCandidateAndLeases();
+    const directAttempt = await beginAttempt(direct);
+    await appendSuccess(direct, directAttempt.attempt_id);
+    await finalizeAnalysis(direct, directAttempt.attempt_id);
+    const [decision] = await sql<{ id: string }[]>`
+      insert into decision_history (
+        candidate_id, from_state, to_state, reasons, decided_by, idempotency_key
+      ) values (
+        ${direct.candidateId}, 'AI Screening', 'Needs Review', '[]'::jsonb,
+        'direct-ledger-attack', ${`direct-ledger-attack:${direct.candidateId}`}
+      ) returning id
+    `;
+    if (!decision) throw new Error('Direct-ledger fixture decision was not created.');
+
+    await expect(asServiceRole((connection) => connection`
+      insert into normalized_candidate_finalizations (
+        candidate_id, normalization_generation, analysis_id, winning_attempt_id,
+        finalized_output_sha256, target_state, decision_id, niche_cluster_id
+      ) select
+        ${direct.candidateId}, 0, id, winning_attempt_id, output_sha256,
+        'Needs Review', ${decision.id}, null
+      from ai_analyses where id = ${direct.analysis.analysis_id}
+    `)).rejects.toThrow(/permission denied/i);
+    await expect(asServiceRole((connection) => connection`
+      update normalized_candidate_finalizations set target_state = 'Reject'
+      where candidate_id = ${authorized.candidateId} and normalization_generation = 0
+    `)).rejects.toThrow(/permission denied|immutable/i);
+    await expect(asServiceRole((connection) => connection`
+      delete from normalized_candidate_finalizations
+      where candidate_id = ${authorized.candidateId} and normalization_generation = 0
+    `)).rejects.toThrow(/permission denied|immutable/i);
+
+    const [privileges] = await sql<{
+      can_select: boolean;
+      can_insert: boolean;
+      can_update: boolean;
+      can_delete: boolean;
+    }[]>`
+      select
+        has_table_privilege('service_role', 'public.normalized_candidate_finalizations', 'select') as can_select,
+        has_table_privilege('service_role', 'public.normalized_candidate_finalizations', 'insert') as can_insert,
+        has_table_privilege('service_role', 'public.normalized_candidate_finalizations', 'update') as can_update,
+        has_table_privilege('service_role', 'public.normalized_candidate_finalizations', 'delete') as can_delete
+    `;
+    expect(privileges).toEqual({
+      can_select: true,
+      can_insert: false,
+      can_update: false,
+      can_delete: false,
+    });
+  });
+
+  // Break: the pre-Task-10 cluster exception broadens to another authority-owned helper.
+  it('keeps one narrow pre-Task-10 cluster legacy exception', async () => {
+    const canonicalKey = `legacy exception ${randomUUID().replaceAll('-', '')}`;
+    const [created] = await asServiceRole((connection) => connection<{ cluster_id: string }[]>`
+      select upsert_niche_cluster(
+        ${canonicalKey}, 'Legacy Exception Cluster', null,
+        '["legacy alias"]'::jsonb, '["legacy phrase"]'::jsonb,
+        'Ready for API Validation'
+      ) as cluster_id
+    `);
+    const [cluster] = await sql<{
+      id: string;
+      canonical_key: string;
+      canonical_name: string;
+      aliases: string[];
+      catalog_phrases: string[];
+      state: string;
+    }[]>`
+      select id, canonical_key, canonical_name, aliases, catalog_phrases, state
+      from niche_clusters where canonical_key = ${canonicalKey}
+    `;
+    expect(cluster).toEqual({
+      id: created?.cluster_id,
+      canonical_key: canonicalKey,
+      canonical_name: 'Legacy Exception Cluster',
+      aliases: ['legacy alias'],
+      catalog_phrases: ['legacy phrase'],
+      state: 'Ready for API Validation',
+    });
+
+    const [legacyPrivileges] = await sql<{
+      service_role_execute: boolean;
+      public_execute: boolean;
+      anon_execute: boolean;
+      authenticated_execute: boolean;
+    }[]>`
+      select
+        has_function_privilege(
+          'service_role',
+          'public.upsert_niche_cluster(text,text,text,jsonb,jsonb,text)',
+          'execute'
+        ) as service_role_execute,
+        has_function_privilege(
+          'public',
+          'public.upsert_niche_cluster(text,text,text,jsonb,jsonb,text)',
+          'execute'
+        ) as public_execute,
+        has_function_privilege(
+          'anon',
+          'public.upsert_niche_cluster(text,text,text,jsonb,jsonb,text)',
+          'execute'
+        ) as anon_execute,
+        has_function_privilege(
+          'authenticated',
+          'public.upsert_niche_cluster(text,text,text,jsonb,jsonb,text)',
+          'execute'
+        ) as authenticated_execute
+    `;
+    expect(legacyPrivileges).toEqual({
+      service_role_execute: true,
+      public_execute: false,
+      anon_execute: false,
+      authenticated_execute: false,
+    });
+
+    const authorityFunctions = await sql<{ function_name: string }[]>`
+      select p.proname as function_name
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      join pg_roles owner_role on owner_role.oid = p.proowner
+      where n.nspname = 'public'
+        and owner_role.rolname = 'ara_provider_authority'
+        and p.prosecdef
+        and has_function_privilege('service_role', p.oid, 'execute')
+      order by p.proname
+    `;
+    expect(authorityFunctions.map(({ function_name }) => function_name)).toEqual([
+      'activate_subscription_provider',
+      'append_ai_provider_attempt_outcome',
+      'apply_ai_provider_runtime_failure',
+      'begin_ai_provider_attempt',
+      'claim_completed_ai_analysis_finalization',
+      'commit_ai_provider_acceptance_probe',
+      'commit_ai_provider_probe',
+      'deactivate_subscription_provider',
+      'defer_candidate_normalization',
+      'expire_ai_provider_ready_lease',
+      'fence_ai_provider_auth',
+      'finalize_ai_analysis_from_attempt',
+      'finalize_normalized_candidate',
+      'is_ai_provider_routable',
+      'reconcile_ai_provider_attempts',
+      'request_ai_provider_probe',
+      'upsert_niche_cluster',
+    ]);
   });
 
   it('allows service_role to use a predicate-valid authoritative RPC', async () => {

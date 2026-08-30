@@ -1114,6 +1114,7 @@ for each row execute function public.reject_normalized_candidate_finalization_ch
 
 alter table public.normalized_candidate_finalizations enable row level security;
 revoke all on public.normalized_candidate_finalizations from public, anon, authenticated;
+revoke all on public.normalized_candidate_finalizations from service_role;
 grant select on public.normalized_candidate_finalizations to service_role;
 
 create function public.append_candidate_reason(
