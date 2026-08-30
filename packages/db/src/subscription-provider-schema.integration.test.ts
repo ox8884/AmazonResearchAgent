@@ -232,6 +232,18 @@ describe('subscription provider migration 019', () => {
     }, /cross_family_provider_config.*cross-family/i);
   });
 
+  // Break: a legacy command provider with unsupported PAYG billing reaches the
+  // later CHECK instead of deterministic sanitized preflight classification.
+  it('aborts on unsupported existing command billing during preflight', async () => {
+    await expectMigrationFailure(async (sql) => {
+      await insertProvider(sql, {
+        id: 'command-payg-unsupported',
+        kind: 'command',
+        billing: 'payg',
+      });
+    }, /unsupported_command_billing.*command-payg-unsupported/i);
+  });
+
   // Break: the database admits unsupported kind/adapter/billing combinations.
   it('accepts only the approved kind-adapter-billing matrix', async () => {
     await withDatabase(

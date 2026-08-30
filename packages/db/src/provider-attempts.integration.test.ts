@@ -47,6 +47,7 @@ type ProviderFixture = {
   providerId: string;
   modelId: string;
   fingerprint: string;
+  probeGeneration: number;
 };
 type AnalysisLease = {
   analysis_id: string;
@@ -60,6 +61,7 @@ type Fixture = {
   providerId: string;
   modelId: string;
   fingerprint: string;
+  probeGeneration: number;
 };
 
 async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<ProviderFixture> {
@@ -106,7 +108,7 @@ async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<P
     )
   `;
   await sql`update jobs set status = 'completed' where id = ${activated.result.job_id}`;
-  return { providerId, modelId, fingerprint };
+  return { providerId, modelId, fingerprint, probeGeneration: activated.result.probe_generation };
 }
 
 async function seedCandidateAndLeases(
@@ -151,7 +153,7 @@ async function seedCandidateAndLeases(
     )
   `;
   const [job] = await sql<{ id: string; leased_by: string; attempts: number }[]>`
-    select id, leased_by, attempts from claim_jobs('worker-a', 1, 120)
+    select id, leased_by, attempts from claim_jobs('worker-a', 100, 120)
     where id = ${jobId}
   `;
   if (!job) throw new Error('Normalization job was not claimed.');
@@ -236,6 +238,52 @@ async function finalizeAnalysis(fixture: Fixture, attemptId: string) {
   if (!row) throw new Error('Analysis finalization returned no row.');
   return row.result;
 }
+async function appendOutcome(
+  fixture: Fixture,
+  attemptId: string,
+  eventType: 'attempt_failed' | 'attempt_cancelled' | 'attempt_not_consumed' | 'attempt_unknown_after_crash',
+  consumptionStatus: 'consumed' | 'not_consumed' | 'unknown',
+  resultClass: string,
+  proofCategory: string | null = null,
+): Promise<void> {
+  await sql`
+    select append_ai_provider_attempt_outcome(
+      ${attemptId}::uuid,
+      ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+      ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+      ${fixture.analysis.analysis_lease_epoch},
+      ${eventType}, ${consumptionStatus}, ${resultClass}, ${proofCategory},
+      40, null, null, 1, '{}'::jsonb, null, null
+    )
+  `;
+}
+
+async function asServiceRole<T>(
+  operation: (connection: postgres.TransactionSql<Record<string, postgres.PostgresType>>) => Promise<T>,
+): Promise<T> {
+  let result: T | undefined;
+  await sql.begin(async (connection) => {
+    await connection.unsafe('set local role service_role');
+    result = await operation(connection);
+  });
+  if (result === undefined) throw new Error('Service-role operation returned no result.');
+  return result;
+}
+async function applyRuntimeFailure(
+  fixture: Fixture,
+  attemptId: string,
+  failureClass: string,
+): Promise<void> {
+  await sql`
+    select apply_ai_provider_runtime_failure(
+      ${attemptId}::uuid,
+      ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+      ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+      ${fixture.analysis.analysis_lease_epoch}, ${failureClass}, 60
+    )
+  `;
+}
+
 
 beforeAll(async () => {
   await admin.unsafe(`create database ${databaseName}`);
@@ -310,19 +358,23 @@ describe('provider attempt transactions', () => {
     await expect(beginAttempt(fixture)).rejects.toThrow(/lease/i);
   });
 
-  it('allocates concurrent sequences and persists start before authorization returns', async () => {
+  it('allocates monotonic sequences only after an eligible completed outcome', async () => {
     const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(fixture, first.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
     const grok = await seedReadyProvider('grok');
-    const second = { ...fixture, ...grok };
-    const attempts = await Promise.all([beginAttempt(fixture), beginAttempt(second)]);
-    expect(attempts.map((attempt) => attempt.attempt_sequence).sort()).toEqual([1, 2]);
+    const second = await beginAttempt({ ...fixture, ...grok }, first.attempt_id);
+    expect([first.attempt_sequence, second.attempt_sequence]).toEqual([1, 2]);
     const starts = await sql<{ attempt_id: string; event_type: string }[]>`
       select attempt_id, event_type from provider_attempt_events
       where logical_analysis_id = ${fixture.analysis.analysis_id}
+        and event_type = 'attempt_started'
       order by attempt_sequence
     `;
-    expect(starts).toHaveLength(2);
-    expect(starts.every((event) => event.event_type === 'attempt_started')).toBe(true);
+    expect(starts.map((event) => event.attempt_id)).toEqual([
+      first.attempt_id,
+      second.attempt_id,
+    ]);
   });
 
   it('stages one winner and finalizes analysis and usage exactly once', async () => {
@@ -422,22 +474,21 @@ describe('provider attempt transactions', () => {
     expect(state).toEqual({ state: 'AI Screening', decisions: 0, ledgers: 0 });
   });
 
-  it('rejects a conflicting successful winner and preserves the first staging row', async () => {
+  it('rejects a new start after a successful winner is staged', async () => {
     const fixture = await seedCandidateAndLeases();
     const first = await beginAttempt(fixture);
-    const grok = await seedReadyProvider('grok');
-    const second = await beginAttempt({ ...fixture, ...grok });
     await appendSuccess(fixture, first.attempt_id);
-    await expect(
-      appendSuccess({ ...fixture, ...grok }, second.attempt_id)
-    ).rejects.toThrow(/winner_conflict/i);
-    const [state] = await sql<{ winner: string; outcomes: number }[]>`
+    const grok = await seedReadyProvider('grok');
+    await expect(beginAttempt({ ...fixture, ...grok }, first.attempt_id))
+      .rejects.toThrow(/winner_exists/i);
+    const [state] = await sql<{ winner: string; starts: number }[]>`
       select pending_winner_attempt_id as winner,
         (select count(*) from provider_attempt_events
-          where attempt_id = ${second.attempt_id} and event_type <> 'attempt_started')::integer as outcomes
+          where logical_analysis_id = ${fixture.analysis.analysis_id}
+            and event_type = 'attempt_started')::integer as starts
       from ai_analyses where id = ${fixture.analysis.analysis_id}
     `;
-    expect(state).toEqual({ winner: first.attempt_id, outcomes: 0 });
+    expect(state).toEqual({ winner: first.attempt_id, starts: 1 });
   });
 
   it('rejects malformed winner output without an outcome or staged winner', async () => {
@@ -559,6 +610,498 @@ describe('provider attempt transactions', () => {
       select state from candidates where id = ${target.candidateId}
     `;
     expect(candidate?.state).toBe('AI Screening');
+  });
+
+  // Break: pre-spawn authorization combines independently valid job and analysis leases
+  // that belong to different candidate executions.
+  it('rejects mismatched job and analysis candidate identity before recording a start', async () => {
+    const jobOwner = await seedCandidateAndLeases();
+    const analysisOwner = await seedCandidateAndLeases();
+    const mixed = { ...analysisOwner, job: jobOwner.job };
+    await expect(beginAttempt(mixed)).rejects.toThrow(/logical_execution/i);
+    const [count] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from provider_attempt_events
+      where logical_analysis_id = ${analysisOwner.analysis.analysis_id}
+    `;
+    expect(count?.count).toBe(0);
+  });
+
+  // Break: pre-spawn authorization accepts the same candidate under a different
+  // normalization generation than the running job.
+  it('rejects mismatched job and analysis normalization generation', async () => {
+    const fixture = await seedCandidateAndLeases();
+    await sql`
+      update jobs set payload = payload || '{"normalizationGeneration":1}'::jsonb
+      where id = ${fixture.job.job_id}
+    `;
+    await expect(beginAttempt(fixture)).rejects.toThrow(/logical_execution/i);
+    const [count] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from provider_attempt_events
+      where logical_analysis_id = ${fixture.analysis.analysis_id}
+    `;
+    expect(count?.count).toBe(0);
+  });
+
+  // Break: candidate finalization applies another candidate's completed analysis.
+  it('rejects finalization with another candidate analysis without domain writes', async () => {
+    const target = await seedCandidateAndLeases();
+    const evidence = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(evidence);
+    await appendSuccess(evidence, attempt.attempt_id);
+    await finalizeAnalysis(evidence, attempt.attempt_id);
+    await expect(sql`
+      select finalize_normalized_candidate(
+        ${target.job.job_id}, ${target.job.job_lease_owner}, ${target.job.job_lease_epoch},
+        ${evidence.analysis.analysis_id}, ${evidence.analysis.analysis_lease_owner},
+        ${evidence.analysis.analysis_lease_epoch}, ${target.candidateId},
+        'AI Screening', 0
+      )
+    `).rejects.toThrow(/logical_execution/i);
+    const [state] = await sql<{
+      state: string;
+      entities: number;
+      decisions: number;
+      ledgers: number;
+      links: number;
+    }[]>`
+      select c.state,
+        (select count(*) from ai_analysis_entities where entity_id = c.id)::integer as entities,
+        (select count(*) from decision_history where candidate_id = c.id)::integer as decisions,
+        (select count(*) from normalized_candidate_finalizations where candidate_id = c.id)::integer as ledgers,
+        (select count(*) from niche_cluster_keywords where raw_opportunity_keyword_id = c.representative_raw_keyword_id)::integer as links
+      from candidates c where c.id = ${target.candidateId}
+    `;
+    expect(state).toEqual({ state: 'AI Screening', entities: 0, decisions: 0, ledgers: 0, links: 0 });
+  });
+
+  // Break: candidate finalization ignores the completed analysis generation.
+  it('rejects finalization with the same candidate from a stale generation', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendSuccess(fixture, attempt.attempt_id);
+    await finalizeAnalysis(fixture, attempt.attempt_id);
+    await sql`update candidates set normalization_generation = 1 where id = ${fixture.candidateId}`;
+    await sql`
+      update jobs set payload = payload || '{"normalizationGeneration":1}'::jsonb
+      where id = ${fixture.job.job_id}
+    `;
+    await expect(sql`
+      select finalize_normalized_candidate(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}, ${fixture.candidateId},
+        'AI Screening', 1
+      )
+    `).rejects.toThrow(/logical_execution/i);
+    const [state] = await sql<{ state: string; ledgers: number }[]>`
+      select state,
+        (select count(*) from normalized_candidate_finalizations where candidate_id = ${fixture.candidateId})::integer as ledgers
+      from candidates where id = ${fixture.candidateId}
+    `;
+    expect(state).toEqual({ state: 'AI Screening', ledgers: 0 });
+  });
+
+  // Break: an already staged or finalized winner does not stop another external attempt.
+  it.each([
+    ['staged', /winner/i],
+    ['finalized', /analysis_lease_rejected/i],
+  ] as const)(
+    'rejects a new attempt after a %s successful winner',
+    async (winnerState, expectedError) => {
+      const fixture = await seedCandidateAndLeases();
+      const first = await beginAttempt(fixture);
+      await appendSuccess(fixture, first.attempt_id);
+      if (winnerState === 'finalized') await finalizeAnalysis(fixture, first.attempt_id);
+      const fallback = await seedReadyProvider('grok');
+      await expect(beginAttempt({ ...fixture, ...fallback }, first.attempt_id))
+        .rejects.toThrow(expectedError);
+      const [count] = await sql<{ count: number }[]>`
+        select count(*)::integer as count from provider_attempt_events
+        where logical_analysis_id = ${fixture.analysis.analysis_id}
+          and event_type = 'attempt_started'
+      `;
+      expect(count?.count).toBe(1);
+    },
+  );
+
+  // Break: durable consumed and unknown outcomes do not exclude same-provider replay.
+  it.each([
+    ['attempt_failed', 'consumed', 'capacity_exhausted', null],
+    ['attempt_unknown_after_crash', 'unknown', 'worker_process_loss', null],
+  ] as const)(
+    'rejects same-provider replay after %s with %s consumption',
+    async (eventType, consumptionStatus, resultClass, proofCategory) => {
+      const fixture = await seedCandidateAndLeases();
+      const first = await beginAttempt(fixture);
+      await appendOutcome(
+        fixture,
+        first.attempt_id,
+        eventType,
+        consumptionStatus,
+        resultClass,
+        proofCategory,
+      );
+      await expect(beginAttempt(fixture, first.attempt_id)).rejects.toThrow(/provider_replay/i);
+    },
+  );
+
+  // Break: attempt authorization admits a fourth distinct externally consumable provider.
+  it('rejects a fourth distinct externally consumable provider', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const providers = [
+      { providerId: fixture.providerId, modelId: fixture.modelId, fingerprint: fixture.fingerprint, probeGeneration: fixture.probeGeneration },
+      await seedReadyProvider('grok'),
+      await seedReadyProvider('codex'),
+      await seedReadyProvider('grok'),
+    ];
+    let parent: string | null = null;
+    for (const provider of providers.slice(0, 3)) {
+      const scoped = { ...fixture, ...provider };
+      const attempt = await beginAttempt(scoped, parent);
+      await appendOutcome(scoped, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+      parent = attempt.attempt_id;
+    }
+    await expect(beginAttempt({ ...fixture, ...providers[3] }, parent)).rejects.toThrow(/provider_limit/i);
+  });
+
+  // Break: any prior outcome is accepted as a fallback parent even when policy forbids fallback.
+  it('rejects a fallback parent whose outcome is not fallback eligible', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(fixture, first.attempt_id, 'attempt_failed', 'unknown', 'unsafe_unknown');
+    const fallback = await seedReadyProvider('grok');
+    await expect(beginAttempt({ ...fixture, ...fallback }, first.attempt_id)).rejects.toThrow(/fallback_parent/i);
+  });
+
+  it('allows exactly one proven pre-consumption same-provider replacement', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(
+      fixture,
+      first.attempt_id,
+      'attempt_not_consumed',
+      'not_consumed',
+      'pre_spawn_failure',
+      'sandbox_not_started',
+    );
+    await expect(beginAttempt(fixture, first.attempt_id)).resolves.toMatchObject({
+      attempt_sequence: 2,
+      provider_id: fixture.providerId,
+    });
+  });
+
+  // Break: repeated proven-not-consumed outcomes permit unbounded replacement.
+  it('rejects a second same-provider replacement', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(
+      fixture,
+      first.attempt_id,
+      'attempt_not_consumed',
+      'not_consumed',
+      'pre_spawn_failure',
+      'sandbox_not_started',
+    );
+    const second = await beginAttempt(fixture, first.attempt_id);
+    await appendOutcome(
+      fixture,
+      second.attempt_id,
+      'attempt_not_consumed',
+      'not_consumed',
+      'pre_spawn_failure',
+      'sandbox_not_started',
+    );
+    await expect(beginAttempt(fixture, second.attempt_id)).rejects.toThrow(/provider_replacement/i);
+  });
+
+  // Break: failed/cancelled outcomes accept arbitrary or contradictory result classes.
+  it.each([
+    ['attempt_failed', 'unknown', 'invented_failure', null],
+    ['attempt_failed', 'not_consumed', 'capacity_exhausted', null],
+    ['attempt_cancelled', 'not_consumed', 'cancelled_by_caller', null],
+    ['attempt_cancelled', 'unknown', 'capacity_exhausted', null],
+    ['attempt_not_consumed', 'not_consumed', 'pre_spawn_failure', 'invented_proof'],
+    ['attempt_succeeded', 'unknown', 'success', null],
+  ] as const)(
+    'rejects invalid outcome matrix row %s/%s/%s/%s',
+    async (eventType, consumptionStatus, resultClass, proofCategory) => {
+      const fixture = await seedCandidateAndLeases();
+      const attempt = await beginAttempt(fixture);
+      if (eventType === 'attempt_succeeded') {
+        await expect(sql`
+          select append_ai_provider_attempt_outcome(
+            ${attempt.attempt_id}::uuid,
+            ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+            ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+            ${fixture.analysis.analysis_lease_epoch},
+            ${eventType}, ${consumptionStatus}, ${resultClass}, ${proofCategory},
+            40, 20, 30, 1, '{}'::jsonb, ${sql.json(normalizationOutput)}, ${sql.json(usage)}
+          )
+        `).rejects.toThrow(/outcome|success|check/i);
+      } else {
+        await expect(appendOutcome(
+          fixture,
+          attempt.attempt_id,
+          eventType,
+          consumptionStatus,
+          resultClass,
+          proofCategory,
+        )).rejects.toThrow(/outcome|check/i);
+      }
+    },
+  );
+
+  it.each([
+    ['attempt_failed', 'unknown', 'auth_expired'],
+    ['attempt_failed', 'unknown', 'credential_source_mismatch'],
+    ['attempt_failed', 'unknown', 'binary_identity_mismatch'],
+    ['attempt_failed', 'unknown', 'profile_mismatch'],
+    ['attempt_failed', 'unknown', 'containment_failure'],
+    ['attempt_failed', 'unknown', 'capability_failure'],
+    ['attempt_failed', 'consumed', 'capacity_exhausted'],
+    ['attempt_failed', 'unknown', 'capacity_exhausted'],
+    ['attempt_failed', 'consumed', 'rate_limited'],
+    ['attempt_failed', 'unknown', 'rate_limited'],
+    ['attempt_failed', 'consumed', 'transient_network'],
+    ['attempt_failed', 'unknown', 'transient_network'],
+    ['attempt_failed', 'consumed', 'client_transient'],
+    ['attempt_failed', 'unknown', 'client_transient'],
+    ['attempt_failed', 'consumed', 'timeout'],
+    ['attempt_failed', 'unknown', 'timeout'],
+    ['attempt_failed', 'unknown', 'unsafe_unknown'],
+    ['attempt_failed', 'consumed', 'schema_invalid_output'],
+    ['attempt_failed', 'consumed', 'business_validation_failure'],
+    ['attempt_cancelled', 'unknown', 'cancelled_by_caller'],
+    ['attempt_cancelled', 'unknown', 'cancelled_by_job_lease_loss'],
+    ['attempt_cancelled', 'unknown', 'cancelled_by_shutdown'],
+  ] as const)(
+    'accepts canonical outcome matrix row %s/%s/%s',
+    async (eventType, consumptionStatus, resultClass) => {
+      const fixture = await seedCandidateAndLeases();
+      const attempt = await beginAttempt(fixture);
+      await expect(appendOutcome(
+        fixture,
+        attempt.attempt_id,
+        eventType,
+        consumptionStatus,
+        resultClass,
+      )).resolves.toBeUndefined();
+    },
+  );
+  // Break: runtime failure writeback accepts an obsolete same-owner job epoch.
+  it('rejects runtime failure writeback from a stale job epoch', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendOutcome(fixture, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    await sql`
+      update jobs set leased_until = clock_timestamp() - interval '1 second'
+      where id = ${fixture.job.job_id}
+    `;
+    await sql`
+      select * from claim_jobs(${fixture.job.job_lease_owner}, 1, 120)
+      where id = ${fixture.job.job_id}
+    `;
+    await expect(applyRuntimeFailure(
+      fixture,
+      attempt.attempt_id,
+      'capacity_exhausted',
+    )).rejects.toThrow(/job_lease_rejected/i);
+    await sql`update jobs set status = 'completed' where id = ${fixture.job.job_id}`;
+  });
+
+  // Break: runtime failure writeback accepts an obsolete same-owner analysis epoch.
+  it('rejects runtime failure writeback from a stale analysis epoch', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendOutcome(fixture, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    await sql`
+      update ai_analyses set leased_until = clock_timestamp() - interval '1 second'
+      where id = ${fixture.analysis.analysis_id}
+    `;
+    await sql`
+      select * from claim_ai_analysis(
+        'niche_normalization',
+        (select input_hash from ai_analyses where id = ${fixture.analysis.analysis_id}),
+        ${fixture.analysis.analysis_lease_owner}, 120,
+        ${fixture.providerId}, ${fixture.modelId}, 'ko', 'niche-normalization-v1',
+        (select input_payload from ai_analyses where id = ${fixture.analysis.analysis_id})
+      )
+    `;
+    await expect(applyRuntimeFailure(
+      fixture,
+      attempt.attempt_id,
+      'capacity_exhausted',
+    )).rejects.toThrow(/analysis_lease_rejected/i);
+    await sql`
+      update ai_analyses set leased_until = clock_timestamp() - interval '1 second'
+      where id = ${fixture.analysis.analysis_id}
+    `;
+  });
+
+  // Break: failure from probe generation N mutates runtime generation N+1.
+  it('rejects runtime failure writeback from a stale probe generation', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendOutcome(fixture, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    await sql`
+      select request_ai_provider_probe(${fixture.providerId}, 1, 0, ${fixture.fingerprint})
+    `;
+    await expect(applyRuntimeFailure(
+      fixture,
+      attempt.attempt_id,
+      'capacity_exhausted',
+    )).rejects.toThrow(/provider_runtime_cas_conflict/i);
+    const [runtime] = await sql<{ reason: string | null; probe_generation: number }[]>`
+      select reason, probe_generation::integer as probe_generation
+      from ai_provider_runtime_state where provider_id = ${fixture.providerId}
+    `;
+    expect(runtime).toEqual({ reason: null, probe_generation: fixture.probeGeneration + 1 });
+  });
+
+  // Break: caller-forged current bindings detach a failure from its stored attempt bindings.
+  it('rejects runtime failure after provider bindings change', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendOutcome(fixture, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    const currentFingerprint = `${fixture.fingerprint}-next`;
+    await sql`update ai_providers set settings_revision = 2 where id = ${fixture.providerId}`;
+    await sql`
+      update ai_provider_runtime_state
+      set settings_revision = 2, auth_generation = 1,
+          execution_fingerprint = ${currentFingerprint}, probe_generation = probe_generation + 1
+      where provider_id = ${fixture.providerId}
+    `;
+    await expect(applyRuntimeFailure(
+      fixture,
+      attempt.attempt_id,
+      'capacity_exhausted',
+    )).rejects.toThrow(/provider_runtime_cas_conflict/i);
+  });
+
+  it('allows current attempt and lease identities to apply canonical runtime failure', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const attempt = await beginAttempt(fixture);
+    await appendOutcome(fixture, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    await expect(applyRuntimeFailure(
+      fixture,
+      attempt.attempt_id,
+      'capacity_exhausted',
+    )).resolves.toBeUndefined();
+    const [runtime] = await sql<{ available: boolean; reason: string | null }[]>`
+      select available, reason from ai_provider_runtime_state
+      where provider_id = ${fixture.providerId}
+    `;
+    expect(runtime).toEqual({ available: false, reason: 'temporary_capacity' });
+  });
+
+
+  // Break: service_role directly mutates protected provider authority surfaces.
+  it('denies service_role direct protected-table writes and GUC forgery', async () => {
+    const fixture = await seedCandidateAndLeases();
+    await expect(asServiceRole((connection) => connection`
+      insert into provider_attempt_events (
+        attempt_id, logical_analysis_id, attempt_sequence, event_type,
+        provider_id, model_id, adapter, role, billing_type,
+        settings_revision, auth_generation, execution_fingerprint, probe_generation,
+        request_count, job_id, job_lease_owner, job_lease_epoch,
+        analysis_lease_owner, analysis_lease_epoch
+      ) values (
+        ${randomUUID()}::uuid, ${fixture.analysis.analysis_id}, 1, 'attempt_started',
+        ${fixture.providerId}, ${fixture.modelId}, 'codex', 'niche_normalization', 'subscription',
+        1, 0, ${fixture.fingerprint}, ${fixture.probeGeneration}, 1,
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_lease_owner}, ${fixture.analysis.analysis_lease_epoch}
+      )
+    `)).rejects.toThrow(/permission denied/i);
+    await expect(asServiceRole((connection) => connection`
+      update ai_provider_runtime_state set available = false, reason = 'forged'
+      where provider_id = ${fixture.providerId}
+    `)).rejects.toThrow(/permission denied/i);
+    await expect(asServiceRole((connection) => connection`
+      insert into ai_provider_capability_attestations (
+        provider_id, adapter, model_id, role, settings_revision, auth_generation,
+        execution_fingerprint, capability_digest, framing_digest, bounded_behavior_digest
+      ) values (
+        ${fixture.providerId}, 'codex', ${fixture.modelId}, 'niche_normalization',
+        1, 0, ${fixture.fingerprint}, ${randomUUID()}, 'forged', 'forged'
+      )
+    `)).rejects.toThrow(/permission denied/i);
+    await expect(asServiceRole(async (connection) => {
+      await connection`select set_config('app.provider_attempt_tx', 'on', true)`;
+      return connection`
+        update ai_analyses set pending_winner_attempt_id = ${randomUUID()}::uuid,
+          pending_output = ${sql.json(normalizationOutput)}, pending_usage = ${sql.json(usage)}
+        where id = ${fixture.analysis.analysis_id}
+      `;
+    })).rejects.toThrow(/permission denied|protected/i);
+    await expect(sql.begin(async (connection) => {
+      await connection.unsafe('set local session authorization service_role');
+      await connection.unsafe('set local role ara_provider_authority');
+    })).rejects.toThrow(/permission denied/i);
+    const [membership] = await sql<{ is_member: boolean }[]>`
+      select pg_has_role('service_role', 'ara_provider_authority', 'member') as is_member
+    `;
+    expect(membership?.is_member).toBe(false);
+    await expect(asServiceRole((connection) => connection`
+      select assert_current_job_lease(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch}
+      )
+    `)).rejects.toThrow(/permission denied/i);
+
+    const [privileges] = await sql<{
+      protected_mutation_denied: boolean;
+      internal_execute_denied: boolean;
+      authority_schema_create_denied: boolean;
+    }[]>`
+      select
+        bool_and(not has_table_privilege('service_role', table_name, privilege))
+          as protected_mutation_denied,
+        (
+          select bool_and(not has_function_privilege('service_role', signature, 'execute'))
+          from unnest(array[
+            'public.assert_normalization_output(jsonb)',
+            'public.assert_ai_usage(jsonb)',
+            'public.assert_current_job_lease(uuid,text,integer)',
+            'public.assert_current_analysis_lease(uuid,text,integer,text)',
+            'public.append_candidate_reason(jsonb,text,text)',
+            'public.assert_normalization_job_payload(jsonb,uuid,bigint)'
+          ]) as helpers(signature)
+        ) as internal_execute_denied,
+        not has_schema_privilege('ara_provider_authority', 'public', 'create')
+          as authority_schema_create_denied
+      from unnest(array[
+        'public.ai_provider_runtime_state',
+        'public.ai_provider_capability_attestations',
+        'public.ai_provider_containment_attestations',
+        'public.provider_attempt_events'
+      ]) as protected(table_name)
+      cross join unnest(array['insert', 'update', 'delete']) as mutations(privilege)
+    `;
+    expect(privileges).toEqual({
+      protected_mutation_denied: true,
+      internal_execute_denied: true,
+      authority_schema_create_denied: true,
+    });
+
+    const disabled = await seedReadyProvider('grok');
+    await sql`select deactivate_subscription_provider(${disabled.providerId})`;
+    await expect(asServiceRole(async (connection) => {
+      await connection`select set_config('app.subscription_activation', 'on', true)`;
+      return connection`update ai_providers set enabled = true where id = ${disabled.providerId}`;
+    })).rejects.toThrow(/requires_activation|permission denied/i);
+  });
+
+  it('allows service_role to use a predicate-valid authoritative RPC', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const [result] = await asServiceRole((connection) => connection<{ result: { attempt_sequence: number } }[]>`
+      select begin_ai_provider_attempt(
+        ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+        ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+        ${fixture.analysis.analysis_lease_epoch}, ${fixture.providerId}, ${fixture.modelId},
+        1, 0, ${fixture.fingerprint}, null
+      ) as result
+    `);
+    expect(result?.result.attempt_sequence).toBe(1);
   });
 
 type EnqueuedNormalization = {

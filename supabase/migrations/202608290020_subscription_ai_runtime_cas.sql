@@ -20,7 +20,7 @@ begin
   end if;
   if provider_row.kind = 'subscription_command'
      and new.enabled
-     and coalesce(current_setting('app.subscription_activation', true), '') <> 'on' then
+     and current_user <> 'ara_provider_authority' then
     raise exception 'subscription_model_requires_capability';
   end if;
   return new;
@@ -36,7 +36,7 @@ begin
   if new.kind = 'subscription_command'
      and new.enabled
      and (tg_op = 'INSERT' or not old.enabled)
-     and coalesce(current_setting('app.subscription_activation', true), '') <> 'on' then
+     and current_user <> 'ara_provider_authority' then
     raise exception 'subscription_provider_requires_activation';
   end if;
   return new;
@@ -325,11 +325,9 @@ begin
     raise exception 'provider_activation_evidence_stale';
   end if;
 
-  perform set_config('app.subscription_activation', 'on', true);
   update public.ai_providers set enabled = true where id = provider_id;
   update public.ai_models set enabled = (ai_models.model_id = activate_subscription_provider.model_id)
   where ai_models.provider_id = activate_subscription_provider.provider_id;
-  perform set_config('app.subscription_activation', 'off', true);
   update public.ai_provider_runtime_state
   set state = 'authorization_required', available = false, reason = 'activation_probe_required',
       checked_at = null, ready_valid_until = null, retry_not_before = null,
@@ -353,10 +351,8 @@ declare
 begin
   perform 1 from public.ai_providers p where p.id = provider_id and p.kind = 'subscription_command' for update;
   if not found then raise exception 'subscription_provider_not_found'; end if;
-  perform set_config('app.subscription_activation', 'on', true);
   update public.ai_providers set enabled = false where id = provider_id;
   update public.ai_models set enabled = false where ai_models.provider_id = deactivate_subscription_provider.provider_id;
-  perform set_config('app.subscription_activation', 'off', true);
   update public.ai_provider_runtime_state
   set state = 'authorization_required', available = false, reason = 'provider_disabled',
       checked_at = null, ready_valid_until = null, retry_not_before = null,
@@ -459,11 +455,13 @@ as $$
 $$;
 
 create or replace function public.apply_ai_provider_runtime_failure(
-  provider_id text,
-  model_id text,
-  expected_settings_revision integer,
-  expected_auth_generation bigint,
-  expected_execution_fingerprint text,
+  attempt_id uuid,
+  job_id uuid,
+  job_lease_owner text,
+  job_lease_epoch integer,
+  analysis_id uuid,
+  analysis_lease_owner text,
+  analysis_lease_epoch integer,
   failure_class text,
   retry_after_seconds integer default null
 )
@@ -474,60 +472,102 @@ set search_path = public
 as $$
 #variable_conflict use_variable
 declare
+  start_row public.provider_attempt_events%rowtype;
+  outcome_row public.provider_attempt_events%rowtype;
   runtime_row public.ai_provider_runtime_state%rowtype;
+  job_row public.jobs%rowtype;
+  analysis_row public.ai_analyses%rowtype;
   delay_seconds integer;
   mutable boolean := true;
   fallback boolean := false;
   replay boolean := false;
 begin
+  select * into job_row from public.jobs j where j.id = job_id for update;
+  if job_row.id is null
+     or job_row.status <> 'running'
+     or job_row.leased_by is distinct from job_lease_owner
+     or job_row.attempts is distinct from job_lease_epoch
+     or job_row.leased_until is null
+     or job_row.leased_until <= clock_timestamp() then
+    raise exception 'job_lease_rejected';
+  end if;
+  select * into analysis_row from public.ai_analyses a where a.id = analysis_id for update;
+  if analysis_row.id is null
+     or analysis_row.status <> 'pending'
+     or analysis_row.leased_by is distinct from analysis_lease_owner
+     or analysis_row.attempts is distinct from analysis_lease_epoch
+     or analysis_row.leased_until is null
+     or analysis_row.leased_until <= clock_timestamp() then
+    raise exception 'analysis_lease_rejected';
+  end if;
+  select * into start_row from public.provider_attempt_events e
+  where e.attempt_id = apply_ai_provider_runtime_failure.attempt_id
+    and e.event_type = 'attempt_started' for update;
+  select * into outcome_row from public.provider_attempt_events e
+  where e.attempt_id = apply_ai_provider_runtime_failure.attempt_id
+    and e.event_type in ('attempt_failed', 'attempt_cancelled') for update;
+  if start_row.event_id is null or outcome_row.event_id is null
+     or start_row.logical_analysis_id <> analysis_id
+     or start_row.job_id <> job_id
+     or start_row.job_lease_owner <> job_lease_owner
+     or start_row.job_lease_epoch <> job_lease_epoch
+     or start_row.analysis_lease_owner <> analysis_lease_owner
+     or start_row.analysis_lease_epoch <> analysis_lease_epoch
+     or outcome_row.result_class is distinct from failure_class then
+    raise exception 'provider_runtime_attempt_rejected';
+  end if;
   select * into runtime_row from public.ai_provider_runtime_state r
-  where r.provider_id = apply_ai_provider_runtime_failure.provider_id for update;
+  where r.provider_id = start_row.provider_id for update;
   if runtime_row.provider_id is null
-     or runtime_row.settings_revision is distinct from expected_settings_revision
-     or runtime_row.auth_generation is distinct from expected_auth_generation
-     or runtime_row.execution_fingerprint is distinct from expected_execution_fingerprint then
+     or runtime_row.settings_revision is distinct from start_row.settings_revision
+     or runtime_row.auth_generation is distinct from start_row.auth_generation
+     or runtime_row.execution_fingerprint is distinct from start_row.execution_fingerprint
+     or runtime_row.probe_generation is distinct from start_row.probe_generation
+     or not exists (
+       select 1 from public.ai_providers p
+       where p.id = start_row.provider_id
+         and p.settings_revision = start_row.settings_revision
+     ) then
     raise exception 'provider_runtime_cas_conflict';
   end if;
-
   case failure_class
     when 'auth_expired' then
       update public.ai_provider_runtime_state set state='expired', available=false,
         reason='auth_expired', checked_at=null, ready_valid_until=null, retry_not_before=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
       fallback := true;
     when 'credential_source_mismatch' then
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='credential_source_mismatch', checked_at=null, ready_valid_until=null,
         retry_not_before=null, credential_source_digest=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'binary_identity_mismatch' then
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='binary_identity_mismatch', checked_at=null, ready_valid_until=null,
         retry_not_before=null, binary_identity_digest=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'profile_mismatch' then
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='profile_mismatch', checked_at=null, ready_valid_until=null,
         retry_not_before=null, containment_attestation_id=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'containment_failure' then
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='containment_failure', checked_at=null, ready_valid_until=null,
         retry_not_before=null, containment_attestation_id=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'capability_failure' then
       update public.ai_models set enabled=false
-      where ai_models.provider_id = apply_ai_provider_runtime_failure.provider_id
-        and ai_models.model_id = apply_ai_provider_runtime_failure.model_id;
+      where provider_id = start_row.provider_id and model_id = start_row.model_id;
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='capability_failure', checked_at=null, ready_valid_until=null,
         retry_not_before=null, capability_attestation_id=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'capacity_exhausted', 'rate_limited' then
       delay_seconds := least(900, greatest(60, coalesce(retry_after_seconds, 300)));
       update public.ai_provider_runtime_state set state='ready', available=false,
         reason='temporary_capacity', retry_not_before=clock_timestamp()+make_interval(secs=>delay_seconds)
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
       fallback := true;
     when 'transient_network', 'client_transient', 'timeout' then
       delay_seconds := case least(runtime_row.transient_failure_count + 1, 4)
@@ -535,17 +575,15 @@ begin
       update public.ai_provider_runtime_state set state='ready', available=false,
         reason='transient_client_failure', retry_not_before=clock_timestamp()+make_interval(secs=>delay_seconds),
         transient_failure_count=least(transient_failure_count+1,4)
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
       fallback := true;
     when 'unsafe_unknown' then
       update public.ai_provider_runtime_state set state='needs_attention', available=false,
         reason='unsafe_unknown', checked_at=null, ready_valid_until=null, retry_not_before=null
-      where ai_provider_runtime_state.provider_id = apply_ai_provider_runtime_failure.provider_id;
+      where provider_id = start_row.provider_id;
     when 'cancelled_by_caller', 'cancelled_by_job_lease_loss', 'cancelled_by_shutdown',
          'schema_invalid_output', 'business_validation_failure' then
       mutable := false;
-    when 'process_spawn_failure_pre_consumption' then
-      mutable := false; replay := true;
     else
       raise exception 'unknown_subscription_failure_class';
   end case;
@@ -652,6 +690,17 @@ begin
 end;
 $$;
 
+alter function public.enqueue_ai_provider_probe_locked(public.ai_providers, public.ai_provider_runtime_state) owner to ara_provider_authority;
+alter function public.request_ai_provider_probe(text, integer, bigint, text) owner to ara_provider_authority;
+alter function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) owner to ara_provider_authority;
+alter function public.activate_subscription_provider(text, text, integer, bigint, text, text) owner to ara_provider_authority;
+alter function public.deactivate_subscription_provider(text) owner to ara_provider_authority;
+alter function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) owner to ara_provider_authority;
+alter function public.is_ai_provider_routable(text, text, integer, bigint, text) owner to ara_provider_authority;
+alter function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) owner to ara_provider_authority;
+alter function public.fence_ai_provider_auth(text, integer, bigint, text) owner to ara_provider_authority;
+alter function public.expire_ai_provider_ready_lease(text, integer, bigint, text) owner to ara_provider_authority;
+
 revoke all on function public.enqueue_ai_provider_probe_locked(public.ai_providers, public.ai_provider_runtime_state) from public, anon, authenticated;
 revoke all on function public.request_ai_provider_probe(text, integer, bigint, text) from public, anon, authenticated;
 revoke all on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
@@ -659,7 +708,7 @@ revoke all on function public.activate_subscription_provider(text, text, integer
 revoke all on function public.deactivate_subscription_provider(text) from public, anon, authenticated;
 revoke all on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) from public, anon, authenticated;
 revoke all on function public.is_ai_provider_routable(text, text, integer, bigint, text) from public, anon, authenticated;
-revoke all on function public.apply_ai_provider_runtime_failure(text, text, integer, bigint, text, text, integer) from public, anon, authenticated;
+revoke all on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) from public, anon, authenticated;
 revoke all on function public.fence_ai_provider_auth(text, integer, bigint, text) from public, anon, authenticated;
 revoke all on function public.expire_ai_provider_ready_lease(text, integer, bigint, text) from public, anon, authenticated;
 grant execute on function public.request_ai_provider_probe(text, integer, bigint, text) to service_role;
@@ -668,6 +717,6 @@ grant execute on function public.activate_subscription_provider(text, text, inte
 grant execute on function public.deactivate_subscription_provider(text) to service_role;
 grant execute on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) to service_role;
 grant execute on function public.is_ai_provider_routable(text, text, integer, bigint, text) to service_role;
-grant execute on function public.apply_ai_provider_runtime_failure(text, text, integer, bigint, text, text, integer) to service_role;
+grant execute on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) to service_role;
 grant execute on function public.fence_ai_provider_auth(text, integer, bigint, text) to service_role;
 grant execute on function public.expire_ai_provider_ready_lease(text, integer, bigint, text) to service_role;

@@ -407,7 +407,7 @@ language plpgsql
 set search_path = public
 as $$
 begin
-  if coalesce(current_setting('app.provider_attempt_tx', true), '') = 'on' then
+  if current_user = 'ara_provider_authority' then
     return new;
   end if;
   if new.pending_winner_attempt_id is distinct from old.pending_winner_attempt_id
@@ -425,7 +425,7 @@ language plpgsql
 set search_path = public
 as $$
 begin
-  if coalesce(current_setting('app.provider_attempt_tx', true), '') = 'on' then
+  if current_user = 'ara_provider_authority' then
     return new;
   end if;
   if new.winning_attempt_id is distinct from old.winning_attempt_id
@@ -625,6 +625,12 @@ declare
   created_attempt_id uuid := gen_random_uuid();
   provider_auth_generation bigint;
   provider_probe_generation bigint;
+  analysis_candidate_id uuid;
+  analysis_generation bigint;
+  prior_external_provider_count integer;
+  same_provider_start_count integer;
+  parent_row public.provider_attempt_events%rowtype;
+  parent_start public.provider_attempt_events%rowtype;
 begin
   job_row := public.assert_current_job_lease(job_id, job_lease_owner, job_lease_epoch);
   analysis_row := public.assert_current_analysis_lease(
@@ -632,6 +638,30 @@ begin
   );
   if analysis_row.role <> 'niche_normalization' then
     raise exception 'provider_attempt_role_rejected';
+  end if;
+  if jsonb_typeof(analysis_row.input_payload) <> 'object'
+     or jsonb_typeof(analysis_row.input_payload->'candidateId') <> 'string'
+     or jsonb_typeof(analysis_row.input_payload->'normalizationGeneration') <> 'number' then
+    raise exception 'provider_attempt_logical_execution_rejected';
+  end if;
+  begin
+    analysis_candidate_id := (analysis_row.input_payload->>'candidateId')::uuid;
+    analysis_generation := (analysis_row.input_payload->>'normalizationGeneration')::bigint;
+  exception when invalid_text_representation or numeric_value_out_of_range then
+    raise exception 'provider_attempt_logical_execution_rejected';
+  end;
+  if jsonb_typeof(job_row.payload) <> 'object'
+     or jsonb_typeof(job_row.payload->'candidateIds') <> 'array'
+     or jsonb_array_length(job_row.payload->'candidateIds') <> 1
+     or job_row.payload->'candidateIds'->>0 is distinct from analysis_candidate_id::text
+     or coalesce((job_row.payload->>'normalizationGeneration')::bigint, 0)
+        is distinct from analysis_generation then
+    raise exception 'provider_attempt_logical_execution_rejected';
+  end if;
+  if analysis_row.pending_winner_attempt_id is not null
+     or analysis_row.winning_attempt_id is not null
+     or analysis_row.status = 'completed' then
+    raise exception 'provider_attempt_winner_exists';
   end if;
 
   select * into provider_row from public.ai_providers p
@@ -681,13 +711,96 @@ begin
     raise exception 'provider_attempt_family_rejected';
   end if;
 
-  if fallback_parent_attempt_id is not null and not exists (
-    select 1 from public.provider_attempt_events e
+  if exists (
+    select 1 from public.provider_attempt_events s
+    where s.logical_analysis_id = analysis_id
+      and s.event_type = 'attempt_started'
+      and not exists (
+        select 1 from public.provider_attempt_events o
+        where o.attempt_id = s.attempt_id and o.event_type <> 'attempt_started'
+      )
+  ) then
+    raise exception 'provider_attempt_unresolved_start';
+  end if;
+
+  if fallback_parent_attempt_id is null then
+    if exists (
+      select 1 from public.provider_attempt_events e
+      where e.logical_analysis_id = analysis_id and e.event_type = 'attempt_started'
+    ) then
+      raise exception 'provider_attempt_fallback_parent_rejected';
+    end if;
+  else
+    select * into parent_start from public.provider_attempt_events e
     where e.attempt_id = fallback_parent_attempt_id
       and e.logical_analysis_id = analysis_id
-      and e.event_type <> 'attempt_started'
+      and e.event_type = 'attempt_started';
+    select * into parent_row from public.provider_attempt_events e
+    where e.attempt_id = fallback_parent_attempt_id
+      and e.logical_analysis_id = analysis_id
+      and e.event_type <> 'attempt_started';
+    if parent_start.event_id is null or parent_row.event_id is null
+       or parent_start.attempt_sequence <> (
+         select max(s.attempt_sequence) from public.provider_attempt_events s
+         where s.logical_analysis_id = analysis_id and s.event_type = 'attempt_started'
+       ) then
+      raise exception 'provider_attempt_fallback_parent_rejected';
+    end if;
+    if parent_start.provider_id = provider_id then
+      select count(*)::integer into same_provider_start_count
+      from public.provider_attempt_events s
+      where s.logical_analysis_id = analysis_id
+        and s.event_type = 'attempt_started'
+        and s.provider_id = provider_id;
+      if parent_row.event_type <> 'attempt_not_consumed'
+         or parent_row.result_class <> 'pre_spawn_failure'
+         or parent_row.proof_category not in (
+           'spawn_rejected_before_child', 'sandbox_not_started',
+           'profile_verification_failed_before_spawn',
+           'semaphore_cancelled_before_authorization'
+         ) then
+        raise exception 'provider_attempt_provider_replay_rejected';
+      end if;
+      if same_provider_start_count >= 2 then
+        raise exception 'provider_attempt_provider_replacement_rejected';
+      end if;
+    elsif parent_row.event_type <> 'attempt_failed'
+       or parent_row.result_class not in (
+         'auth_expired', 'capacity_exhausted', 'rate_limited',
+         'transient_network', 'client_transient', 'timeout'
+       ) then
+      raise exception 'provider_attempt_fallback_parent_rejected';
+    end if;
+  end if;
+
+  if exists (
+    select 1 from public.provider_attempt_events s
+    where s.logical_analysis_id = analysis_id
+      and s.event_type = 'attempt_started'
+      and s.provider_id = provider_id
+      and not exists (
+        select 1 from public.provider_attempt_events o
+        where o.attempt_id = s.attempt_id and o.event_type = 'attempt_not_consumed'
+      )
   ) then
-    raise exception 'provider_attempt_fallback_parent_rejected';
+    raise exception 'provider_attempt_provider_replay_rejected';
+  end if;
+
+  select count(distinct s.provider_id)::integer into prior_external_provider_count
+  from public.provider_attempt_events s
+  where s.logical_analysis_id = analysis_id
+    and s.event_type = 'attempt_started'
+    and not exists (
+      select 1 from public.provider_attempt_events o
+      where o.attempt_id = s.attempt_id and o.event_type = 'attempt_not_consumed'
+    );
+  if not exists (
+    select 1 from public.provider_attempt_events s
+    where s.logical_analysis_id = analysis_id
+      and s.event_type = 'attempt_started'
+      and s.provider_id = provider_id
+  ) and prior_external_provider_count >= 3 then
+    raise exception 'provider_attempt_provider_limit_rejected';
   end if;
 
   select coalesce(max(e.attempt_sequence), 0) + 1 into next_sequence
@@ -789,6 +902,46 @@ begin
      or coalesce(safe_metadata, '{}'::jsonb)::text ~* '"(prompt|raw_stdout|raw_stderr|auth|env|secret|subscription_usd|output)"[[:space:]]*:' then
     raise exception 'provider_attempt_metadata_rejected';
   end if;
+  if not (
+    (event_type = 'attempt_succeeded'
+      and consumption_status = 'consumed' and result_class = 'success'
+      and proof_category is null)
+    or (event_type = 'attempt_failed'
+      and proof_category is null
+      and (
+        (consumption_status = 'unknown' and result_class in (
+          'auth_expired', 'credential_source_mismatch', 'binary_identity_mismatch',
+          'profile_mismatch', 'containment_failure', 'capability_failure',
+          'capacity_exhausted', 'rate_limited', 'transient_network',
+          'client_transient', 'timeout', 'unsafe_unknown'
+        ))
+        or (consumption_status = 'consumed' and result_class in (
+          'capacity_exhausted', 'rate_limited', 'transient_network',
+          'client_transient', 'timeout', 'schema_invalid_output',
+          'business_validation_failure'
+        ))
+      ))
+    or (event_type = 'attempt_cancelled'
+      and consumption_status = 'unknown'
+      and result_class in (
+        'cancelled_by_caller', 'cancelled_by_job_lease_loss',
+        'cancelled_by_shutdown'
+      ) and proof_category is null)
+    or (event_type = 'attempt_not_consumed'
+      and consumption_status = 'not_consumed'
+      and result_class = 'pre_spawn_failure'
+      and proof_category in (
+        'spawn_rejected_before_child', 'sandbox_not_started',
+        'profile_verification_failed_before_spawn',
+        'semaphore_cancelled_before_authorization'
+      ))
+    or (event_type = 'attempt_unknown_after_crash'
+      and consumption_status = 'unknown'
+      and result_class = 'worker_process_loss'
+      and proof_category is null)
+  ) then
+    raise exception 'provider_attempt_outcome_matrix_rejected';
+  end if;
   if event_type = 'attempt_succeeded' then
     if consumption_status <> 'consumed' or result_class <> 'success'
        or proof_category is not null or output is null or usage is null then
@@ -831,13 +984,11 @@ begin
        and analysis_row.pending_winner_attempt_id <> attempt_id then
       raise exception 'provider_attempt_winner_conflict';
     end if;
-    perform set_config('app.provider_attempt_tx', 'on', true);
     update public.ai_analyses a
     set pending_winner_attempt_id = attempt_id,
         pending_output = output,
         pending_usage = usage
     where a.id = analysis_id;
-    perform set_config('app.provider_attempt_tx', 'off', true);
   end if;
   return jsonb_build_object('event_type', event_type);
 end;
@@ -903,7 +1054,6 @@ begin
     convert_to(analysis_row.pending_output::text, 'UTF8'), 'sha256'
   ), 'hex');
 
-  perform set_config('app.provider_attempt_tx', 'on', true);
   update public.ai_analyses a
   set provider_id = start_row.provider_id,
       model_id = start_row.model_id,
@@ -920,7 +1070,6 @@ begin
       pending_usage = null
   where a.id = analysis_id
   returning * into analysis_row;
-  perform set_config('app.provider_attempt_tx', 'off', true);
 
   insert into public.ai_usage (
     analysis_id, provider_id, model_id, role, input_hash,
@@ -1066,6 +1215,12 @@ begin
   perform public.assert_normalization_job_payload(
     job_row.payload, candidate_id, expected_normalization_generation
   );
+  if jsonb_typeof(analysis_row.input_payload) <> 'object'
+     or analysis_row.input_payload->>'candidateId' is distinct from candidate_id::text
+     or coalesce((analysis_row.input_payload->>'normalizationGeneration')::bigint, 0)
+        is distinct from expected_normalization_generation then
+    raise exception 'normalization_logical_execution_rejected';
+  end if;
   select * into candidate_row from public.candidates c
   where c.id = candidate_id for update;
   if candidate_row.id is null then
@@ -1104,6 +1259,7 @@ begin
     and e.event_type = 'attempt_started';
   if start_row.event_id is null
      or start_row.logical_analysis_id <> analysis_id
+     or start_row.job_id <> job_id
      or not exists (
        select 1 from public.provider_attempt_events e
        where e.attempt_id = analysis_row.winning_attempt_id
@@ -1517,6 +1673,14 @@ begin
     )
   on conflict do nothing;
 
+  if analysis_row.pending_winner_attempt_id is not null
+     or analysis_row.winning_attempt_id is not null then
+    return jsonb_build_object(
+      'attempted_provider_ids', '[]'::jsonb,
+      'pending_winner_attempt_id', analysis_row.pending_winner_attempt_id
+    );
+  end if;
+
   select coalesce(jsonb_agg(distinct s.provider_id), '[]'::jsonb)
   into attempted_provider_ids
   from public.provider_attempt_events s
@@ -1532,6 +1696,28 @@ begin
   );
 end;
 $$;
+
+revoke update on public.ai_analyses from service_role;
+grant select, insert, delete on public.ai_analyses to service_role;
+grant select, insert, update on public.ai_analysis_entities,
+  public.niche_clusters, public.niche_cluster_keywords,
+  public.candidates, public.decision_history,
+  public.normalized_candidate_finalizations to ara_provider_authority;
+
+alter function public.begin_ai_provider_attempt(uuid, text, integer, uuid, text, integer, text, text, integer, bigint, text, uuid) owner to ara_provider_authority;
+alter function public.append_ai_provider_attempt_outcome(uuid, uuid, text, integer, uuid, text, integer, text, text, text, text, integer, bigint, bigint, integer, jsonb, jsonb, jsonb) owner to ara_provider_authority;
+alter function public.finalize_ai_analysis_from_attempt(uuid, uuid, text, integer, uuid, text, integer) owner to ara_provider_authority;
+alter function public.finalize_normalized_candidate(uuid, text, integer, uuid, text, integer, uuid, text, bigint) owner to ara_provider_authority;
+alter function public.claim_completed_ai_analysis_finalization(uuid, text, integer, uuid, text, integer, uuid, text, bigint) owner to ara_provider_authority;
+alter function public.defer_candidate_normalization(uuid, text, integer, uuid, uuid, text, bigint) owner to ara_provider_authority;
+alter function public.reconcile_ai_provider_attempts(uuid, text, integer, uuid, text, integer) owner to ara_provider_authority;
+alter function public.assert_normalization_output(jsonb) owner to ara_provider_authority;
+alter function public.assert_ai_usage(jsonb) owner to ara_provider_authority;
+alter function public.assert_current_job_lease(uuid, text, integer) owner to ara_provider_authority;
+alter function public.assert_current_analysis_lease(uuid, text, integer, text) owner to ara_provider_authority;
+alter function public.append_candidate_reason(jsonb, text, text) owner to ara_provider_authority;
+alter function public.assert_normalization_job_payload(jsonb, uuid, bigint) owner to ara_provider_authority;
+alter function public.upsert_niche_cluster(text, text, text, jsonb, jsonb, text) owner to ara_provider_authority;
 
 revoke all on function public.heartbeat_job(uuid, text, integer, integer) from public, anon, authenticated;
 revoke all on function public.checkpoint_job(uuid, text, integer, jsonb, integer) from public, anon, authenticated;
@@ -1576,3 +1762,5 @@ grant execute on function public.defer_candidate_normalization(uuid, text, integ
 grant execute on function public.read_normalization_writer_capability() to service_role;
 grant execute on function public.enqueue_initial_candidate_normalization(uuid, text, text) to service_role;
 grant execute on function public.reconcile_ai_provider_attempts(uuid, text, integer, uuid, text, integer) to service_role;
+
+revoke create on schema public from ara_provider_authority;

@@ -86,6 +86,119 @@ async function commitReady(fixture: Fixture, generation: number): Promise<void> 
   `;
 }
 
+type RuntimeFailureAttempt = {
+  readonly attemptId: string;
+  readonly jobId: string;
+  readonly jobLeaseOwner: string;
+  readonly jobLeaseEpoch: number;
+  readonly analysisId: string;
+  readonly analysisLeaseOwner: string;
+  readonly analysisLeaseEpoch: number;
+};
+
+async function seedRuntimeFailureAttempt(
+  fixture: Fixture,
+  probeGeneration: number,
+  failureClass: string,
+): Promise<RuntimeFailureAttempt> {
+  const attemptId = randomUUID();
+  const jobId = randomUUID();
+  const analysisId = randomUUID();
+  const jobLeaseOwner = 'worker-a';
+  const analysisLeaseOwner = 'analysis-worker-a';
+  const jobLeaseEpoch = 1;
+  const analysisLeaseEpoch = 1;
+  const isCancelled = failureClass.startsWith('cancelled_');
+  const consumptionStatus = failureClass === 'schema_invalid_output' ||
+      failureClass === 'business_validation_failure'
+    ? 'consumed'
+    : 'unknown';
+  await sql`
+    insert into jobs (
+      id, type, payload, status, leased_until, leased_by, attempts, idempotency_key
+    ) values (
+      ${jobId}, 'NORMALIZE_OPPORTUNITIES', '{}'::jsonb, 'running',
+      clock_timestamp() + interval '2 minutes', ${jobLeaseOwner}, ${jobLeaseEpoch},
+      ${`runtime-failure:${attemptId}`}
+    )
+  `;
+  await sql`
+    insert into ai_analyses (
+      id, provider_id, model_id, role, locale, entity_type, entity_id,
+      input_hash, input_payload, output, usage, cost_class, prompt_version,
+      status, started_at, completed_at, leased_by, leased_until, attempts
+    ) values (
+      ${analysisId}, ${fixture.providerId}, ${fixture.modelId},
+      'niche_normalization', 'ko', 'analysis_claim', ${randomUUID()}::uuid,
+      ${`runtime-failure:${attemptId}`}, '{}'::jsonb, null, '{}'::jsonb,
+      'subscription', 'niche-normalization-v1', 'pending', clock_timestamp(), null,
+      ${analysisLeaseOwner}, clock_timestamp() + interval '2 minutes',
+      ${analysisLeaseEpoch}
+    )
+  `;
+  await sql`
+    insert into provider_attempt_events (
+      attempt_id, logical_analysis_id, attempt_sequence, event_type,
+      provider_id, model_id, adapter, role, billing_type,
+      settings_revision, auth_generation, execution_fingerprint, probe_generation,
+      request_count, job_id, job_lease_owner, job_lease_epoch,
+      analysis_lease_owner, analysis_lease_epoch
+    ) values (
+      ${attemptId}, ${analysisId}, 1, 'attempt_started',
+      ${fixture.providerId}, ${fixture.modelId}, 'codex', 'niche_normalization',
+      'subscription', ${fixture.settingsRevision}, ${fixture.authGeneration},
+      ${fixture.fingerprint}, ${probeGeneration}, 1, ${jobId}, ${jobLeaseOwner},
+      ${jobLeaseEpoch}, ${analysisLeaseOwner}, ${analysisLeaseEpoch}
+    )
+  `;
+  await sql`
+    insert into provider_attempt_events (
+      attempt_id, logical_analysis_id, attempt_sequence, event_type,
+      provider_id, model_id, adapter, role, billing_type,
+      settings_revision, auth_generation, execution_fingerprint, probe_generation,
+      request_count, job_id, job_lease_owner, job_lease_epoch,
+      analysis_lease_owner, analysis_lease_epoch, consumption_status,
+      result_class, finished_at
+    ) values (
+      ${attemptId}, ${analysisId}, 1,
+      ${isCancelled ? 'attempt_cancelled' : 'attempt_failed'},
+      ${fixture.providerId}, ${fixture.modelId}, 'codex', 'niche_normalization',
+      'subscription', ${fixture.settingsRevision}, ${fixture.authGeneration},
+      ${fixture.fingerprint}, ${probeGeneration}, 1, ${jobId}, ${jobLeaseOwner},
+      ${jobLeaseEpoch}, ${analysisLeaseOwner}, ${analysisLeaseEpoch},
+      ${consumptionStatus}, ${failureClass}, clock_timestamp()
+    )
+  `;
+  return {
+    attemptId,
+    jobId,
+    jobLeaseOwner,
+    jobLeaseEpoch,
+    analysisId,
+    analysisLeaseOwner,
+    analysisLeaseEpoch,
+  };
+}
+
+async function applyRuntimeFailure(
+  attempt: RuntimeFailureAttempt,
+  failureClass: string,
+  retryAfterSeconds: number,
+) {
+  const [row] = await sql<{
+    result: { mutated: boolean; allow_fallback: boolean; allow_replay: boolean };
+  }[]>`
+    select apply_ai_provider_runtime_failure(
+      ${attempt.attemptId},
+      ${attempt.jobId}, ${attempt.jobLeaseOwner}, ${attempt.jobLeaseEpoch},
+      ${attempt.analysisId}, ${attempt.analysisLeaseOwner}, ${attempt.analysisLeaseEpoch},
+      ${failureClass}, ${retryAfterSeconds}
+    ) as result
+  `;
+  if (!row) throw new Error('Runtime failure mutation returned no result.');
+  return row.result;
+}
+
 beforeAll(async () => {
   await admin.unsafe(`create database ${databaseName}`);
   await sql.unsafe('create schema extensions');
@@ -242,28 +355,25 @@ describe('subscription provider runtime CAS', () => {
     ['cancelled_by_shutdown', false, false, 'ready', null],
     ['unsafe_unknown', false, false, 'needs_attention', 'unsafe_unknown'],
     ['schema_invalid_output', false, false, 'ready', null],
-    ['business_validation_failure', false, false, 'ready', null],
-    ['process_spawn_failure_pre_consumption', false, true, 'ready', null]
+    ['business_validation_failure', false, false, 'ready', null]
   ] as const)(
     'applies canonical failure row %s',
     async (failureClass, allowFallback, allowReplay, state, reason) => {
       const fixture = await seedAcceptedProvider();
       const request = await activate(fixture);
       await commitReady(fixture, request.probe_generation);
-      const [outcome] = await sql<{
-        result: { mutated: boolean; allow_fallback: boolean; allow_replay: boolean };
-      }[]>`
-        select apply_ai_provider_runtime_failure(
-          ${fixture.providerId}, ${fixture.modelId}, 1, 0, ${fixture.fingerprint},
-          ${failureClass}, 47
-        ) as result
-      `;
+      const attempt = await seedRuntimeFailureAttempt(
+        fixture,
+        request.probe_generation,
+        failureClass,
+      );
+      const outcome = await applyRuntimeFailure(attempt, failureClass, 47);
       const [runtime] = await sql<{ state: string; reason: string | null }[]>`
         select state, reason from ai_provider_runtime_state
         where provider_id = ${fixture.providerId}
       `;
-      expect(outcome?.result.allow_fallback).toBe(allowFallback);
-      expect(outcome?.result.allow_replay).toBe(allowReplay);
+      expect(outcome.allow_fallback).toBe(allowFallback);
+      expect(outcome.allow_replay).toBe(allowReplay);
       expect(runtime).toMatchObject({ state, reason });
     }
   );
@@ -373,12 +483,12 @@ describe('subscription provider runtime CAS', () => {
     const fixture = await seedAcceptedProvider();
     const first = await activate(fixture);
     await commitReady(fixture, first.probe_generation);
-    await sql`
-      select apply_ai_provider_runtime_failure(
-        ${fixture.providerId}, ${fixture.modelId}, 1, 0,
-        ${fixture.fingerprint}, 'capacity_exhausted', 60
-      )
-    `;
+    const attempt = await seedRuntimeFailureAttempt(
+      fixture,
+      first.probe_generation,
+      'capacity_exhausted',
+    );
+    await applyRuntimeFailure(attempt, 'capacity_exhausted', 60);
     await expect(sql`
       select request_ai_provider_probe(
         ${fixture.providerId}, 1, 0, ${fixture.fingerprint}

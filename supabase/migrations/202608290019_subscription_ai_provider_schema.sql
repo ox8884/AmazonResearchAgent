@@ -1,4 +1,17 @@
 do $$
+begin
+  begin
+    if not exists (select 1 from pg_roles where rolname = 'ara_provider_authority') then
+      create role ara_provider_authority
+        nosuperuser nocreatedb nocreaterole noinherit nologin bypassrls;
+    end if;
+  exception when duplicate_object or unique_violation then
+    null;
+  end;
+  execute format('grant ara_provider_authority to %I', current_user);
+end;
+$$;
+do $$
 declare
   invalid_ids text;
 begin
@@ -7,6 +20,13 @@ begin
   where kind not in ('openai_http', 'command');
   if invalid_ids is not null then
     raise exception 'unsupported_provider_kind:%', invalid_ids;
+  end if;
+
+  select string_agg(id, ',' order by id) into invalid_ids
+  from public.ai_providers
+  where kind = 'command' and billing_type = 'payg';
+  if invalid_ids is not null then
+    raise exception 'unsupported_command_billing:%', invalid_ids;
   end if;
 
   select string_agg(p.id, ',' order by p.id) into invalid_ids
@@ -313,8 +333,29 @@ create table public.provider_attempt_events (
     or (event_type = 'attempt_succeeded'
       and consumption_status = 'consumed' and result_class = 'success'
       and finished_at is not null and detected_at is null)
-    or (event_type in ('attempt_failed', 'attempt_cancelled')
-      and consumption_status is not null and result_class is not null
+    or (event_type = 'attempt_failed'
+      and (
+        (consumption_status = 'unknown' and result_class in (
+          'auth_expired', 'credential_source_mismatch', 'binary_identity_mismatch',
+          'profile_mismatch', 'containment_failure', 'capability_failure',
+          'capacity_exhausted', 'rate_limited', 'transient_network',
+          'client_transient', 'timeout', 'unsafe_unknown'
+        ))
+        or (consumption_status = 'consumed' and result_class in (
+          'capacity_exhausted', 'rate_limited', 'transient_network',
+          'client_transient', 'timeout', 'schema_invalid_output',
+          'business_validation_failure'
+        ))
+      )
+      and proof_category is null
+      and finished_at is not null and detected_at is null)
+    or (event_type = 'attempt_cancelled'
+      and consumption_status = 'unknown'
+      and result_class in (
+        'cancelled_by_caller', 'cancelled_by_job_lease_loss',
+        'cancelled_by_shutdown'
+      )
+      and proof_category is null
       and finished_at is not null and detected_at is null)
     or (event_type = 'attempt_not_consumed'
       and consumption_status = 'not_consumed'
@@ -439,14 +480,23 @@ alter table public.ai_provider_capability_attestations enable row level security
 alter table public.ai_provider_containment_attestations enable row level security;
 alter table public.provider_attempt_events enable row level security;
 
-revoke all on public.ai_provider_runtime_state from public, anon, authenticated;
-revoke all on public.ai_provider_capability_attestations from public, anon, authenticated;
-revoke all on public.ai_provider_containment_attestations from public, anon, authenticated;
-revoke all on public.provider_attempt_events from public, anon, authenticated;
-grant all on public.ai_provider_runtime_state to service_role;
-grant all on public.ai_provider_capability_attestations to service_role;
-grant all on public.ai_provider_containment_attestations to service_role;
-grant select, insert on public.provider_attempt_events to service_role;
+revoke all on public.ai_provider_runtime_state from public, anon, authenticated, service_role;
+revoke all on public.ai_provider_capability_attestations from public, anon, authenticated, service_role;
+revoke all on public.ai_provider_containment_attestations from public, anon, authenticated, service_role;
+revoke all on public.provider_attempt_events from public, anon, authenticated, service_role;
+grant select on public.ai_provider_runtime_state to service_role;
+grant select on public.ai_provider_capability_attestations to service_role;
+grant select on public.ai_provider_containment_attestations to service_role;
+grant select on public.provider_attempt_events to service_role;
+grant usage, create on schema public to ara_provider_authority;
+grant usage on schema extensions to ara_provider_authority;
+grant select, insert, update, delete on public.ai_provider_runtime_state to ara_provider_authority;
+grant select, insert on public.ai_provider_capability_attestations to ara_provider_authority;
+grant select, insert on public.ai_provider_containment_attestations to ara_provider_authority;
+grant select, insert, update on public.jobs to ara_provider_authority;
+grant select, insert, update on public.provider_attempt_events to ara_provider_authority;
+grant select, insert, update on public.ai_analyses, public.ai_usage to ara_provider_authority;
+grant select, update on public.ai_providers, public.ai_models to ara_provider_authority;
 
 -- Keep the existing settings write path while returning the migration-019 row shape.
 create or replace function public.save_ai_provider_settings(
