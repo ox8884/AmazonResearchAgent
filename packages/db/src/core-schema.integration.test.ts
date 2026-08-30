@@ -165,11 +165,11 @@ describe('AI analysis and cluster hardening RPCs', () => {
     await sql.end();
   });
 
-  async function seedProvider(): Promise<string> {
+  async function seedProvider(kind: 'command' | 'openai_http' = 'command'): Promise<string> {
     const providerId = `db-it-ai-${randomUUID()}`;
     await sql`
       insert into ai_providers (id, name, kind, billing_type, enabled, config)
-      values (${providerId}, ${providerId}, 'command', 'free', true, '{}'::jsonb)
+      values (${providerId}, ${providerId}, ${kind}, 'free', true, '{}'::jsonb)
     `;
     return providerId;
   }
@@ -299,7 +299,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
   });
 
   it('rolls back provider config and secret when a later model write fails', async () => {
-    const providerId = await seedProvider();
+    const providerId = await seedProvider('openai_http');
     await sql`
       insert into provider_secrets (provider_id, ciphertext, iv, auth_tag, last4)
       values (${providerId}, 'old-cipher', 'old-iv', 'old-tag', 'old4')
@@ -545,7 +545,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
   });
 
   it('preserves admin model priority, enabled, and manual origin across discovery', async () => {
-    const providerId = await seedProvider();
+    const providerId = await seedProvider('openai_http');
     await sql`
       select save_ai_provider_settings(
         jsonb_build_object(
@@ -626,7 +626,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
 
   // Break: a stale settings form overwrites a newer revision.
   it('rejects a stale settings revision instead of resurrecting disappeared models', async () => {
-    const providerId = await seedProvider();
+    const providerId = await seedProvider('openai_http');
     await sql`
       select save_ai_provider_settings(
         jsonb_build_object(

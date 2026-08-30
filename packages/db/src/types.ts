@@ -34,211 +34,32 @@ export type Database = {
   }
   public: {
     Tables: {
-      app_settings: {
-        Row: {
-          created_at: string
-          daily_api_budget: number
-          id: boolean
-          locale: string
-          manual_api_reserve: number
-          manual_reserve_enabled: boolean
-          new_freshness_hours: number
-          new_percent: number
-          notification_locale: string | null
-          strong_freshness_hours: number
-          strong_percent: number
-          telegram_chat_id: string | null
-          telegram_enabled: boolean
-          timezone: string
-          updated_at: string
-          watch_freshness_hours: number
-          watch_percent: number
-        }
-        Insert: {
-          created_at?: string
-          daily_api_budget?: number
-          id?: boolean
-          locale?: string
-          manual_api_reserve?: number
-          manual_reserve_enabled?: boolean
-          new_freshness_hours?: number
-          new_percent?: number
-          notification_locale?: string | null
-          strong_freshness_hours?: number
-          strong_percent?: number
-          telegram_chat_id?: string | null
-          telegram_enabled?: boolean
-          timezone?: string
-          updated_at?: string
-          watch_freshness_hours?: number
-          watch_percent?: number
-        }
-        Update: {
-          created_at?: string
-          daily_api_budget?: number
-          id?: boolean
-          locale?: string
-          manual_api_reserve?: number
-          manual_reserve_enabled?: boolean
-          new_freshness_hours?: number
-          new_percent?: number
-          notification_locale?: string | null
-          strong_freshness_hours?: number
-          strong_percent?: number
-          telegram_chat_id?: string | null
-          telegram_enabled?: boolean
-          timezone?: string
-          updated_at?: string
-          watch_freshness_hours?: number
-          watch_percent?: number
-        }
-        Relationships: []
-      }
-      notifications: {
+      admin_login_guard: {
         Row: {
           attempts: number
-          candidate_id: string | null
-          created_at: string
-          delivered_at: string | null
-          event_type: string
-          id: string
-          idempotency_key: string
-          last_error: string | null
-          locale: string
-          payload: Json
-          research_run_id: string | null
-          status: string
-          updated_at: string
+          bucket: string
+          scrypt_inflight: boolean
+          scrypt_leased_until: string | null
+          scrypt_owner: string | null
+          window_started_at: string
         }
         Insert: {
           attempts?: number
-          candidate_id?: string | null
-          created_at?: string
-          delivered_at?: string | null
-          event_type: string
-          id?: string
-          idempotency_key: string
-          last_error?: string | null
-          locale?: string
-          payload?: Json
-          research_run_id?: string | null
-          status?: string
-          updated_at?: string
+          bucket: string
+          scrypt_inflight?: boolean
+          scrypt_leased_until?: string | null
+          scrypt_owner?: string | null
+          window_started_at?: string
         }
         Update: {
           attempts?: number
-          candidate_id?: string | null
-          created_at?: string
-          delivered_at?: string | null
-          event_type?: string
-          id?: string
-          idempotency_key?: string
-          last_error?: string | null
-          locale?: string
-          payload?: Json
-          research_run_id?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "notifications_candidate_id_fkey"
-            columns: ["candidate_id"]
-            isOneToOne: false
-            referencedRelation: "candidates"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "notifications_research_run_id_fkey"
-            columns: ["research_run_id"]
-            isOneToOne: false
-            referencedRelation: "research_runs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      research_runs: {
-        Row: {
-          checkpoint: Json
-          completed_at: string | null
-          created_at: string
-          error_code: string | null
-          error_message: string | null
-          id: string
-          idempotency_key: string
-          locale: string
-          logical_run_date: string
-          mode: string
-          selected_candidate_ids: Json
-          source: string
-          started_at: string | null
-          status: string
-          timezone: string
-          updated_at: string
-        }
-        Insert: {
-          checkpoint?: Json
-          completed_at?: string | null
-          created_at?: string
-          error_code?: string | null
-          error_message?: string | null
-          id?: string
-          idempotency_key: string
-          locale?: string
-          logical_run_date: string
-          mode?: string
-          selected_candidate_ids?: Json
-          source: string
-          started_at?: string | null
-          status?: string
-          timezone?: string
-          updated_at?: string
-        }
-        Update: {
-          checkpoint?: Json
-          completed_at?: string | null
-          created_at?: string
-          error_code?: string | null
-          error_message?: string | null
-          id?: string
-          idempotency_key?: string
-          locale?: string
-          logical_run_date?: string
-          mode?: string
-          selected_candidate_ids?: Json
-          source?: string
-          started_at?: string | null
-          status?: string
-          timezone?: string
-          updated_at?: string
+          bucket?: string
+          scrypt_inflight?: boolean
+          scrypt_leased_until?: string | null
+          scrypt_owner?: string | null
+          window_started_at?: string
         }
         Relationships: []
-      }
-      scheduled_run_locks: {
-        Row: {
-          created_at: string
-          research_run_id: string
-          run_date: string
-        }
-        Insert: {
-          created_at?: string
-          research_run_id: string
-          run_date: string
-        }
-        Update: {
-          created_at?: string
-          research_run_id?: string
-          run_date?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "scheduled_run_locks_research_run_id_fkey"
-            columns: ["research_run_id"]
-            isOneToOne: true
-            referencedRelation: "research_runs"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       ai_analyses: {
         Row: {
@@ -258,6 +79,9 @@ export type Database = {
           locale: string
           model_id: string
           output: Json | null
+          pending_output: Json | null
+          pending_usage: Json | null
+          pending_winner_attempt_id: string | null
           prompt_version: string
           provider_id: string
           role: string
@@ -282,6 +106,9 @@ export type Database = {
           locale: string
           model_id: string
           output?: Json | null
+          pending_output?: Json | null
+          pending_usage?: Json | null
+          pending_winner_attempt_id?: string | null
           prompt_version: string
           provider_id: string
           role: string
@@ -306,6 +133,9 @@ export type Database = {
           locale?: string
           model_id?: string
           output?: Json | null
+          pending_output?: Json | null
+          pending_usage?: Json | null
+          pending_winner_attempt_id?: string | null
           prompt_version?: string
           provider_id?: string
           role?: string
@@ -389,6 +219,7 @@ export type Database = {
           enabled?: boolean
           id?: string
           model_id?: string
+          origin?: string
           priority?: number
           provider_id?: string
           quality_rank?: number
@@ -404,8 +235,219 @@ export type Database = {
           },
         ]
       }
+      ai_provider_capability_attestations: {
+        Row: {
+          adapter: string
+          auth_generation: number
+          bounded_behavior_digest: string
+          capability_digest: string
+          checked_at: string
+          evidence: Json
+          execution_fingerprint: string
+          framing_digest: string
+          id: string
+          model_id: string
+          provider_id: string
+          role: string
+          settings_revision: number
+        }
+        Insert: {
+          adapter: string
+          auth_generation: number
+          bounded_behavior_digest: string
+          capability_digest: string
+          checked_at?: string
+          evidence?: Json
+          execution_fingerprint: string
+          framing_digest: string
+          id?: string
+          model_id: string
+          provider_id: string
+          role: string
+          settings_revision: number
+        }
+        Update: {
+          adapter?: string
+          auth_generation?: number
+          bounded_behavior_digest?: string
+          capability_digest?: string
+          checked_at?: string
+          evidence?: Json
+          execution_fingerprint?: string
+          framing_digest?: string
+          id?: string
+          model_id?: string
+          provider_id?: string
+          role?: string
+          settings_revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_capability_attestations_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_provider_containment_attestations: {
+        Row: {
+          adapter: string
+          auth_generation: number
+          checked_at: string
+          containment_digest: string
+          evidence: Json
+          execution_fingerprint: string
+          id: string
+          provider_id: string
+          security_profile_version: string
+          settings_revision: number
+        }
+        Insert: {
+          adapter: string
+          auth_generation: number
+          checked_at?: string
+          containment_digest: string
+          evidence?: Json
+          execution_fingerprint: string
+          id?: string
+          provider_id: string
+          security_profile_version: string
+          settings_revision: number
+        }
+        Update: {
+          adapter?: string
+          auth_generation?: number
+          checked_at?: string
+          containment_digest?: string
+          evidence?: Json
+          execution_fingerprint?: string
+          id?: string
+          provider_id?: string
+          security_profile_version?: string
+          settings_revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_containment_attestations_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_provider_runtime_state: {
+        Row: {
+          auth_generation: number
+          available: boolean
+          binary_identity_digest: string | null
+          capability_attestation_id: string | null
+          checked_at: string | null
+          containment_attestation_id: string | null
+          created_at: string
+          credential_source_digest: string | null
+          current_probe_job_id: string | null
+          current_probe_requested_at: string | null
+          execution_fingerprint: string
+          probe_generation: number
+          provider_id: string
+          readiness_policy_version: string
+          ready_valid_until: string | null
+          reason: string | null
+          retry_not_before: string | null
+          security_profile_version: string
+          settings_revision: number
+          state: string
+          terms_digest: string | null
+          transient_failure_count: number
+          updated_at: string
+        }
+        Insert: {
+          auth_generation?: number
+          available?: boolean
+          binary_identity_digest?: string | null
+          capability_attestation_id?: string | null
+          checked_at?: string | null
+          containment_attestation_id?: string | null
+          created_at?: string
+          credential_source_digest?: string | null
+          current_probe_job_id?: string | null
+          current_probe_requested_at?: string | null
+          execution_fingerprint: string
+          probe_generation?: number
+          provider_id: string
+          readiness_policy_version: string
+          ready_valid_until?: string | null
+          reason?: string | null
+          retry_not_before?: string | null
+          security_profile_version: string
+          settings_revision: number
+          state?: string
+          terms_digest?: string | null
+          transient_failure_count?: number
+          updated_at?: string
+        }
+        Update: {
+          auth_generation?: number
+          available?: boolean
+          binary_identity_digest?: string | null
+          capability_attestation_id?: string | null
+          checked_at?: string | null
+          containment_attestation_id?: string | null
+          created_at?: string
+          credential_source_digest?: string | null
+          current_probe_job_id?: string | null
+          current_probe_requested_at?: string | null
+          execution_fingerprint?: string
+          probe_generation?: number
+          provider_id?: string
+          readiness_policy_version?: string
+          ready_valid_until?: string | null
+          reason?: string | null
+          retry_not_before?: string | null
+          security_profile_version?: string
+          settings_revision?: number
+          state?: string
+          terms_digest?: string | null
+          transient_failure_count?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_runtime_capability_fkey"
+            columns: ["capability_attestation_id"]
+            isOneToOne: false
+            referencedRelation: "ai_provider_capability_attestations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_provider_runtime_containment_fkey"
+            columns: ["containment_attestation_id"]
+            isOneToOne: false
+            referencedRelation: "ai_provider_containment_attestations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_provider_runtime_state_current_probe_job_id_fkey"
+            columns: ["current_probe_job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_provider_runtime_state_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: true
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_providers: {
         Row: {
+          adapter: string | null
           billing_type: string
           config: Json
           created_at: string
@@ -418,6 +460,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          adapter?: string | null
           billing_type: string
           config?: Json
           created_at?: string
@@ -430,6 +473,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          adapter?: string | null
           billing_type?: string
           config?: Json
           created_at?: string
@@ -500,50 +544,6 @@ export type Database = {
           },
         ]
       }
-      audit_events: {
-        Row: {
-          actor_type: string
-          created_at: string
-          entity_id: string
-          entity_type: string
-          event_type: string
-          id: string
-          idempotency_key: string | null
-          import_run_id: string | null
-          metadata: Json
-        }
-        Insert: {
-          actor_type?: string
-          created_at?: string
-          entity_id: string
-          entity_type: string
-          event_type: string
-          id?: string
-          idempotency_key?: string | null
-          import_run_id?: string | null
-          metadata?: Json
-        }
-        Update: {
-          actor_type?: string
-          created_at?: string
-          entity_id?: string
-          entity_type?: string
-          event_type?: string
-          id?: string
-          idempotency_key?: string | null
-          import_run_id?: string | null
-          metadata?: Json
-        }
-        Relationships: [
-          {
-            foreignKeyName: "audit_events_import_run_id_fkey"
-            columns: ["import_run_id"]
-            isOneToOne: false
-            referencedRelation: "import_runs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       api_budget_daily: {
         Row: {
           budget_date: string
@@ -598,7 +598,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       api_call_claims: {
         Row: {
           budget_date: string | null
@@ -632,7 +631,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       api_usage: {
         Row: {
           budget_date: string
@@ -688,7 +686,158 @@ export type Database = {
           started_at?: string
           success?: boolean | null
         }
+        Relationships: [
+          {
+            foreignKeyName: "api_usage_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "api_usage_niche_cluster_id_fkey"
+            columns: ["niche_cluster_id"]
+            isOneToOne: false
+            referencedRelation: "niche_clusters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      app_settings: {
+        Row: {
+          created_at: string
+          daily_api_budget: number
+          id: boolean
+          locale: string
+          manual_api_reserve: number
+          manual_reserve_enabled: boolean
+          new_freshness_hours: number
+          new_percent: number
+          notification_locale: string | null
+          strong_freshness_hours: number
+          strong_percent: number
+          telegram_chat_id: string | null
+          telegram_enabled: boolean
+          timezone: string
+          updated_at: string
+          watch_freshness_hours: number
+          watch_percent: number
+        }
+        Insert: {
+          created_at?: string
+          daily_api_budget?: number
+          id?: boolean
+          locale?: string
+          manual_api_reserve?: number
+          manual_reserve_enabled?: boolean
+          new_freshness_hours?: number
+          new_percent?: number
+          notification_locale?: string | null
+          strong_freshness_hours?: number
+          strong_percent?: number
+          telegram_chat_id?: string | null
+          telegram_enabled?: boolean
+          timezone?: string
+          updated_at?: string
+          watch_freshness_hours?: number
+          watch_percent?: number
+        }
+        Update: {
+          created_at?: string
+          daily_api_budget?: number
+          id?: boolean
+          locale?: string
+          manual_api_reserve?: number
+          manual_reserve_enabled?: boolean
+          new_freshness_hours?: number
+          new_percent?: number
+          notification_locale?: string | null
+          strong_freshness_hours?: number
+          strong_percent?: number
+          telegram_chat_id?: string | null
+          telegram_enabled?: boolean
+          timezone?: string
+          updated_at?: string
+          watch_freshness_hours?: number
+          watch_percent?: number
+        }
         Relationships: []
+      }
+      audit_events: {
+        Row: {
+          actor_type: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          event_type: string
+          id: string
+          idempotency_key: string | null
+          import_run_id: string | null
+          metadata: Json
+        }
+        Insert: {
+          actor_type?: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          event_type: string
+          id?: string
+          idempotency_key?: string | null
+          import_run_id?: string | null
+          metadata?: Json
+        }
+        Update: {
+          actor_type?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          event_type?: string
+          id?: string
+          idempotency_key?: string | null
+          import_run_id?: string | null
+          metadata?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_events_import_run_id_fkey"
+            columns: ["import_run_id"]
+            isOneToOne: false
+            referencedRelation: "import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      candidate_evidence: {
+        Row: {
+          candidate_id: string
+          created_at: string
+          id: string
+          kind: string
+          payload: Json
+        }
+        Insert: {
+          candidate_id: string
+          created_at?: string
+          id?: string
+          kind: string
+          payload?: Json
+        }
+        Update: {
+          candidate_id?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          payload?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidate_evidence_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       candidates: {
         Row: {
@@ -698,6 +847,7 @@ export type Database = {
           import_run_id: string
           keyword: string
           niche_cluster_id: string | null
+          normalization_generation: number
           normalized_exact_keyword: string
           preliminary_score: number | null
           preliminary_score_components: Json | null
@@ -715,6 +865,7 @@ export type Database = {
           import_run_id: string
           keyword: string
           niche_cluster_id?: string | null
+          normalization_generation?: number
           normalized_exact_keyword: string
           preliminary_score?: number | null
           preliminary_score_components?: Json | null
@@ -732,6 +883,7 @@ export type Database = {
           import_run_id?: string
           keyword?: string
           niche_cluster_id?: string | null
+          normalization_generation?: number
           normalized_exact_keyword?: string
           preliminary_score?: number | null
           preliminary_score_components?: Json | null
@@ -921,6 +1073,63 @@ export type Database = {
         }
         Relationships: []
       }
+      market_snapshots: {
+        Row: {
+          candidate_id: string | null
+          captured_at: string
+          confidence: number
+          created_at: string
+          estimated_market_sales: number | null
+          id: string
+          metrics: Json
+          niche_cluster_id: string | null
+          observed_sample_sales: number
+          sample_product_family_count: number
+          source_endpoint_set: Json
+        }
+        Insert: {
+          candidate_id?: string | null
+          captured_at?: string
+          confidence?: number
+          created_at?: string
+          estimated_market_sales?: number | null
+          id?: string
+          metrics?: Json
+          niche_cluster_id?: string | null
+          observed_sample_sales?: number
+          sample_product_family_count?: number
+          source_endpoint_set?: Json
+        }
+        Update: {
+          candidate_id?: string | null
+          captured_at?: string
+          confidence?: number
+          created_at?: string
+          estimated_market_sales?: number | null
+          id?: string
+          metrics?: Json
+          niche_cluster_id?: string | null
+          observed_sample_sales?: number
+          sample_product_family_count?: number
+          source_endpoint_set?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "market_snapshots_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "market_snapshots_niche_cluster_id_fkey"
+            columns: ["niche_cluster_id"]
+            isOneToOne: false
+            referencedRelation: "niche_clusters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       niche_cluster_keywords: {
         Row: {
           created_at: string
@@ -958,37 +1167,323 @@ export type Database = {
         Row: {
           aliases: Json
           canonical_english: string | null
+          canonical_key: string
           canonical_name: string
           catalog_phrases: Json
           created_at: string
           id: string
           state: string
-          canonical_key: string
           updated_at: string
         }
         Insert: {
           aliases?: Json
           canonical_english?: string | null
+          canonical_key: string
           canonical_name: string
           catalog_phrases?: Json
           created_at?: string
           id?: string
           state?: string
-          canonical_key: string
           updated_at?: string
         }
         Update: {
           aliases?: Json
           canonical_english?: string | null
+          canonical_key?: string
           canonical_name?: string
           catalog_phrases?: Json
           created_at?: string
           id?: string
           state?: string
-          canonical_key?: string
           updated_at?: string
         }
         Relationships: []
+      }
+      notifications: {
+        Row: {
+          attempts: number
+          candidate_id: string | null
+          created_at: string
+          delivered_at: string | null
+          event_type: string
+          id: string
+          idempotency_key: string
+          last_error: string | null
+          locale: string
+          payload: Json
+          research_run_id: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          event_type: string
+          id?: string
+          idempotency_key: string
+          last_error?: string | null
+          locale?: string
+          payload?: Json
+          research_run_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          event_type?: string
+          id?: string
+          idempotency_key?: string
+          last_error?: string | null
+          locale?: string
+          payload?: Json
+          research_run_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_research_run_id_fkey"
+            columns: ["research_run_id"]
+            isOneToOne: false
+            referencedRelation: "research_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_families: {
+        Row: {
+          created_at: string
+          id: string
+          niche_cluster_id: string | null
+          observed_monthly_revenue: number | null
+          observed_monthly_units: number | null
+          parent_key: string
+          quality_notes: Json
+          updated_at: string
+          variant_count: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          observed_monthly_revenue?: number | null
+          observed_monthly_units?: number | null
+          parent_key: string
+          quality_notes?: Json
+          updated_at?: string
+          variant_count?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          observed_monthly_revenue?: number | null
+          observed_monthly_units?: number | null
+          parent_key?: string
+          quality_notes?: Json
+          updated_at?: string
+          variant_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_families_niche_cluster_id_fkey"
+            columns: ["niche_cluster_id"]
+            isOneToOne: false
+            referencedRelation: "niche_clusters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      products: {
+        Row: {
+          asin: string
+          attributes: Json
+          brand: string | null
+          created_at: string
+          id: string
+          niche_cluster_id: string | null
+          parent_asin: string | null
+          price: number | null
+          product_family_id: string
+          rating: number | null
+          reviews: number | null
+          seller_type: string | null
+          title: string | null
+        }
+        Insert: {
+          asin: string
+          attributes?: Json
+          brand?: string | null
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          parent_asin?: string | null
+          price?: number | null
+          product_family_id: string
+          rating?: number | null
+          reviews?: number | null
+          seller_type?: string | null
+          title?: string | null
+        }
+        Update: {
+          asin?: string
+          attributes?: Json
+          brand?: string | null
+          created_at?: string
+          id?: string
+          niche_cluster_id?: string | null
+          parent_asin?: string | null
+          price?: number | null
+          product_family_id?: string
+          rating?: number | null
+          reviews?: number | null
+          seller_type?: string | null
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "products_niche_cluster_id_fkey"
+            columns: ["niche_cluster_id"]
+            isOneToOne: false
+            referencedRelation: "niche_clusters"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "products_product_family_id_fkey"
+            columns: ["product_family_id"]
+            isOneToOne: false
+            referencedRelation: "product_families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      provider_attempt_events: {
+        Row: {
+          adapter: string | null
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          attempt_id: string
+          attempt_sequence: number
+          auth_generation: number
+          billing_type: string
+          consumption_status: string | null
+          created_at: string
+          detected_at: string | null
+          event_id: string
+          event_type: string
+          execution_fingerprint: string
+          fallback_parent_attempt_id: string | null
+          finished_at: string | null
+          input_tokens: number | null
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+          latency_ms: number | null
+          logical_analysis_id: string
+          model_id: string
+          output_tokens: number | null
+          probe_generation: number | null
+          proof_category: string | null
+          provider_id: string
+          provider_request_count: number | null
+          request_count: number
+          result_class: string | null
+          role: string
+          safe_metadata: Json
+          settings_revision: number
+          started_at: string
+        }
+        Insert: {
+          adapter?: string | null
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          attempt_id: string
+          attempt_sequence: number
+          auth_generation: number
+          billing_type: string
+          consumption_status?: string | null
+          created_at?: string
+          detected_at?: string | null
+          event_id?: string
+          event_type: string
+          execution_fingerprint: string
+          fallback_parent_attempt_id?: string | null
+          finished_at?: string | null
+          input_tokens?: number | null
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+          latency_ms?: number | null
+          logical_analysis_id: string
+          model_id: string
+          output_tokens?: number | null
+          probe_generation?: number | null
+          proof_category?: string | null
+          provider_id: string
+          provider_request_count?: number | null
+          request_count: number
+          result_class?: string | null
+          role: string
+          safe_metadata?: Json
+          settings_revision: number
+          started_at?: string
+        }
+        Update: {
+          adapter?: string | null
+          analysis_lease_epoch?: number
+          analysis_lease_owner?: string
+          attempt_id?: string
+          attempt_sequence?: number
+          auth_generation?: number
+          billing_type?: string
+          consumption_status?: string | null
+          created_at?: string
+          detected_at?: string | null
+          event_id?: string
+          event_type?: string
+          execution_fingerprint?: string
+          fallback_parent_attempt_id?: string | null
+          finished_at?: string | null
+          input_tokens?: number | null
+          job_id?: string
+          job_lease_epoch?: number
+          job_lease_owner?: string
+          latency_ms?: number | null
+          logical_analysis_id?: string
+          model_id?: string
+          output_tokens?: number | null
+          probe_generation?: number | null
+          proof_category?: string | null
+          provider_id?: string
+          provider_request_count?: number | null
+          request_count?: number
+          result_class?: string | null
+          role?: string
+          safe_metadata?: Json
+          settings_revision?: number
+          started_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "provider_attempt_events_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       provider_secrets: {
         Row: {
@@ -1097,6 +1592,121 @@ export type Database = {
           },
         ]
       }
+      research_runs: {
+        Row: {
+          checkpoint: Json
+          completed_at: string | null
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          id: string
+          idempotency_key: string
+          locale: string
+          logical_run_date: string
+          mode: string
+          selected_candidate_ids: Json
+          source: string
+          started_at: string | null
+          status: string
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          checkpoint?: Json
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key: string
+          locale?: string
+          logical_run_date: string
+          mode?: string
+          selected_candidate_ids?: Json
+          source: string
+          started_at?: string | null
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Update: {
+          checkpoint?: Json
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key?: string
+          locale?: string
+          logical_run_date?: string
+          mode?: string
+          selected_candidate_ids?: Json
+          source?: string
+          started_at?: string | null
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      risks: {
+        Row: {
+          candidate_id: string
+          code: string
+          created_at: string
+          detail: string
+          id: string
+        }
+        Insert: {
+          candidate_id: string
+          code: string
+          created_at?: string
+          detail: string
+          id?: string
+        }
+        Update: {
+          candidate_id?: string
+          code?: string
+          created_at?: string
+          detail?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "risks_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scheduled_run_locks: {
+        Row: {
+          created_at: string
+          research_run_id: string
+          run_date: string
+        }
+        Insert: {
+          created_at?: string
+          research_run_id: string
+          run_date: string
+        }
+        Update: {
+          created_at?: string
+          research_run_id?: string
+          run_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scheduled_run_locks_research_run_id_fkey"
+            columns: ["research_run_id"]
+            isOneToOne: true
+            referencedRelation: "research_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       score_history: {
         Row: {
           candidate_id: string
@@ -1138,376 +1748,58 @@ export type Database = {
           },
         ]
       }
-      candidate_evidence: {
-        Row: {
-          candidate_id: string
-          created_at: string
-          id: string
-          kind: string
-          payload: Json
-        }
-        Insert: {
-          candidate_id: string
-          created_at?: string
-          id?: string
-          kind: string
-          payload?: Json
-        }
-        Update: {
-          candidate_id?: string
-          created_at?: string
-          id?: string
-          kind?: string
-          payload?: Json
-        }
-        Relationships: []
-      }
-      market_snapshots: {
-        Row: {
-          candidate_id: string | null
-          captured_at: string
-          confidence: number
-          created_at: string
-          estimated_market_sales: number | null
-          id: string
-          metrics: Json
-          niche_cluster_id: string | null
-          observed_sample_sales: number
-          sample_product_family_count: number
-          source_endpoint_set: Json
-        }
-        Insert: {
-          candidate_id?: string | null
-          captured_at?: string
-          confidence?: number
-          created_at?: string
-          estimated_market_sales?: number | null
-          id?: string
-          metrics?: Json
-          niche_cluster_id?: string | null
-          observed_sample_sales?: number
-          sample_product_family_count?: number
-          source_endpoint_set?: Json
-        }
-        Update: {
-          candidate_id?: string | null
-          captured_at?: string
-          confidence?: number
-          created_at?: string
-          estimated_market_sales?: number | null
-          id?: string
-          metrics?: Json
-          niche_cluster_id?: string | null
-          observed_sample_sales?: number
-          sample_product_family_count?: number
-          source_endpoint_set?: Json
-        }
-        Relationships: []
-      }
-      product_families: {
-        Row: {
-          created_at: string
-          id: string
-          niche_cluster_id: string | null
-          observed_monthly_revenue: number | null
-          observed_monthly_units: number | null
-          parent_key: string
-          quality_notes: Json
-          updated_at: string
-          variant_count: number
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          niche_cluster_id?: string | null
-          observed_monthly_revenue?: number | null
-          observed_monthly_units?: number | null
-          parent_key: string
-          quality_notes?: Json
-          updated_at?: string
-          variant_count?: number
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          niche_cluster_id?: string | null
-          observed_monthly_revenue?: number | null
-          observed_monthly_units?: number | null
-          parent_key?: string
-          quality_notes?: Json
-          updated_at?: string
-          variant_count?: number
-        }
-        Relationships: []
-      }
-      products: {
-        Row: {
-          asin: string
-          attributes: Json
-          brand: string | null
-          created_at: string
-          id: string
-          niche_cluster_id: string | null
-          parent_asin: string | null
-          price: number | null
-          product_family_id: string
-          rating: number | null
-          reviews: number | null
-          seller_type: string | null
-          title: string | null
-        }
-        Insert: {
-          asin: string
-          attributes?: Json
-          brand?: string | null
-          created_at?: string
-          id?: string
-          niche_cluster_id?: string | null
-          parent_asin?: string | null
-          price?: number | null
-          product_family_id: string
-          rating?: number | null
-          reviews?: number | null
-          seller_type?: string | null
-          title?: string | null
-        }
-        Update: {
-          asin?: string
-          attributes?: Json
-          brand?: string | null
-          created_at?: string
-          id?: string
-          niche_cluster_id?: string | null
-          parent_asin?: string | null
-          price?: number | null
-          product_family_id?: string
-          rating?: number | null
-          reviews?: number | null
-          seller_type?: string | null
-          title?: string | null
-        }
-        Relationships: []
-      }
-      risks: {
-        Row: {
-          candidate_id: string
-          code: string
-          created_at: string
-          detail: string
-          id: string
-        }
-        Insert: {
-          candidate_id: string
-          code: string
-          created_at?: string
-          detail: string
-          id?: string
-        }
-        Update: {
-          candidate_id?: string
-          code?: string
-          created_at?: string
-          detail?: string
-          id?: string
-        }
-        Relationships: []
-      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      acquire_admin_login_scrypt: {
+        Args: { lease_seconds: number; lock_owner: string }
+        Returns: boolean
+      }
+      advance_daily_research_checkpoint: {
+        Args: {
+          next_checkpoint: Json
+          next_completed_at: string
+          next_status: string
+          run_id: string
+        }
+        Returns: boolean
+      }
       authorize_api_call: {
         Args: {
-          purpose: string
-          estimated_calls: number
-          request_cache_key: string
-          endpoint: string
           daily_limit: number
-          reserved_limit: number
+          endpoint: string
+          estimated_calls: number
+          purpose: string
           request_budget_date?: string
+          request_cache_key: string
+          reserved_limit: number
         }
         Returns: {
-          decision_kind: string
           cache_key: string
-          remaining: number | null
+          decision_kind: string
+          remaining: number
         }[]
       }
       authorize_owned_api_call: {
         Args: {
-          request_cache_key: string
           claim_owner: string
-          purpose: string
-          estimated_calls: number
-          endpoint: string
           daily_limit: number
-          reserved_limit: number
+          endpoint: string
+          estimated_calls: number
+          purpose: string
           request_budget_date?: string
+          request_cache_key: string
+          reserved_limit: number
         }
         Returns: {
-          decision_kind: string
           cache_key: string
-          remaining: number | null
-        }[]
-      }
-      claim_api_call: {
-
-        Args: {
-          request_cache_key: string
-          claim_owner: string
-          lease_seconds: number
-        }
-        Returns: {
           decision_kind: string
-          claimed_cache_key: string
+          remaining: number
         }[]
       }
-
-      complete_api_call_claim: {
-        Args: {
-          request_cache_key: string
-          claim_owner: string
-        }
-        Returns: boolean
-      }
-      mark_api_call_reserved: {
-        Args: {
-          request_cache_key: string
-          request_budget_date: string
-        }
-        Returns: boolean
-      }
-      stage_api_call_response: {
-        Args: {
-          request_cache_key: string
-          claim_owner: string
-          response: Json
-        }
-        Returns: boolean
-      }
-      record_api_usage_for_claim: {
-        Args: {
-          request_cache_key: string
-          claim_owner: string
-          usage_endpoint: string
-          usage_purpose: string
-          usage_http_status: number
-          usage_call_count: number
-          usage_retry_count: number
-          usage_cached: boolean
-          usage_success: boolean
-          usage_candidate_id: string
-          usage_budget_date: string
-        }
-        Returns: boolean
-      }
-
-
-      claim_ai_analysis: {
-        Args: {
-          analysis_role: string
-          analysis_input_hash: string
-          worker_id: string
-          lease_seconds: number
-          provider_id: string
-          model_id: string
-          analysis_locale: string
-          prompt_version: string
-          input_payload: Json
-        }
-        Returns: {
-          analysis_id: string
-          claim_status: string
-          output: Json | null
-          usage: Json | null
-        }[]
-      }
-      complete_ai_analysis: {
-        Args: {
-          analysis_id: string
-          worker_id: string
-          analysis_output: Json
-          analysis_usage: Json
-          cost_class: string
-          completed_at: string
-        }
-        Returns: boolean
-      }
-      fail_ai_analysis: {
-        Args: {
-          analysis_id: string
-          worker_id: string
-          error_code: string
-          retry_at: string
-        }
-        Returns: boolean
-      }
-      renew_ai_analysis_lease: {
-        Args: {
-          analysis_id: string
-          worker_id: string
-          lease_seconds: number
-        }
-        Returns: boolean
-      }
-      upsert_niche_cluster: {
-        Args: {
-          canonical_key: string
-          canonical_name: string
-          canonical_english: string | null
-          aliases: Json
-          catalog_phrases: Json
-          cluster_state: string
-        }
-        Returns: string
-      }
-      save_ai_provider_settings: {
-        Args: {
-          provider_row: Json
-          secret_row: Json | null
-          models: Json | null
-          reconcile_mode: string
-          model_status?: Json
-          expected_revision?: number | null
-        }
-        Returns: Json
-      }
-      record_ai_provider_execution_probe: {
-        Args: {
-          provider_id: string
-          expected_fingerprint: string
-          probe: Json
-        }
-        Returns: boolean
-      }
-      consume_admin_login_attempt: {
-        Args: {
-          max_attempts: number
-          window_seconds: number
-        }
-        Returns: boolean
-      }
-      acquire_admin_login_scrypt: {
-        Args: {
-          lock_owner: string
-          lease_seconds: number
-        }
-        Returns: boolean
-      }
-      release_admin_login_scrypt: {
-        Args: {
-          lock_owner: string
-        }
-        Returns: boolean
-      }
-      record_failed_ai_usage: {
-        Args: {
-          analysis_id: string
-          worker_id: string
-          analysis_usage: Json
-        }
-        Returns: boolean
-      }
+      canonical_niche_key: { Args: { value: string }; Returns: string }
       checkpoint_job: {
         Args: {
           checkpoint: Json
@@ -1516,6 +1808,36 @@ export type Database = {
           worker_id: string
         }
         Returns: boolean
+      }
+      claim_ai_analysis: {
+        Args: {
+          analysis_input_hash: string
+          analysis_locale: string
+          analysis_role: string
+          input_payload: Json
+          lease_seconds: number
+          model_id: string
+          prompt_version: string
+          provider_id: string
+          worker_id: string
+        }
+        Returns: {
+          analysis_id: string
+          claim_status: string
+          output: Json
+          usage: Json
+        }[]
+      }
+      claim_api_call: {
+        Args: {
+          claim_owner: string
+          lease_seconds: number
+          request_cache_key: string
+        }
+        Returns: {
+          claimed_cache_key: string
+          decision_kind: string
+        }[]
       }
       claim_jobs: {
         Args: { job_limit: number; lease_seconds: number; worker_id: string }
@@ -1543,8 +1865,36 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      complete_ai_analysis: {
+        Args: {
+          analysis_id: string
+          analysis_output: Json
+          analysis_usage: Json
+          completed_at: string
+          cost_class: string
+          worker_id: string
+        }
+        Returns: boolean
+      }
+      complete_api_call_claim: {
+        Args: { claim_owner: string; request_cache_key: string }
+        Returns: boolean
+      }
       complete_job: {
         Args: { checkpoint: Json; job_id: string; worker_id: string }
+        Returns: boolean
+      }
+      consume_admin_login_attempt: {
+        Args: { max_attempts: number; window_seconds: number }
+        Returns: boolean
+      }
+      fail_ai_analysis: {
+        Args: {
+          analysis_id: string
+          error_code: string
+          retry_at: string
+          worker_id: string
+        }
         Returns: boolean
       }
       fail_job: {
@@ -1561,6 +1911,14 @@ export type Database = {
         Args: { job_id: string; lease_seconds: number; worker_id: string }
         Returns: boolean
       }
+      jsonb_text_array_union: {
+        Args: { left_value: Json; right_value: Json }
+        Returns: Json
+      }
+      mark_api_call_reserved: {
+        Args: { request_budget_date: string; request_cache_key: string }
+        Returns: boolean
+      }
       publish_daily_research_plan: {
         Args: {
           plan_candidate_ids: Json
@@ -1570,14 +1928,63 @@ export type Database = {
         }
         Returns: boolean
       }
-      advance_daily_research_checkpoint: {
+      record_ai_provider_execution_probe: {
+        Args: { expected_fingerprint: string; probe: Json; provider_id: string }
+        Returns: boolean
+      }
+      record_api_usage_for_claim: {
         Args: {
-          next_checkpoint: Json
-          next_completed_at: string | null
-          next_status: string
-          run_id: string
+          claim_owner: string
+          request_cache_key: string
+          usage_budget_date: string
+          usage_cached: boolean
+          usage_call_count: number
+          usage_candidate_id: string
+          usage_endpoint: string
+          usage_http_status: number
+          usage_purpose: string
+          usage_retry_count: number
+          usage_success: boolean
         }
         Returns: boolean
+      }
+      record_failed_ai_usage: {
+        Args: { analysis_id: string; analysis_usage: Json; worker_id: string }
+        Returns: boolean
+      }
+      release_admin_login_scrypt: {
+        Args: { lock_owner: string }
+        Returns: boolean
+      }
+      renew_ai_analysis_lease: {
+        Args: { analysis_id: string; lease_seconds: number; worker_id: string }
+        Returns: boolean
+      }
+      save_ai_provider_settings: {
+        Args: {
+          expected_revision?: number
+          model_status?: Json
+          models: Json
+          provider_row: Json
+          reconcile_mode: string
+          secret_row: Json
+        }
+        Returns: Json
+      }
+      stage_api_call_response: {
+        Args: { claim_owner: string; request_cache_key: string; response: Json }
+        Returns: boolean
+      }
+      upsert_niche_cluster: {
+        Args: {
+          aliases: Json
+          canonical_english: string
+          canonical_key: string
+          canonical_name: string
+          catalog_phrases: Json
+          cluster_state: string
+        }
+        Returns: string
       }
     }
     Enums: {
