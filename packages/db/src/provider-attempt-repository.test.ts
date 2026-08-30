@@ -93,8 +93,8 @@ describe('provider attempt repository', () => {
 
   // Break: reconciliation drops valid nullable UUID evidence or trusts malformed values.
   it('parses valid reconciliation UUIDs and explicit nulls', async () => {
-    const pendingWinnerAttemptId = '00000000-0000-4000-8000-000000000003';
-    const fallbackParentAttemptId = '00000000-0000-4000-8000-000000000004';
+    const pendingWinnerAttemptId = '00000000-0000-4000-8000-0000000000AB';
+    const fallbackParentAttemptId = '00000000-0000-8000-B000-0000000000CD';
     const repository = createProviderAttemptRepository(clientWith({
       attempted_provider_ids: ['codex-subscription'],
       pending_winner_attempt_id: pendingWinnerAttemptId,
@@ -122,6 +122,11 @@ describe('provider attempt repository', () => {
   // Break: malformed pending-winner evidence crosses the repository boundary as trusted state.
   it.each([
     ['not-a-uuid'],
+    [''],
+    ['00000000-0000-4000'],
+    ['00000000-0000-0000-0000-000000000003'],
+    ['00000000-0000-0000-8000-000000000003'],
+    ['00000000-0000-4000-7000-000000000003'],
     [42],
     [true],
     [{ attemptId: '00000000-0000-4000-8000-000000000003' }],
@@ -141,6 +146,11 @@ describe('provider attempt repository', () => {
   // Break: malformed fallback-parent evidence crosses the repository boundary as trusted state.
   it.each([
     ['not-a-uuid'],
+    [''],
+    ['00000000-0000-4000'],
+    ['00000000-0000-0000-0000-000000000003'],
+    ['00000000-0000-0000-8000-000000000003'],
+    ['00000000-0000-4000-7000-000000000003'],
     [42],
     [false],
     [{ attemptId: '00000000-0000-4000-8000-000000000004' }],
