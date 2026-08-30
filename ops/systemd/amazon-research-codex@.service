@@ -52,6 +52,7 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 InaccessiblePaths=/opt/amazon-research/current /etc/amazon-research /home /root
 ReadWritePaths=/var/lib/amazon-research/subscription/codex /run/amazon-research/subscription/codex/%i
+ReadOnlyPaths=/run/amazon-research/subscription/codex/.approved/%i
 NoExecPaths=/
 ExecPaths=/usr/bin/node /usr/bin/systemd-notify /usr/local/libexec/amazon-research/subscription-supervisor.mjs /usr/local/libexec/amazon-research/codex-subscription-client
 TasksMax=16

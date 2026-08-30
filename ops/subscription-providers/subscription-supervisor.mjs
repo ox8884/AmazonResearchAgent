@@ -1,76 +1,181 @@
 import { constants } from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
-import { open, rename, stat } from 'node:fs/promises';
+import { open, rename, unlink } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const REQUEST_MAX = 256 * 1024;
 const RESULT_MAX = 2 * 1024 * 1024;
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
+const REQUEST_KEYS = Object.freeze([
+  'adapter',
+  'attemptId',
+  'inputHash',
+  'locale',
+  'modelId',
+  'profileId',
+  'prompt',
+  'role',
+  'version'
+]);
 const CLIENTS = Object.freeze({
   codex: Object.freeze({
     executable: '/usr/local/libexec/amazon-research/codex-subscription-client',
-    args: Object.freeze(['--fixed-profile', 'codex-subscription-v1'])
+    args: Object.freeze(['--fixed-profile', 'codex-subscription-v1']),
+    profileId: 'codex-subscription-v1',
+    modelId: 'gpt-5.6'
   }),
   grok: Object.freeze({
     executable: '/usr/local/libexec/amazon-research/grok-subscription-client',
-    args: Object.freeze(['--fixed-profile', 'grok-subscription-v1'])
+    args: Object.freeze(['--fixed-profile', 'grok-subscription-v1']),
+    profileId: 'grok-subscription-v1',
+    modelId: null
   })
 });
 
-function fail(message) {
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
+function modeBits(mode) {
+  return mode & 0o7777;
 }
 
-function invocation(adapter, instance) {
+function numericIdentity(value, name) {
+  if (!/^(0|[1-9][0-9]*)$/u.test(value ?? '')) {
+    throw new TypeError(`Invalid ${name}.`);
+  }
+  return Number(value);
+}
+
+function runtimeRoot() {
+  const override = process.env.NODE_ENV === 'test'
+    ? process.env.ARA_SUBSCRIPTION_RUNTIME_ROOT
+    : undefined;
+  const root = override ?? '/run/amazon-research/subscription';
+  if (!isAbsolute(root)) throw new TypeError('Subscription runtime root must be absolute.');
+  return root;
+}
+
+function expectedApprovedUid() {
+  return process.env.NODE_ENV === 'test'
+    ? numericIdentity(
+      process.env.ARA_TEST_APPROVED_UID ?? String(process.getuid?.() ?? 0),
+      'test approved uid'
+    )
+    : 0;
+}
+
+function fixedPaths(adapter, instance) {
   if (!(adapter in CLIENTS) || !UUID_PATTERN.test(instance)) {
     throw new TypeError('Invalid fixed adapter invocation identity.');
   }
-  return `/run/amazon-research/subscription/${adapter}/${instance}`;
+  const adapterRoot = join(runtimeRoot(), adapter);
+  return Object.freeze({
+    invocation: join(adapterRoot, instance),
+    approved: join(adapterRoot, '.approved', instance)
+  });
 }
 
-async function readBoundedJson(path, maximumBytes) {
-  const before = await stat(path, { bigint: false });
-  if (!before.isFile() || before.size > maximumBytes) {
-    throw new TypeError('Invalid bounded protocol object.');
+function descriptorPath(directory, fileName) {
+  return process.platform === 'linux'
+    ? `/proc/self/fd/${directory.fd}/${fileName}`
+    : join(directory.path, fileName);
+}
+
+function verifyIdentity(info, expected) {
+  if (!info.isDirectory() && !info.isFile()) {
+    throw new TypeError('Protocol object has an invalid type.');
   }
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  if (process.platform !== 'win32') {
+    if (expected.uid !== undefined && info.uid !== expected.uid) {
+      throw new TypeError('Protocol object has an invalid owner.');
+    }
+    if (expected.gid !== undefined && info.gid !== expected.gid) {
+      throw new TypeError('Protocol object has an invalid group.');
+    }
+    if (modeBits(info.mode) !== expected.mode) {
+      throw new TypeError('Protocol object has an invalid mode.');
+    }
+  }
+}
+
+async function openPinnedDirectory(path, expected) {
+  const handle = await open(path, constants.O_RDONLY | DIRECTORY | NO_FOLLOW);
   try {
-    const current = await handle.stat();
-    if (!current.isFile() || current.size > maximumBytes) {
+    const info = await handle.stat();
+    if (!info.isDirectory()) throw new TypeError('Protocol directory is not a directory.');
+    verifyIdentity(info, expected);
+    return { path, fd: handle.fd, handle, info };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readPinnedJson(directory, fileName, maximumBytes, expected) {
+  const handle = await open(
+    descriptorPath(directory, fileName),
+    constants.O_RDONLY | NO_FOLLOW
+  );
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > maximumBytes) {
       throw new TypeError('Invalid bounded protocol object.');
     }
-    return JSON.parse((await handle.readFile()).toString('utf8'));
+    verifyIdentity(info, expected);
+    const payload = await handle.readFile();
+    if (payload.byteLength > maximumBytes) {
+      throw new TypeError('Invalid bounded protocol object.');
+    }
+    return { payload, value: JSON.parse(payload.toString('utf8')) };
   } finally {
     await handle.close();
   }
 }
 
+async function syncDirectory(directory) {
+  try {
+    await directory.handle.sync();
+  } catch (error) {
+    if (
+      process.platform !== 'win32' ||
+      !(error instanceof Error) ||
+      !('code' in error) ||
+      error.code !== 'EPERM'
+    ) {
+      throw error;
+    }
+  }
+}
+
 function validateRequest(request, adapter, instance) {
+  const profile = CLIENTS[adapter];
+  const keys = request !== null && typeof request === 'object' && !Array.isArray(request)
+    ? Object.keys(request).sort()
+    : [];
   if (
-    request === null || typeof request !== 'object' || Array.isArray(request) ||
+    profile === undefined || profile.modelId === null ||
+    keys.length !== REQUEST_KEYS.length ||
+    !keys.every((key, index) => key === REQUEST_KEYS[index]) ||
     request.version !== 1 || request.adapter !== adapter || request.attemptId !== instance ||
-    request.role !== 'niche_normalization' || typeof request.profileId !== 'string' ||
-    typeof request.modelId !== 'string' || typeof request.locale !== 'string' ||
-    typeof request.prompt !== 'string' || typeof request.inputHash !== 'string' ||
-    !/^[0-9a-f]{64}$/u.test(request.inputHash) || request.prompt.length > 200000
+    request.profileId !== profile.profileId || request.modelId !== profile.modelId ||
+    request.role !== 'niche_normalization' ||
+    typeof request.locale !== 'string' || request.locale.length < 1 || request.locale.length > 20 ||
+    typeof request.prompt !== 'string' || request.prompt.length > 200_000 ||
+    typeof request.inputHash !== 'string' || !/^[0-9a-f]{64}$/u.test(request.inputHash)
   ) {
     throw new TypeError('Request envelope failed fixed validation.');
   }
 }
 
-async function atomicResult(directory, result) {
-  const payload = Buffer.from(JSON.stringify(result), 'utf8');
-  if (payload.byteLength > RESULT_MAX) {
-    throw new RangeError('Result envelope exceeds fixed limit.');
-  }
-  const temporary = `${directory}/result.tmp`;
-  const final = `${directory}/result.json`;
+async function writePinnedFile(directory, temporaryName, finalName, payload, mode) {
+  const temporary = descriptorPath(directory, temporaryName);
+  const final = descriptorPath(directory, finalName);
   const handle = await open(
     temporary,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
-    0o640
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW,
+    mode
   );
   try {
     await handle.writeFile(payload);
@@ -79,12 +184,65 @@ async function atomicResult(directory, result) {
     await handle.close();
   }
   await rename(temporary, final);
-  const parent = await open(directory, constants.O_RDONLY);
+  await syncDirectory(directory);
+}
+
+async function approveRequest(adapter, instance, approvedGid) {
+  const paths = fixedPaths(adapter, instance);
+  const invocation = await openPinnedDirectory(paths.invocation, { mode: 0o2770 });
+  let approved;
   try {
-    await parent.sync();
+    const source = await readPinnedJson(invocation, 'request.json', REQUEST_MAX, {
+      uid: invocation.info.uid,
+      gid: invocation.info.gid,
+      mode: 0o640
+    });
+    validateRequest(source.value, adapter, instance);
+    approved = await openPinnedDirectory(paths.approved, {
+      uid: expectedApprovedUid(),
+      gid: approvedGid,
+      mode: 0o2550
+    });
+    await writePinnedFile(approved, 'request.tmp', 'request.json', source.payload, 0o440);
+    const sealed = await readPinnedJson(approved, 'request.json', REQUEST_MAX, {
+      uid: expectedApprovedUid(),
+      gid: approvedGid,
+      mode: 0o440
+    });
+    validateRequest(sealed.value, adapter, instance);
+    await unlink(descriptorPath(invocation, 'request.json'));
+    await syncDirectory(invocation);
   } finally {
-    await parent.close();
+    await approved?.handle.close().catch(() => undefined);
+    await invocation.handle.close().catch(() => undefined);
   }
+}
+
+async function readApprovedRequest(adapter, instance, approvedGid) {
+  const directory = await openPinnedDirectory(fixedPaths(adapter, instance).approved, {
+    uid: expectedApprovedUid(),
+    gid: approvedGid,
+    mode: 0o2550
+  });
+  try {
+    const request = await readPinnedJson(directory, 'request.json', REQUEST_MAX, {
+      uid: expectedApprovedUid(),
+      gid: approvedGid,
+      mode: 0o440
+    });
+    validateRequest(request.value, adapter, instance);
+    return request.value;
+  } finally {
+    await directory.handle.close();
+  }
+}
+
+async function atomicResult(directory, result) {
+  const payload = Buffer.from(JSON.stringify(result), 'utf8');
+  if (payload.byteLength > RESULT_MAX) {
+    throw new RangeError('Result envelope exceeds fixed limit.');
+  }
+  await writePinnedFile(directory, 'result.tmp', 'result.json', payload, 0o640);
 }
 
 async function notify(value) {
@@ -133,26 +291,27 @@ async function executeClient(adapter, request) {
   };
 }
 
-async function validateOnly(adapter, instance) {
-  const directory = invocation(adapter, instance);
-  const request = await readBoundedJson(`${directory}/request.json`, REQUEST_MAX);
-  validateRequest(request, adapter, instance);
-}
-
 async function main(adapter, instance) {
-  const directory = invocation(adapter, instance);
-  const request = await readBoundedJson(`${directory}/request.json`, REQUEST_MAX);
-  validateRequest(request, adapter, instance);
-  await notify('READY=1');
-  const execution = await executeClient(adapter, request);
-  await atomicResult(directory, {
-    version: 1,
-    adapter,
-    attemptId: instance,
-    outcome: execution.exit.code === 0 ? 'success' : 'failure',
-    rawOutput: execution.stdout,
-    clientExit: execution.exit
-  });
+  const approvedGid = process.env.NODE_ENV === 'test'
+    ? numericIdentity(process.env.ARA_TEST_APPROVED_GID ?? String(process.getgid?.() ?? 0), 'test approved gid')
+    : process.getgid();
+  if (approvedGid === undefined) throw new TypeError('Adapter group identity is unavailable.');
+  const request = await readApprovedRequest(adapter, instance, approvedGid);
+  const output = await openPinnedDirectory(fixedPaths(adapter, instance).invocation, { mode: 0o2770 });
+  try {
+    await notify('READY=1');
+    const execution = await executeClient(adapter, request);
+    await atomicResult(output, {
+      version: 1,
+      adapter,
+      attemptId: instance,
+      outcome: execution.exit.code === 0 ? 'success' : 'failure',
+      rawOutput: execution.stdout,
+      clientExit: execution.exit
+    });
+  } finally {
+    await output.handle.close();
+  }
   await notify('STATUS=result-published');
   const stopped = Promise.withResolvers();
   process.once('SIGTERM', stopped.resolve);
@@ -160,13 +319,28 @@ async function main(adapter, instance) {
   await stopped.promise;
 }
 
-const [mode, adapter, instance] = process.argv.slice(2);
-try {
-  if (mode === '--validate-request') {
-    await validateOnly(adapter, instance);
-  } else {
-    await main(mode, adapter);
+async function cli() {
+  const [mode, adapter, instance, identity] = process.argv.slice(2);
+  if (mode === '--approve-request') {
+    await approveRequest(adapter, instance, numericIdentity(identity, 'approved group identity'));
+    return;
   }
-} catch (error) {
-  fail(error instanceof Error ? error.message : 'Subscription supervisor failed.');
+  if (mode === '--validate-approved') {
+    const approvedGid = process.env.NODE_ENV === 'test'
+      ? numericIdentity(process.env.ARA_TEST_APPROVED_GID ?? String(process.getgid?.() ?? 0), 'test approved gid')
+      : process.getgid();
+    if (approvedGid === undefined) throw new TypeError('Adapter group identity is unavailable.');
+    await readApprovedRequest(adapter, instance, approvedGid);
+    return;
+  }
+  await main(mode, adapter);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await cli();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : 'Subscription supervisor failed.'}\n`);
+    process.exitCode = 1;
+  }
 }

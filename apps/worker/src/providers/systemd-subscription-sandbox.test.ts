@@ -1,8 +1,10 @@
-import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { chmod, lstat, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   SubscriptionSandboxController,
@@ -14,6 +16,11 @@ import { loadSubscriptionSandboxPolicy } from './subscription-sandbox-policy';
 
 const roots: string[] = [];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const execFileAsync = promisify(execFile);
+const supervisorPath = join(
+  repositoryRoot,
+  'ops/subscription-providers/subscription-supervisor.mjs'
+);
 
 function state(overrides: Partial<SubscriptionUnitState> = {}): SubscriptionUnitState {
   return {
@@ -355,6 +362,145 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
     await f.sandbox.run(f.profile, f.invocation, new AbortController().signal);
 
     expect(controller.events.slice(-4)).toEqual(['stop', 'kill-all', 'terminal', 'cgroup-empty']);
+  });
+});
+
+describe('subscription supervisor request boundary', () => {
+  type SupervisorFixture = {
+    readonly root: string;
+    readonly attemptId: string;
+    readonly invocation: string;
+    readonly approved: string;
+    readonly request: Readonly<Record<string, unknown>>;
+    readonly environment: NodeJS.ProcessEnv;
+  };
+
+  async function supervisorFixture(
+    overrides: Readonly<Record<string, unknown>> = {}
+  ): Promise<SupervisorFixture> {
+    const root = join(tmpdir(), `ara-supervisor-${randomUUID()}`);
+    roots.push(root);
+    const attemptId = randomUUID();
+    const adapterRoot = join(root, 'codex');
+    const invocation = join(adapterRoot, attemptId);
+    const approvedRoot = join(adapterRoot, '.approved');
+    const approved = join(approvedRoot, attemptId);
+    await mkdir(invocation, { recursive: true, mode: 0o2770 });
+    await chmod(invocation, 0o2770);
+    await mkdir(approved, { recursive: true, mode: 0o2550 });
+    await chmod(approvedRoot, 0o750);
+    await chmod(approved, 0o2550);
+    const request = {
+      version: 1,
+      adapter: 'codex',
+      profileId: 'codex-subscription-v1',
+      attemptId,
+      modelId: 'gpt-5.6',
+      role: 'niche_normalization',
+      locale: 'en',
+      prompt: 'normalize',
+      inputHash: 'a'.repeat(64),
+      ...overrides
+    };
+    await writeFile(join(invocation, 'request.json'), JSON.stringify(request), { mode: 0o640 });
+    await chmod(join(invocation, 'request.json'), 0o640);
+    const uid = String(process.getuid?.() ?? 0);
+    const gid = String(process.getgid?.() ?? 0);
+    return {
+      root,
+      attemptId,
+      invocation,
+      approved,
+      request,
+      environment: {
+        ...process.env,
+        NODE_ENV: 'test',
+        ARA_SUBSCRIPTION_RUNTIME_ROOT: root,
+        ARA_TEST_APPROVED_UID: uid,
+        ARA_TEST_APPROVED_GID: gid
+      }
+    };
+  }
+
+  async function approve(fixture: SupervisorFixture): Promise<void> {
+    await execFileAsync(process.execPath, [
+      supervisorPath,
+      '--approve-request',
+      'codex',
+      fixture.attemptId,
+      fixture.environment.ARA_TEST_APPROVED_GID ?? ''
+    ], { env: fixture.environment });
+  }
+
+  async function validateApproved(fixture: SupervisorFixture): Promise<void> {
+    await execFileAsync(process.execPath, [
+      supervisorPath,
+      '--validate-approved',
+      'codex',
+      fixture.attemptId
+    ], { env: fixture.environment });
+  }
+
+  it('seals and independently validates only the exact Codex request identity', async () => {
+    const fixture = await supervisorFixture();
+    await expect(approve(fixture)).resolves.toBeUndefined();
+    await expect(lstat(join(fixture.invocation, 'request.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(join(fixture.approved, 'request.json'), 'utf8'))).toEqual(fixture.request);
+    await expect(validateApproved(fixture)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['unknown key', { command: '/bin/sh' }],
+    ['wrong profile', { profileId: 'alternate-profile' }],
+    ['wrong model', { modelId: 'alternate-model' }]
+  ])('rejects %s before sealing', async (_name, overrides) => {
+    const fixture = await supervisorFixture(overrides);
+    await expect(approve(fixture)).rejects.toBeDefined();
+  });
+
+  it('rejects an oversized request object before sealing', async () => {
+    const fixture = await supervisorFixture({ prompt: 'x'.repeat(300_000) });
+    await expect(approve(fixture)).rejects.toBeDefined();
+  });
+
+  it('ignores source replacement between root approval and MAIN validation', async () => {
+    const fixture = await supervisorFixture();
+    await approve(fixture);
+    await writeFile(join(fixture.invocation, 'request.json'), JSON.stringify({ command: '/bin/sh' }));
+    await expect(validateApproved(fixture)).resolves.toBeUndefined();
+    expect(JSON.parse(await readFile(join(fixture.approved, 'request.json'), 'utf8'))).toEqual(fixture.request);
+  });
+
+  it('rejects a changed sealed request inode', async () => {
+    const fixture = await supervisorFixture();
+    await approve(fixture);
+    const path = join(fixture.approved, 'request.json');
+    await chmod(path, 0o640);
+    await writeFile(path, JSON.stringify({ ...fixture.request, profileId: 'alternate-profile' }));
+    await chmod(path, 0o440);
+    await expect(validateApproved(fixture)).rejects.toBeDefined();
+  });
+
+  it('rejects approved directory substitution', async () => {
+    const fixture = await supervisorFixture();
+    await approve(fixture);
+    const displaced = `${fixture.approved}-displaced`;
+    await rename(fixture.approved, displaced);
+    await mkdir(fixture.approved, { mode: 0o2550 });
+    await chmod(fixture.approved, 0o2550);
+    const path = join(fixture.approved, 'request.json');
+    await writeFile(path, JSON.stringify({ ...fixture.request, modelId: 'alternate-model' }), { mode: 0o440 });
+    await chmod(path, 0o440);
+    await expect(validateApproved(fixture)).rejects.toBeDefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects approved directory symlink substitution', async () => {
+    const fixture = await supervisorFixture();
+    await approve(fixture);
+    const displaced = `${fixture.approved}-displaced`;
+    await rename(fixture.approved, displaced);
+    await symlink(displaced, fixture.approved, 'dir');
+    await expect(validateApproved(fixture)).rejects.toBeDefined();
   });
 });
 
