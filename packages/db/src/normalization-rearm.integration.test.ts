@@ -73,6 +73,69 @@ async function seedCandidate(
   return candidateId;
 }
 
+type InvalidCanonicalPrestate = {
+  readonly label: string;
+  readonly keyGeneration: string;
+  readonly payloadGeneration: number;
+  readonly candidateGeneration: number;
+  readonly expectedError: RegExp;
+};
+
+async function expectCanonicalPrestateRejected(fixture: InvalidCanonicalPrestate): Promise<void> {
+  const sql = await provisionThrough021();
+  const legacyCandidateId = await seedCandidate(sql);
+  const canonicalCandidateId = await seedCandidate(sql);
+  await sql`
+    update candidates set normalization_generation = ${fixture.candidateGeneration}
+    where id = ${canonicalCandidateId}
+  `;
+  await sql`
+    insert into jobs (type, payload, status, idempotency_key) values
+    (
+      'NORMALIZE_OPPORTUNITIES',
+      ${sql.json({ candidateIds: [legacyCandidateId], locale: 'ko' })},
+      'queued', ${`normalize:${legacyCandidateId}`}
+    ),
+    (
+      'NORMALIZE_OPPORTUNITIES',
+      ${sql.json({
+        candidateIds: [canonicalCandidateId],
+        locale: 'ko',
+        normalizationGeneration: fixture.payloadGeneration
+      })},
+      'queued', ${`normalize:${canonicalCandidateId}:${fixture.keyGeneration}`}
+    )
+  `;
+  const before = await sql<{ idempotency_key: string; payload: unknown }[]>`
+    select idempotency_key, payload from jobs
+    where idempotency_key like ${`normalize:${legacyCandidateId}%`}
+       or idempotency_key like ${`normalize:${canonicalCandidateId}%`}
+    order by idempotency_key
+  `;
+
+  await expect(apply022(sql)).rejects.toThrow(fixture.expectedError);
+
+  const after = await sql<{ idempotency_key: string; payload: unknown }[]>`
+    select idempotency_key, payload from jobs
+    where idempotency_key like ${`normalize:${legacyCandidateId}%`}
+       or idempotency_key like ${`normalize:${canonicalCandidateId}%`}
+    order by idempotency_key
+  `;
+  expect(after).toEqual(before);
+  const [capability] = await sql<{ mode: string }[]>`
+    select mode from normalization_writer_capability
+  `;
+  expect(capability?.mode).toBe('legacy');
+  const [migrationColumn] = await sql<{ count: number }[]>`
+    select count(*)::integer as count from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'normalization_writer_capability'
+      and column_name = 'migration_identity'
+  `;
+  expect(migrationColumn?.count).toBe(0);
+  await sql.end();
+}
+
 
 async function seedReadyProvider(sql: ReturnType<typeof postgres>): Promise<{
   readonly providerId: string;
@@ -297,6 +360,83 @@ describe('normalization generation cutover', () => {
       select mode from normalization_writer_capability
     `;
     expect(capability?.mode).toBe('legacy');
+    await sql.end();
+  }, 60_000);
+
+  // Break: migration 022 accepts post-cutover generations or inconsistent canonical generation state.
+  it.each([
+    {
+      label: 'future generation one',
+      keyGeneration: '1',
+      payloadGeneration: 1,
+      candidateGeneration: 0,
+      expectedError: /canonical_payload_rejected/u
+    },
+    {
+      label: 'future generation seven',
+      keyGeneration: '7',
+      payloadGeneration: 7,
+      candidateGeneration: 0,
+      expectedError: /canonical_payload_rejected/u
+    },
+    {
+      label: 'candidate generation mismatch',
+      keyGeneration: '0',
+      payloadGeneration: 0,
+      candidateGeneration: 1,
+      expectedError: /canonical_payload_rejected/u
+    },
+    {
+      label: 'key and payload mismatch',
+      keyGeneration: '0',
+      payloadGeneration: 1,
+      candidateGeneration: 0,
+      expectedError: /canonical_payload_rejected/u
+    },
+    {
+      label: 'negative generation',
+      keyGeneration: '-1',
+      payloadGeneration: -1,
+      candidateGeneration: 0,
+      expectedError: /normalization_cutover_malformed/u
+    },
+    {
+      label: 'fractional generation',
+      keyGeneration: '0',
+      payloadGeneration: 0.5,
+      candidateGeneration: 0,
+      expectedError: /canonical_payload_rejected/u
+    },
+    {
+      label: 'unsafe integer generation',
+      keyGeneration: '9007199254740992',
+      payloadGeneration: 9_007_199_254_740_992,
+      candidateGeneration: 0,
+      expectedError: /canonical_payload_rejected/u
+    }
+  ] satisfies readonly InvalidCanonicalPrestate[])(
+    'rejects canonical prestate: $label',
+    expectCanonicalPrestateRejected,
+    60_000
+  );
+
+  // Break: exact canonical generation zero is rejected along with malformed prestates.
+  it('accepts exact canonical generation zero when candidate state agrees', async () => {
+    const sql = await provisionThrough021();
+    const candidateId = await seedCandidate(sql);
+    await sql`
+      insert into jobs (type, payload, status, idempotency_key)
+      values (
+        'NORMALIZE_OPPORTUNITIES',
+        ${sql.json({ candidateIds: [candidateId], locale: 'ko', normalizationGeneration: 0 })},
+        'queued', ${`normalize:${candidateId}:0`}
+      )
+    `;
+    await expect(apply022(sql)).resolves.toBeUndefined();
+    const [capability] = await sql<{ mode: string; migration_identity: string }[]>`
+      select mode, migration_identity from normalization_writer_capability
+    `;
+    expect(capability).toEqual({ mode: 'canonical', migration_identity: '202608290022' });
     await sql.end();
   }, 60_000);
 

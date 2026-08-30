@@ -86,6 +86,9 @@ begin
       or j.payload->'candidateIds'->>0 is distinct from split_part(j.idempotency_key, ':', 2)
       or jsonb_typeof(j.payload->'normalizationGeneration') <> 'number'
       or j.payload->>'normalizationGeneration' is distinct from split_part(j.idempotency_key, ':', 3)
+      or split_part(j.idempotency_key, ':', 3) <> '0'
+      or j.payload->>'normalizationGeneration' <> '0'
+      or c.normalization_generation <> 0
       or j.payload->>'locale' not in ('ko', 'en')
       or j.payload - array[
         'candidateIds', 'locale', 'normalizationGeneration', 'promptVersion'
