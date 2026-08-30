@@ -3,8 +3,12 @@ import {
   OpenAiHttpProvider,
   TEST_CONNECTION_REQUIRED,
   type AiProvider,
+  type AiProviderResult,
+  type AuthorizedSubscriptionRawRequest,
   type ProviderCatalog,
-  type ProviderCatalogEntry
+  type ProviderCatalogEntry,
+  type RawAiProviderResult,
+  type RouteSelection
 } from '@ara/ai-router';
 import {
   createProviderRepository,
@@ -35,6 +39,8 @@ import {
   type ProviderCapability,
   type SubscriptionAdapter
 } from '@ara/shared';
+import { KeywordNormalizationSchema, type KeywordNormalization } from '@ara/research-engine';
+import type { NormalizationExecutionTarget } from './normalization-execution-coordinator';
 
 import { resolveApprovedCommandProfile } from './command-profiles';
 import {
@@ -42,9 +48,20 @@ import {
   validateProviderBaseUrl
 } from './provider-url-policy';
 
+export interface SubscriptionExecutionAdapter {
+  readonly id: string;
+  readonly billingType: 'subscription';
+  health(): Promise<import('@ara/ai-router').ProviderHealth>;
+  listModels(): Promise<readonly AiModelDescriptor[]>;
+  runAuthorizedRaw(
+    request: AuthorizedSubscriptionRawRequest,
+    signal?: AbortSignal
+  ): Promise<RawAiProviderResult>;
+}
+
 export interface PersistedProviderCatalogOptions {
   readonly encryptionKey?: Buffer;
-  readonly subscriptionAdapters?: Partial<Record<SubscriptionAdapter, AiProvider>>;
+  readonly subscriptionAdapters?: Partial<Record<SubscriptionAdapter, SubscriptionExecutionAdapter>>;
   readonly runtimeRepository?: Pick<
     ProviderRuntimeRepository,
     'isRoutable' | 'expireReadyLease'
@@ -234,14 +251,26 @@ export async function loadPersistedProviderSnapshot(
     repository.findSecret(providerId),
     repository.listModels(providerId)
   ]);
+  let adapter: AiProvider;
+  if (provider.kind === 'subscription_command') {
+    if (provider.adapter !== 'codex' && provider.adapter !== 'grok') {
+      throw new ProviderCatalogError('Stored subscription adapter is invalid.');
+    }
+    const accepted = options.subscriptionAdapters?.[provider.adapter];
+    if (!accepted) {
+      throw new ProviderCatalogError('Subscription adapter is not activated.');
+    }
+    adapter = bindSubscriptionIdentity(provider.id, accepted);
+  } else {
+    adapter = await providerFromRow(provider, secret ?? undefined, options);
+  }
   return {
-    adapter: await providerFromRow(provider, secret ?? undefined, options),
+    adapter,
     provider,
     runtimeState,
     secret,
     models,
     fingerprint: fingerprintFromProviderConfig(
-
       provider.kind,
       provider.config,
       secretCipherId(secret)
@@ -309,7 +338,10 @@ function rolePriority(
   return result;
 }
 
-function bindProviderIdentity(providerId: string, adapter: AiProvider): AiProvider {
+function bindSubscriptionIdentity(
+  providerId: string,
+  adapter: SubscriptionExecutionAdapter
+): AiProvider {
   return {
     id: providerId,
     billingType: adapter.billingType,
@@ -317,9 +349,10 @@ function bindProviderIdentity(providerId: string, adapter: AiProvider): AiProvid
     async listModels() {
       return (await adapter.listModels()).map((model) => ({ ...model, providerId }));
     },
-    async runStructured(request) {
-      const result = await adapter.runStructured(request);
-      return { ...result, providerId };
+    async runStructured() {
+      throw new ProviderCatalogError(
+        'Subscription execution requires a durable provider-attempt authorization.'
+      );
     }
   };
 }
@@ -372,7 +405,7 @@ async function subscriptionCatalogEntry(
     await runtime.expireReadyLease(bindings);
     return null;
   }
-  const bound = bindProviderIdentity(provider.id, accepted);
+  const bound = bindSubscriptionIdentity(provider.id, accepted);
   const roles = configRoles(configRecord(provider.config));
   return {
     provider: bound,
@@ -445,6 +478,66 @@ async function catalogEntry(
     models: persistedModels,
     roles,
     rolePriority: rolePriority(roles, provider.priority)
+  };
+}
+
+export async function resolvePersistedNormalizationTarget(
+  client: QueueDatabaseClient,
+  selection: RouteSelection,
+  options: PersistedProviderCatalogOptions = {}
+): Promise<NormalizationExecutionTarget> {
+  const snapshot = await loadPersistedProviderSnapshot(client, selection.providerId, options);
+  if (!snapshot || snapshot.provider.id !== selection.providerId) {
+    throw new ProviderCatalogError('Routed provider snapshot is unavailable.');
+  }
+  const model = snapshot.models.find((candidate) => candidate.model_id === selection.model.id);
+  if (!model || !model.enabled || model.billing_type === 'payg') {
+    throw new ProviderCatalogError('Routed model is no longer eligible.');
+  }
+  if (snapshot.provider.kind === 'openai_http') {
+    return {
+      providerId: snapshot.provider.id,
+      modelId: model.model_id,
+      adapter: null,
+      expectedSettingsRevision: snapshot.provider.settings_revision,
+      expectedAuthGeneration: 0,
+      expectedExecutionFingerprint: snapshot.fingerprint,
+      execute: async (_attemptId, request) => snapshot.adapter.runStructured(request)
+    };
+  }
+  if (
+    snapshot.provider.kind !== 'subscription_command' ||
+    (snapshot.provider.adapter !== 'codex' && snapshot.provider.adapter !== 'grok') ||
+    snapshot.runtimeState === null
+  ) {
+    throw new ProviderCatalogError('Routed provider family is not executable for normalization.');
+  }
+  const adapter = options.subscriptionAdapters?.[snapshot.provider.adapter];
+  if (!adapter) throw new ProviderCatalogError('Subscription adapter is not activated.');
+  return {
+    providerId: snapshot.provider.id,
+    modelId: model.model_id,
+    adapter: snapshot.provider.adapter,
+    expectedSettingsRevision: snapshot.provider.settings_revision,
+    expectedAuthGeneration: snapshot.runtimeState.auth_generation,
+    expectedExecutionFingerprint: snapshot.runtimeState.execution_fingerprint,
+    async execute(attemptId, request, signal): Promise<AiProviderResult<KeywordNormalization>> {
+      const raw = await adapter.runAuthorizedRaw({
+        attemptId,
+        role: request.role,
+        modelId: request.modelId,
+        locale: request.locale,
+        prompt: request.prompt,
+        inputHash: request.inputHash,
+        schema: {},
+        isRepair: false
+      }, signal);
+      return {
+        ...raw,
+        providerId: snapshot.provider.id,
+        output: KeywordNormalizationSchema.parse(raw.rawOutput)
+      };
+    }
   };
 }
 

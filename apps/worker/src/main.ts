@@ -1,6 +1,7 @@
 import { hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
+  createProviderAttemptRepository,
   createProviderRuntimeRepository,
   createServerDatabaseClient
 } from '@ara/db';
@@ -17,11 +18,14 @@ import {
 } from './handlers';
 import {
   ProviderCatalogCache,
+  resolvePersistedNormalizationTarget,
   resolvePersistedProviderCatalog
 } from './providers/provider-catalog';
 import { AdapterSemaphoreRegistry } from './providers/adapter-semaphore';
 import type { JobHandlerOptions } from './handlers';
 import { ProviderSetupRequiredError } from './jobs/probe-ai-provider-readiness';
+import { NormalizationExecutionCoordinator } from './providers/normalization-execution-coordinator';
+import { assertNormalizationWriterCapability } from './normalization-writer-mode';
 const WORKER_PROCESS_COUNT = 1;
 const DISTRIBUTED_ADAPTER_COORDINATION = false;
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
@@ -276,11 +280,18 @@ export async function main(): Promise<void> {
     url: requiredEnvironment('SUPABASE_URL'),
     serviceRoleKey: requiredEnvironment('SUPABASE_SERVICE_ROLE_KEY')
   });
+  await assertNormalizationWriterCapability(client);
   const providerRuntime = createProviderRuntimeRepository(client);
   const providerCatalog = new ProviderCatalogCache(() =>
     resolvePersistedProviderCatalog(client, { runtimeRepository: providerRuntime })
   );
   const composition = createWorkerComposition();
+  const normalizationCoordinator = new NormalizationExecutionCoordinator({
+    attempts: createProviderAttemptRepository(client),
+    runtime: providerRuntime,
+    semaphores: composition.adapterSemaphores,
+    resolveTarget: (selection) => resolvePersistedNormalizationTarget(client, selection)
+  });
   const queue = createQueue(client);
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -293,6 +304,7 @@ export async function main(): Promise<void> {
       handlers: createJobHandlers(client, {
         ...composition.handlerOptions,
         providerRuntime,
+        normalizationCoordinator,
         resolveProviderProbe: async () => {
           throw new ProviderSetupRequiredError();
         },

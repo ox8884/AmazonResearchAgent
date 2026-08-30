@@ -7,7 +7,6 @@ import {
   LocaleSchema,
   LogicalRunDateSchema,
   ResearchSettingsSchema,
-  NormalizeOpportunitiesJobPayloadSchema,
   ScheduledMarketProbePayloadSchema,
   type DailyResearchCheckpoint,
   type DailyResearchJobPayload,
@@ -572,7 +571,6 @@ function childPayload(
 
 async function enqueueEligibleNormalizationJobs(
   client: QueueDatabaseClient,
-  queue: DailyResearchQueue,
   locale: Locale
 ): Promise<void> {
   const candidates = await collectDailyResearchPages((from, to) =>
@@ -585,14 +583,14 @@ async function enqueueEligibleNormalizationJobs(
       .range(from, to)
   );
   for (const candidate of candidates) {
-    await queue.enqueueJob({
-      type: 'NORMALIZE_OPPORTUNITIES',
-      payload: NormalizeOpportunitiesJobPayloadSchema.parse({
-        candidateIds: [candidate.id],
-        locale
-      }),
-      idempotencyKey: `normalize:${candidate.id}`
+    const { error } = await client.rpc('enqueue_initial_candidate_normalization', {
+      candidate_id: candidate.id,
+      locale,
+      writer_mode: 'legacy'
     });
+    if (error) {
+      throw new DailyResearchError(`Failed to enqueue candidate normalization: ${error.message}`);
+    }
   }
 }
 
@@ -701,11 +699,7 @@ export async function runDailyResearch(
   }
 
   if (dependencies.client) {
-    await enqueueEligibleNormalizationJobs(
-      dependencies.client,
-      dependencies.queue,
-      payload.locale
-    );
+    await enqueueEligibleNormalizationJobs(dependencies.client, payload.locale);
   }
 
   const enqueuedCandidateIds = new Set(checkpoint.enqueuedCandidateIds);

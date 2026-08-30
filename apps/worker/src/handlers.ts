@@ -1,22 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { ProviderRuntimeRepository } from '@ara/db';
+import type { ProviderCatalog } from '@ara/ai-router';
 import {
-  routeAiRequest,
-  type AiProvider,
-  type AiProviderResult,
-  type ProviderCatalog,
-  type ProviderHealth,
-  type StructuredAiRequest
-} from '@ara/ai-router';
-import {
-  AiRequestSchema,
   DeepValidationJobPayloadSchema,
   EnrichStrongPotentialJobPayloadSchema,
   MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
-  TestAiProviderConnectionJobPayloadSchema,
-  type SubscriptionAdapter
+  TestAiProviderConnectionJobPayloadSchema
 } from '@ara/shared';
 
 import {
@@ -40,10 +31,7 @@ import { runMarketProbe, type MarketProbeCheckpoint } from './jobs/market-probe'
 import { runDeepValidation } from './jobs/deep-validation';
 import { runEnrichStrongPotential } from './jobs/enrich-strong-potential';
 import { runSendDigest } from './jobs/send-digest';
-import {
-  runNormalizeJob,
-  type NormalizeJobResult
-} from './jobs/normalize-opportunities';
+import { runNormalizeJob } from './jobs/normalize-opportunities';
 import { runDailyResearch } from './jobs/daily-research';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
@@ -58,6 +46,7 @@ import {
 import type { ApiBudget } from '@ara/api-budget';
 import type { KeywordMetrics, ProductDatabaseQueryResult } from '@ara/jungle-scout';
 import type { AdapterSemaphoreRegistry } from './providers/adapter-semaphore';
+import type { NormalizationExecutionCoordinator } from './providers/normalization-execution-coordinator';
 
 
 
@@ -75,41 +64,6 @@ export type JobHandler = (
   context: JobExecutionContext
 ) => Promise<unknown>;
 
-class DeferredAiCapacityError extends Error {
-  readonly retryable = true;
-
-  constructor() {
-    super('No eligible AI provider is currently available.');
-    this.name = 'DeferredAiCapacityError';
-  }
-}
-
-class DeferredAiProvider implements AiProvider {
-  readonly id = 'deferred-ai-capacity';
-  readonly billingType = 'subscription' as const;
-
-  async health(): Promise<ProviderHealth> {
-    return {
-      available: false,
-      checkedAt: new Date().toISOString(),
-      reason: 'No eligible AI provider is currently available.',
-      retryAfterSeconds: 60
-    };
-  }
-
-  async listModels() {
-    return [];
-  }
-
-  async runStructured<T>(
-    request: StructuredAiRequest<T>
-  ): Promise<AiProviderResult<T>> {
-    void request;
-    throw new DeferredAiCapacityError();
-  }
-}
-
-const deferredAiProvider = new DeferredAiProvider();
 export interface ProviderProbeResolution {
   readonly target: ProviderProbeTarget;
   readonly currentProbeGeneration: number;
@@ -117,13 +71,10 @@ export interface ProviderProbeResolution {
 }
 
 export interface JobHandlerOptions {
-  readonly normalizationProvider?: AiProvider;
   readonly normalizationCatalog?: ProviderCatalog;
   readonly resolveProviderCatalog?: (forceRefresh: boolean) => Promise<ProviderCatalog>;
+  readonly normalizationCoordinator?: NormalizationExecutionCoordinator;
   readonly adapterSemaphores?: AdapterSemaphoreRegistry;
-  readonly resolveSubscriptionAdapter?: (
-    provider: AiProvider
-  ) => SubscriptionAdapter | undefined;
   readonly providerRuntime?: ProviderRuntimeRepository;
   readonly resolveProviderProbe?: (
     providerId: string
@@ -217,65 +168,30 @@ export function createJobHandlers(
   };
 
   if (
-    options.normalizationProvider ||
-    options.normalizationCatalog ||
-    options.resolveProviderCatalog
+    options.normalizationCoordinator &&
+    (options.normalizationCatalog || options.resolveProviderCatalog)
   ) {
+    const coordinator = options.normalizationCoordinator;
     handlers.NORMALIZE_OPPORTUNITIES = async (job, context) => {
       const payload = NormalizeOpportunitiesJobPayloadSchema.parse(job.payload);
-      let provider = options.normalizationProvider ?? deferredAiProvider;
-      let modelId = payload.modelId ?? 'deferred-ai-model';
       const catalog =
         (await options.resolveProviderCatalog?.(false)) ??
         options.normalizationCatalog;
-
-      if (catalog) {
-        const request = AiRequestSchema.parse({
-          role: 'niche_normalization',
-          routerMode: 'Balanced',
-          locale: payload.locale,
-          allowPaidFallback: false,
-          payload: { candidateIds: payload.candidateIds }
-        });
-        const decision = routeAiRequest(request, catalog);
-        if (decision.kind === 'route') {
-          provider = decision.provider;
-          modelId = decision.model.id;
-        } else {
-          provider = deferredAiProvider;
-        }
-      }
-
+      if (!catalog) throw new Error('Normalization provider catalog is required.');
       throwIfAborted(context.signal);
-      const adapter = options.resolveSubscriptionAdapter?.(provider);
-      const run = async (): Promise<NormalizeJobResult> =>
-        runNormalizeJob(
-          { candidateIds: payload.candidateIds, locale: payload.locale },
-          {
-            client,
-            provider,
-            modelId,
-            workerId: `normalization:${job.id}`,
-            promptVersion: payload.promptVersion,
-            onCheckpoint: (value) => context.saveCheckpoint(value)
-          }
-        );
-      let result: NormalizeJobResult;
-      if (adapter === undefined) {
-        result = await run();
-      } else {
-        if (options.adapterSemaphores === undefined) {
-          throw new Error('Subscription adapter semaphore registry is required.');
+      const result = await runNormalizeJob(
+        { candidateIds: payload.candidateIds, locale: payload.locale },
+        {
+          client,
+          coordinator,
+          catalog,
+          jobLease: job.leaseIdentity,
+          signal: context.signal,
+          workerId: `normalization:${job.id}`,
+          promptVersion: payload.promptVersion,
+          onCheckpoint: (value) => context.saveCheckpoint(value)
         }
-        result = await options.adapterSemaphores.withPermit(
-          adapter,
-          context.signal,
-          run
-        );
-      }
-      if (result.deferredCount > 0) {
-        throw new DeferredAiCapacityError();
-      }
+      );
       return result.checkpoint;
     };
   }

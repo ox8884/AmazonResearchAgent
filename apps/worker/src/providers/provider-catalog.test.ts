@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AiProvider, ProviderCatalog } from '@ara/ai-router';
+import type { ProviderCatalog } from '@ara/ai-router';
 import type {
   ModelRow,
   ProviderRow,
@@ -193,14 +193,14 @@ describe('provider catalog family dispatch', () => {
       capability_attestation_id: 'capability',
       containment_attestation_id: 'containment'
     }];
-    const accepted: AiProvider = {
+    const accepted = {
       id: 'codex-subscription-v1',
-      billingType: 'subscription',
+      billingType: 'subscription' as const,
       async health() {
         return { available: true, checkedAt: new Date(0).toISOString(), reason: null, retryAfterSeconds: null };
       },
       async listModels() { return []; },
-      async runStructured() { throw new Error('not invoked'); }
+      async runAuthorizedRaw() { throw new Error('not invoked'); }
     };
     const runtime = {
       isRoutable: vi.fn(async () => true),
@@ -230,11 +230,11 @@ describe('provider catalog family dispatch', () => {
     }];
     fixtures.runtimeStates = [{ ...runtimeState, security_profile_digest: null }];
     const accepted = {
-      id: 'codex', billingType: 'subscription',
+      id: 'codex', billingType: 'subscription' as const,
       async health() { return { available: true, checkedAt: '', reason: null, retryAfterSeconds: null }; },
       async listModels() { return []; },
-      async runStructured() { throw new Error('not invoked'); }
-    } satisfies AiProvider;
+      async runAuthorizedRaw() { throw new Error('not invoked'); }
+    };
     const runtime = {
       isRoutable: vi.fn(async () => true),
       expireReadyLease: vi.fn(async () => null)
@@ -262,9 +262,11 @@ describe('provider catalog family dispatch', () => {
       capability_attestation_id: 'capability', containment_attestation_id: 'containment'
     }];
     const accepted = {
-      id: 'codex', billingType: 'subscription', async health() { return { available: true, checkedAt: '', reason: null, retryAfterSeconds: null }; },
-      async listModels() { return []; }, async runStructured() { throw new Error('not invoked'); }
-    } satisfies AiProvider;
+      id: 'codex', billingType: 'subscription' as const,
+      async health() { return { available: true, checkedAt: '', reason: null, retryAfterSeconds: null }; },
+      async listModels() { return []; },
+      async runAuthorizedRaw() { throw new Error('not invoked'); }
+    };
     const runtime = { isRoutable: vi.fn(async () => false), expireReadyLease: vi.fn(async () => null) };
     await expect(resolvePersistedProviderCatalog(null, {
       providerRepository: fixtureProviderRepository(),

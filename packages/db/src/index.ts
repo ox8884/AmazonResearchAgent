@@ -48,12 +48,18 @@ export {
   ProviderAttemptRepositoryError
 } from './provider-attempt-repository';
 export type {
+  AnalysisFinalizationResult,
   AnalysisLeaseIdentity,
+  AppendProviderAttemptOutcomeInput,
   AttemptAuthorization,
+  AttemptReconciliation,
   BeginProviderAttemptInput,
+  CandidateDeferralResult,
   CandidateFinalizationResult,
+  CompletedAnalysisFinalizationClaim,
   FinalizeCandidateInput,
   JobLeaseIdentity,
+  ProviderAttemptOutcome,
   ProviderAttemptRepository
 } from './provider-attempt-repository';
 

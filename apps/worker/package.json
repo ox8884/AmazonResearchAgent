@@ -8,6 +8,7 @@
     "dev": "tsx src/main.ts",
     "start": "tsx src/main.ts",
     "enqueue:daily": "tsx src/commands/enqueue-daily.ts",
+    "writer:identity": "tsx src/commands/writer-identity.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"

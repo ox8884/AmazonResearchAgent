@@ -1175,36 +1175,16 @@ describe('provider attempt transactions', () => {
     });
   });
 
-  // Break: the pre-Task-10 cluster exception broadens to another authority-owned helper.
-  it('keeps one narrow pre-Task-10 cluster legacy exception', async () => {
+  // Break: service_role regains the retired direct cluster mutation bypass.
+  it('denies the retired legacy cluster helper to service_role', async () => {
     const canonicalKey = `legacy exception ${randomUUID().replaceAll('-', '')}`;
-    const [created] = await asServiceRole((connection) => connection<{ cluster_id: string }[]>`
+    await expect(asServiceRole((connection) => connection`
       select upsert_niche_cluster(
         ${canonicalKey}, 'Legacy Exception Cluster', null,
         '["legacy alias"]'::jsonb, '["legacy phrase"]'::jsonb,
         'Ready for API Validation'
       ) as cluster_id
-    `);
-    const [cluster] = await sql<{
-      id: string;
-      canonical_key: string;
-      canonical_name: string;
-      aliases: string[];
-      catalog_phrases: string[];
-      state: string;
-    }[]>`
-      select id, canonical_key, canonical_name, aliases, catalog_phrases, state
-      from niche_clusters where canonical_key = ${canonicalKey}
-    `;
-    expect(cluster).toEqual({
-      id: created?.cluster_id,
-      canonical_key: canonicalKey,
-      canonical_name: 'Legacy Exception Cluster',
-      aliases: ['legacy alias'],
-      catalog_phrases: ['legacy phrase'],
-      state: 'Ready for API Validation',
-    });
-
+    `)).rejects.toMatchObject({ code: '42501' });
     const [legacyPrivileges] = await sql<{
       service_role_execute: boolean;
       public_execute: boolean;
@@ -1234,7 +1214,7 @@ describe('provider attempt transactions', () => {
         ) as authenticated_execute
     `;
     expect(legacyPrivileges).toEqual({
-      service_role_execute: true,
+      service_role_execute: false,
       public_execute: false,
       anon_execute: false,
       authenticated_execute: false,
@@ -1268,7 +1248,6 @@ describe('provider attempt transactions', () => {
       'is_ai_provider_routable',
       'reconcile_ai_provider_attempts',
       'request_ai_provider_probe',
-      'upsert_niche_cluster',
     ]);
   });
 

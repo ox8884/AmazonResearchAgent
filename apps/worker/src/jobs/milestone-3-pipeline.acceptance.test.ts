@@ -9,18 +9,10 @@ import {
   ProductDatabasePageSchema,
   type ProductDatabasePage
 } from '@ara/jungle-scout';
-import {
-  type AiProvider,
-  type AiProviderResult,
-  type ProviderHealth,
-  type StructuredAiRequest
-} from '@ara/ai-router';
-import { AiUsageSchema, type AiModelDescriptor } from '@ara/shared';
 import { createQueue } from '@ara/queue';
 import { createJobHandlers } from '../handlers';
 import { runJob } from '../main';
 import { runImportJob } from './import-opportunity-csv';
-import { runNormalizeJob } from './normalize-opportunities';
 import { runMarketProbe } from './market-probe';
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -30,55 +22,6 @@ const root = dirname(fileURLToPath(import.meta.url));
 const jsFixtures = join(root, '../../../../tests/fixtures/jungle-scout');
 const ofCsv = join(root, '../../../../tests/fixtures/opportunity-finder/page-1.csv');
 
-const healthy: ProviderHealth = {
-  available: true,
-  checkedAt: new Date(0).toISOString(),
-  reason: null,
-  retryAfterSeconds: null
-};
-
-class FakeNormalizationProvider implements AiProvider {
-  readonly id = `fake-normalizer-${randomUUID()}`;
-  readonly billingType = 'free' as const;
-
-  async health(): Promise<ProviderHealth> {
-    return healthy;
-  }
-
-  async listModels(): Promise<readonly AiModelDescriptor[]> {
-    return [];
-  }
-
-  async runStructured<T>(request: StructuredAiRequest<T>): Promise<AiProviderResult<T>> {
-    const output = {
-      classification: 'product_niche',
-      canonicalNiche: 'Batter / Pancake Dispenser',
-      canonicalEnglish: 'Batter / Pancake Dispenser',
-      catalogPhrases: ['pancake dispenser', 'batter dispenser bottle'],
-      aliases: ['pancake dispenser bottle'],
-      productFit: 'strong',
-      riskFlags: [],
-      confidence: 0.94,
-      reason: 'Equivalent product phrases describe one dispensing niche.'
-    };
-    return {
-      output: request.schema.parse(output),
-      providerId: this.id,
-      modelId: request.modelId,
-      role: request.role,
-      inputHash: request.inputHash,
-      usage: AiUsageSchema.parse({
-        inputTokens: 20,
-        outputTokens: 30,
-        totalTokens: 50,
-        requestCount: 1
-      }),
-      costClass: this.billingType,
-      startedAt: new Date(0).toISOString(),
-      completedAt: new Date(1).toISOString()
-    };
-  }
-}
 
 function loadPage(name: string): ProductDatabasePage {
   return ProductDatabasePageSchema.parse(JSON.parse(readFileSync(join(jsFixtures, name), 'utf8')));
@@ -211,30 +154,11 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     expect(imported?.length).toBeGreaterThan(0);
     const candidateIds = (imported ?? []).map((row) => row.id);
     const pancake = candidateIds[0];
-    const provider = new FakeNormalizationProvider();
-    const { error: providerError } = await client.from('ai_providers').insert({
-      id: provider.id,
-      name: provider.id,
-      kind: 'command',
-      billing_type: 'free',
-      enabled: true,
-      config: {}
-    });
-    if (providerError) throw providerError;
-    await client
+    const { error: screeningError } = await client
       .from('candidates')
-      .update({ state: 'AI Screening', eligible_for_ai_normalization: true })
+      .update({ state: 'Ready for API Validation', eligible_for_ai_normalization: true })
       .in('id', candidateIds);
-    await runNormalizeJob(
-      { candidateIds, locale: 'en' },
-      {
-        client,
-        provider,
-        modelId: 'fake-normalizer',
-        workerId: `m3-${run.id}`,
-        promptVersion: `m3-${run.id}`
-      }
-    );
+    if (screeningError) throw screeningError;
     if (!pancake) throw new Error('pancake candidate missing');
     await runMarketProbe(
       { candidateId: pancake, locale: 'en' },

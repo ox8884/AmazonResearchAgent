@@ -1763,5 +1763,6 @@ grant execute on function public.defer_candidate_normalization(uuid, text, integ
 grant execute on function public.read_normalization_writer_capability() to service_role;
 grant execute on function public.enqueue_initial_candidate_normalization(uuid, text, text) to service_role;
 grant execute on function public.reconcile_ai_provider_attempts(uuid, text, integer, uuid, text, integer) to service_role;
+revoke all on function public.upsert_niche_cluster(text, text, text, jsonb, jsonb, text) from service_role;
 
 revoke create on schema public from ara_provider_authority;

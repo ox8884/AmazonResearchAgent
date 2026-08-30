@@ -1,25 +1,13 @@
 import { createHash } from 'node:crypto';
-import {
-  InvalidStructuredOutputError,
-  type AiProvider,
-  type AiProviderResult
-} from '@ara/ai-router';
-import { createMigration019CompatibilityRepository, type Database, type Json } from '@ara/db';
+import type { ProviderCatalog } from '@ara/ai-router';
+import type { JobLeaseIdentity } from '@ara/db';
 import type { QueueDatabaseClient } from '@ara/queue';
 import {
   buildNormalizationPrompt,
-  KeywordNormalizationSchema,
-  NORMALIZATION_PROMPT_VERSION,
-  type KeywordNormalization
+  NORMALIZATION_PROMPT_VERSION
 } from '@ara/research-engine';
-import {
-  AiRoleSchema,
-  AiUsageSchema,
-  BillingTypeSchema,
-  LocaleSchema,
-  type CandidateState,
-  type Locale
-} from '@ara/shared';
+import { LocaleSchema, type Locale } from '@ara/shared';
+import type { NormalizationExecutionCoordinator } from '../providers/normalization-execution-coordinator';
 
 export interface NormalizeJobInput {
   readonly candidateIds: readonly string[];
@@ -28,8 +16,10 @@ export interface NormalizeJobInput {
 
 export interface NormalizeJobDependencies {
   readonly client: QueueDatabaseClient;
-  readonly provider: AiProvider;
-  readonly modelId: string;
+  readonly coordinator: NormalizationExecutionCoordinator;
+  readonly catalog: ProviderCatalog;
+  readonly jobLease: JobLeaseIdentity;
+  readonly signal: AbortSignal;
   readonly workerId?: string;
   readonly promptVersion?: string;
   readonly leaseSeconds?: number;
@@ -54,14 +44,39 @@ export interface NormalizeJobResult {
   readonly checkpoint: NormalizeCheckpoint;
 }
 
-type CandidateRow = Database['public']['Tables']['candidates']['Row'];
-type AnalysisRow = Database['public']['Tables']['ai_analyses']['Row'];
-type DecisionReason = { readonly code: string; readonly detail: string };
+type CandidateRow = {
+  readonly id: string;
+  readonly keyword: string;
+  readonly normalized_exact_keyword: string;
+  readonly state: string;
+  readonly normalization_generation: number;
+};
+
+type AnalysisClaim =
+  | {
+      readonly analysisId: string;
+      readonly status: 'claimed';
+      readonly analysisLeaseEpoch: number;
+    }
+  | {
+      readonly analysisId: string;
+      readonly status: 'completed' | 'busy';
+      readonly analysisLeaseEpoch: null;
+    };
 
 export class NormalizationJobError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, { cause });
     this.name = 'NormalizationJobError';
+  }
+}
+
+class AnalysisClaimBusyError extends Error {
+  readonly retryable = true;
+
+  constructor() {
+    super('AI analysis is already leased by another worker.');
+    this.name = 'AnalysisClaimBusyError';
   }
 }
 
@@ -77,113 +92,48 @@ function normalizeExactKeyword(keyword: string): string {
     .replace(/\s+/g, ' ');
 }
 
-function asJson(value: unknown): Json {
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) {
-    throw new NormalizationJobError('Normalization value could not be serialized.');
-  }
-  return JSON.parse(serialized) as Json;
-}
-
 function inputHash(
-  keyword: string,
+  candidate: CandidateRow,
   promptVersion: string,
   locale: Locale
 ): string {
-  return sha256(
-    `niche_normalization\0${promptVersion}\0${locale}\0${normalizeExactKeyword(keyword)}`
-  );
+  return sha256([
+    'niche_normalization', promptVersion, locale, candidate.id,
+    String(candidate.normalization_generation), normalizeExactKeyword(candidate.keyword)
+  ].join('\0'));
 }
 
-function canonicalKey(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase('en-US')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Normalization cancelled.', 'AbortError');
 }
 
-function isCapacityError(error: unknown): boolean {
-  if (!(error instanceof Error) || !('retryable' in error)) {
-    return false;
+async function provisionalIdentity(
+  client: QueueDatabaseClient,
+  catalog: ProviderCatalog
+): Promise<{ readonly providerId: string; readonly modelId: string }> {
+  for (const entry of catalog.entries) {
+    const model = entry.models[0];
+    if (model) return { providerId: entry.provider.id, modelId: model.id };
   }
-  return typeof error.retryable === 'boolean' && error.retryable;
-}
-
-function targetState(output: KeywordNormalization): CandidateState {
-  if (
-    output.classification === 'brand_ip' ||
-    output.classification === 'broad_query' ||
-    output.classification === 'irrelevant'
-  ) {
-    return 'Reject';
+  const { data: providers, error: providerError } = await client
+    .from('ai_providers')
+    .select('id,billing_type')
+    .neq('billing_type', 'payg')
+    .order('priority', { ascending: true });
+  if (providerError) throw new NormalizationJobError('load provisional provider metadata.', providerError);
+  for (const provider of providers) {
+    const { data: models, error: modelError } = await client
+      .from('ai_models')
+      .select('model_id')
+      .eq('provider_id', provider.id)
+      .neq('billing_type', 'payg')
+      .order('priority', { ascending: true })
+      .limit(1);
+    if (modelError) throw new NormalizationJobError('load provisional model metadata.', modelError);
+    const model = models[0];
+    if (model) return { providerId: provider.id, modelId: model.model_id };
   }
-  if (
-    output.classification === 'ambiguous' ||
-    output.confidence < 0.7 ||
-    output.canonicalNiche === null
-  ) {
-    return 'Needs Review';
-  }
-  return 'Ready for API Validation';
-}
-
-function aiReason(output: KeywordNormalization): DecisionReason {
-  return {
-    code: `AI_${output.classification.toLocaleUpperCase('en-US')}`,
-    detail: output.reason
-  };
-}
-
-function isJsonObject(
-  value: Json
-): value is { [key: string]: Json | undefined } {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-function currentReasons(value: Json): DecisionReason[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    if (!isJsonObject(item) || typeof item.code !== 'string' || typeof item.detail !== 'string') {
-      return [];
-    }
-    return [{ code: item.code, detail: item.detail }];
-  });
-}
-
-function mergeReasons(
-  current: readonly DecisionReason[],
-  extra: readonly DecisionReason[]
-): DecisionReason[] {
-  const merged = [...current];
-  for (const reason of extra) {
-    if (!merged.some((item) => item.code === reason.code)) {
-      merged.push(reason);
-    }
-  }
-  return merged;
-}
-
-function analysisResult(
-  row: AnalysisRow,
-  output: KeywordNormalization
-): AiProviderResult<KeywordNormalization> {
-  if (!row.completed_at) {
-    throw new NormalizationJobError('Completed AI analysis has no completion timestamp.');
-  }
-  return {
-    output,
-    providerId: row.provider_id,
-    modelId: row.model_id,
-    role: AiRoleSchema.parse(row.role),
-    inputHash: row.input_hash,
-    usage: AiUsageSchema.parse(row.usage),
-    costClass: BillingTypeSchema.parse(row.cost_class),
-    startedAt: row.started_at,
-    completedAt: row.completed_at
-  };
+  throw new NormalizationJobError('No persisted non-PAYG provider metadata is available to claim the analysis.');
 }
 
 async function loadCandidates(
@@ -195,64 +145,13 @@ async function loadCandidates(
   }
   const { data, error } = await client
     .from('candidates')
-    .select(
-      'id,import_run_id,representative_raw_keyword_id,keyword,normalized_exact_keyword,state,rule_passed,rule_reasons,risk_flags,eligible_for_ai_normalization,preliminary_score,preliminary_score_components,created_at,updated_at,niche_cluster_id,normalization_generation'
-    )
+    .select('id,keyword,normalized_exact_keyword,state,normalization_generation')
     .in('id', [...candidateIds]);
-  if (error) {
-    throw new NormalizationJobError('load normalization candidates.', error);
-  }
+  if (error) throw new NormalizationJobError('load normalization candidates.', error);
   if (data.length !== candidateIds.length) {
     throw new NormalizationJobError('One or more normalization candidates were not found.');
   }
   return data;
-}
-
-async function loadExistingAnalysis(
-  client: QueueDatabaseClient,
-  hash: string
-): Promise<AiProviderResult<KeywordNormalization> | null> {
-  const { data, error } = await client
-    .from('ai_analyses')
-    .select('*')
-    .eq('role', 'niche_normalization')
-    .eq('input_hash', hash)
-    .maybeSingle();
-  if (error) {
-    throw new NormalizationJobError('load existing AI analysis.', error);
-  }
-  if (!data) {
-    return null;
-  }
-  const output = KeywordNormalizationSchema.safeParse(data.output);
-  if (!output.success) {
-    throw new NormalizationJobError('Stored AI analysis has invalid output.');
-  }
-  return analysisResult(data, output.data);
-}
-
-
-type AnalysisClaim =
-  | {
-      readonly analysisId: string;
-      readonly status: 'claimed';
-      readonly analysisLeaseEpoch: number;
-      readonly completed: null;
-    }
-  | {
-      readonly analysisId: string;
-      readonly status: 'completed' | 'busy';
-      readonly analysisLeaseEpoch: null;
-      readonly completed: AiProviderResult<KeywordNormalization> | null;
-    };
-
-class AnalysisClaimBusyError extends Error {
-  readonly retryable = true;
-
-  constructor() {
-    super('AI analysis is already leased by another worker.');
-    this.name = 'AnalysisClaimBusyError';
-  }
 }
 
 async function claimAnalysis(
@@ -264,44 +163,30 @@ async function claimAnalysis(
   promptVersion: string
 ): Promise<AnalysisClaim> {
   const workerId = dependencies.workerId ?? `normalizer-${process.pid}`;
+  const provisional = await provisionalIdentity(client, dependencies.catalog);
   const { data, error } = await client.rpc('claim_ai_analysis', {
     analysis_role: 'niche_normalization',
     analysis_input_hash: hash,
     worker_id: workerId,
     lease_seconds: dependencies.leaseSeconds ?? 120,
-    provider_id: dependencies.provider.id,
-    model_id: dependencies.modelId,
+    provider_id: provisional.providerId,
+    model_id: provisional.modelId,
     analysis_locale: locale,
     prompt_version: promptVersion,
-    input_payload: asJson({
+    input_payload: {
       candidateId: candidate.id,
       normalizationGeneration: candidate.normalization_generation,
       keyword: candidate.keyword,
       normalizedExactKeyword: candidate.normalized_exact_keyword
-    })
+    }
   });
   const claim = data?.[0];
-  if (error || !claim) {
-    throw new NormalizationJobError('claim AI analysis.', error);
-  }
-  if (claim.claim_status === 'busy') {
+  if (error || !claim) throw new NormalizationJobError('claim AI analysis.', error);
+  if (claim.claim_status === 'busy' || claim.claim_status === 'completed') {
     return {
       analysisId: claim.analysis_id,
-      status: 'busy',
-      analysisLeaseEpoch: null,
-      completed: null
-    };
-  }
-  if (claim.claim_status === 'completed') {
-    const existing = await loadExistingAnalysis(client, hash);
-    if (!existing) {
-      throw new NormalizationJobError('Completed analysis could not be loaded.');
-    }
-    return {
-      analysisId: claim.analysis_id,
-      status: 'completed',
-      analysisLeaseEpoch: null,
-      completed: existing
+      status: claim.claim_status,
+      analysisLeaseEpoch: null
     };
   }
   if (
@@ -314,238 +199,78 @@ async function claimAnalysis(
   return {
     analysisId: claim.analysis_id,
     status: 'claimed',
-    analysisLeaseEpoch: claim.analysis_lease_epoch,
-    completed: null
+    analysisLeaseEpoch: claim.analysis_lease_epoch
   };
-}
-
-async function linkAnalysisEntity(
-  client: QueueDatabaseClient,
-  analysisId: string,
-  candidateId: string
-): Promise<void> {
-  const { error } = await client.from('ai_analysis_entities').upsert({
-    analysis_id: analysisId,
-    entity_type: 'candidate',
-    entity_id: candidateId
-  });
-  if (error) {
-    throw new NormalizationJobError('link AI analysis to candidate.', error);
-  }
-}
-
-async function completeAnalysis(
-  client: QueueDatabaseClient,
-  analysisId: string,
-  workerId: string,
-  analysisLeaseEpoch: number,
-  result: AiProviderResult<KeywordNormalization>
-): Promise<void> {
-  const { data, error } = await client.rpc('complete_ai_analysis', {
-    analysis_id: analysisId,
-    worker_id: workerId,
-    analysis_lease_epoch: analysisLeaseEpoch,
-    analysis_output: asJson(result.output),
-    analysis_usage: asJson(result.usage),
-    cost_class: result.costClass,
-    completed_at: result.completedAt
-  });
-  if (error) {
-    throw new NormalizationJobError('complete AI analysis.', error);
-  }
-  if (!data) {
-    throw new AnalysisClaimBusyError();
-  }
 }
 
 async function renewAnalysisLease(
   client: QueueDatabaseClient,
   analysisId: string,
-  workerId: string,
-  analysisLeaseEpoch: number,
+  owner: string,
+  epoch: number,
   leaseSeconds: number
 ): Promise<boolean> {
   const { data, error } = await client.rpc('renew_ai_analysis_lease', {
     analysis_id: analysisId,
-    worker_id: workerId,
-    analysis_lease_epoch: analysisLeaseEpoch,
+    worker_id: owner,
+    analysis_lease_epoch: epoch,
     lease_seconds: leaseSeconds
   });
-  if (error) {
-    throw new NormalizationJobError('renew AI analysis lease.', error);
-  }
-  return Boolean(data);
+  if (error) throw new NormalizationJobError('renew AI analysis lease.', error);
+  return data === true;
 }
 
 async function withAnalysisHeartbeat<T>(
-  client: QueueDatabaseClient,
+  dependencies: NormalizeJobDependencies,
   analysisId: string,
-  workerId: string,
-  analysisLeaseEpoch: number,
-  leaseSeconds: number,
-  heartbeatMs: number,
+  owner: string,
+  epoch: number,
   work: () => Promise<T>
 ): Promise<T> {
-  const renew = (): Promise<boolean> =>
-    renewAnalysisLease(
-      client,
-      analysisId,
-      workerId,
-      analysisLeaseEpoch,
-      leaseSeconds
-    );
+  const leaseSeconds = dependencies.leaseSeconds ?? 120;
+  const heartbeatMs = dependencies.heartbeatMs ?? 30_000;
   const timer = setInterval(() => {
-    void renew().then((owned) => {
-      if (!owned) clearInterval(timer);
-    });
+    void renewAnalysisLease(dependencies.client, analysisId, owner, epoch, leaseSeconds)
+      .then((owned) => {
+        if (!owned) clearInterval(timer);
+      });
   }, heartbeatMs);
   try {
-    const result = await work();
-    if (!(await renew())) {
-      throw new AnalysisClaimBusyError();
-    }
-    return result;
+    return await work();
   } finally {
     clearInterval(timer);
   }
 }
 
-async function failAnalysis(
-  client: QueueDatabaseClient,
-  analysisId: string,
-  workerId: string,
-  analysisLeaseEpoch: number,
-  usage: Json | null
-): Promise<void> {
-  if (usage) {
-    const { error: usageError } = await client.rpc('record_failed_ai_usage', {
-      analysis_id: analysisId,
-      worker_id: workerId,
-      analysis_lease_epoch: analysisLeaseEpoch,
-      analysis_usage: usage
-    });
-    if (usageError) {
-      throw new NormalizationJobError('record failed AI usage.', usageError);
-    }
-  }
-  const { error } = await client.rpc('fail_ai_analysis', {
-    analysis_id: analysisId,
-    worker_id: workerId,
-    analysis_lease_epoch: analysisLeaseEpoch,
-    error_code: 'provider_execution_failed',
-    retry_at: new Date(Date.now() + 60_000).toISOString()
-  });
-  if (error) {
-    throw new NormalizationJobError('fail AI analysis.', error);
-  }
+function counters(
+  result: Awaited<ReturnType<NormalizationExecutionCoordinator['execute']>>,
+  reused: boolean
+): {
+  readonly clustered: boolean;
+  readonly rejected: boolean;
+  readonly needsReview: boolean;
+  readonly deferred: boolean;
+  readonly reused: boolean;
+} {
+  return {
+    clustered: result.kind === 'finalized' && result.targetState === 'Ready for API Validation',
+    rejected: result.kind === 'finalized' && result.targetState === 'Reject',
+    needsReview: result.kind === 'finalized' && result.targetState === 'Needs Review',
+    deferred: result.kind === 'deferred',
+    reused
+  };
 }
-
-async function upsertCluster(
-  client: QueueDatabaseClient,
-  output: KeywordNormalization
-): Promise<string> {
-  if (!output.canonicalNiche) {
-    throw new NormalizationJobError('A clusterable output needs a canonical niche.');
-  }
-  return createMigration019CompatibilityRepository(client).upsertNicheCluster({
-    canonicalKey: canonicalKey(output.canonicalNiche),
-    canonicalName: output.canonicalNiche,
-    canonicalEnglish: output.canonicalEnglish,
-    aliases: asJson(output.aliases),
-    catalogPhrases: asJson(output.catalogPhrases),
-    clusterState: 'Ready for API Validation'
-  });
-}
-
-async function persistDecision(
-  client: QueueDatabaseClient,
-  candidate: CandidateRow,
-  state: CandidateState,
-  reasons: readonly DecisionReason[],
-  analysisId: string,
-  clusterId: string | null,
-  promptVersion: string
-): Promise<void> {
-  const { error: candidateError } = await client
-    .from('candidates')
-    .update({
-      state,
-      niche_cluster_id: clusterId,
-      rule_reasons: asJson(reasons)
-    })
-    .eq('id', candidate.id);
-  if (candidateError) {
-    throw new NormalizationJobError('update normalized candidate.', candidateError);
-  }
-
-  const { error: decisionError } = await client
-    .from('decision_history')
-    .upsert(
-      {
-        candidate_id: candidate.id,
-        from_state: candidate.state,
-        to_state: state,
-        reasons: asJson(reasons),
-        decided_by: promptVersion,
-        idempotency_key: `ai-normalization:${candidate.id}:${analysisId}:${state}`
-      },
-      { onConflict: 'idempotency_key', ignoreDuplicates: true }
-    );
-  if (decisionError) {
-    throw new NormalizationJobError('persist normalized decision.', decisionError);
-  }
-}
-
-async function persistClusterLink(
-  client: QueueDatabaseClient,
-  candidate: CandidateRow,
-  clusterId: string
-): Promise<void> {
-  if (!candidate.representative_raw_keyword_id) {
-    throw new NormalizationJobError('Clusterable candidate has no raw keyword reference.');
-  }
-  const { error } = await client.from('niche_cluster_keywords').upsert({
-    niche_cluster_id: clusterId,
-    raw_opportunity_keyword_id: candidate.representative_raw_keyword_id
-  });
-  if (error) {
-    throw new NormalizationJobError('link raw keyword to niche cluster.', error);
-  }
-}
-
-async function deferForCapacity(
-  client: QueueDatabaseClient,
-  candidate: CandidateRow,
-  analysisId: string,
-  promptVersion: string
-): Promise<void> {
-  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [
-    {
-      code: 'AI_PROVIDER_UNAVAILABLE',
-      detail: 'The configured AI provider is unavailable; retry when capacity returns.'
-    }
-  ]);
-  await persistDecision(
-    client,
-    candidate,
-    'Waiting for AI Capacity',
-    reasons,
-    analysisId,
-    null,
-    promptVersion
-  );
-}
-
 
 async function normalizeCandidate(
   input: NormalizeJobInput,
   dependencies: NormalizeJobDependencies,
   candidate: CandidateRow,
   promptVersion: string
-): Promise<{ clustered: boolean; rejected: boolean; needsReview: boolean; deferred: boolean; reused: boolean }> {
+): Promise<ReturnType<typeof counters>> {
+  if (dependencies.signal.aborted) throw abortReason(dependencies.signal);
   const locale = LocaleSchema.parse(input.locale);
-  const hash = inputHash(candidate.keyword, promptVersion, locale);
-  const workerId = dependencies.workerId ?? `normalizer-${process.pid}`;
+  const hash = inputHash(candidate, promptVersion, locale);
+  const owner = dependencies.workerId ?? `normalizer-${process.pid}`;
   const claim = await claimAnalysis(
     dependencies.client,
     candidate,
@@ -554,135 +279,65 @@ async function normalizeCandidate(
     dependencies,
     promptVersion
   );
-  if (claim.status === 'busy') {
-    throw new AnalysisClaimBusyError();
-  }
-
-  let result = claim.completed;
-  const reused = result !== null;
-  if (claim.status === 'claimed') {
-    try {
-      result = await withAnalysisHeartbeat(
-        dependencies.client,
-        claim.analysisId,
-        workerId,
-        claim.analysisLeaseEpoch,
-        dependencies.leaseSeconds ?? 120,
-        dependencies.heartbeatMs ?? 30_000,
-        () =>
-          dependencies.provider.runStructured({
-            role: 'niche_normalization',
-            modelId: dependencies.modelId,
-            locale,
-            prompt: buildNormalizationPrompt(candidate.keyword, locale),
-            inputHash: hash,
-            schema: KeywordNormalizationSchema
-          })
-      );
-      await completeAnalysis(
-        dependencies.client,
-        claim.analysisId,
-        workerId,
-        claim.analysisLeaseEpoch,
-        result
-      );
-    } catch (error) {
-      await failAnalysis(
-        dependencies.client,
-        claim.analysisId,
-        workerId,
-        claim.analysisLeaseEpoch,
-        error instanceof InvalidStructuredOutputError
-          ? asJson({
-              ...error.usage,
-              success: false,
-              repairAttempted: error.attempts.length > 1,
-              attempts: error.attempts.map((attempt) => ({
-                providerId: attempt.providerId,
-                modelId: attempt.modelId,
-                role: attempt.role,
-                usage: attempt.usage,
-                costClass: attempt.costClass,
-                startedAt: attempt.startedAt,
-                completedAt: attempt.completedAt
-              }))
-            })
-          : null
-      );
-      if (error instanceof AnalysisClaimBusyError || !isCapacityError(error)) {
-        throw error;
-      }
-      await deferForCapacity(
-        dependencies.client,
-        candidate,
-        claim.analysisId,
-        promptVersion
-      );
+  if (claim.status === 'busy') throw new AnalysisClaimBusyError();
+  if (claim.status === 'completed') {
+    const result = await dependencies.coordinator.finalizeCompleted({
+      jobLease: dependencies.jobLease,
+      analysisId: claim.analysisId,
+      analysisLeaseOwner: owner,
+      leaseSeconds: dependencies.leaseSeconds ?? 120,
+      candidateId: candidate.id,
+      expectedCandidateState: 'AI Screening',
+      normalizationGeneration: candidate.normalization_generation
+    });
+    if (result.kind === 'already_finalized') {
       return {
-        clustered: false,
-        rejected: false,
-        needsReview: false,
-        deferred: true,
-        reused: false
+        clustered: candidate.state === 'Ready for API Validation',
+        rejected: candidate.state === 'Reject',
+        needsReview: candidate.state === 'Needs Review',
+        deferred: candidate.state === 'Waiting for AI Capacity',
+        reused: true
       };
     }
+    return counters(result, true);
+  }
+  if (claim.analysisLeaseEpoch === null) {
+    throw new NormalizationJobError('Claimed analysis has no lease epoch.');
   }
 
-  if (!result) {
-    throw new NormalizationJobError('AI analysis completed without a result.');
-  }
-
-  await linkAnalysisEntity(
-    dependencies.client,
+  const analysisLeaseEpoch: number = claim.analysisLeaseEpoch;
+  const result = await withAnalysisHeartbeat(
+    dependencies,
     claim.analysisId,
-    candidate.id
+    owner,
+    analysisLeaseEpoch,
+    () => dependencies.coordinator.execute({
+      jobLease: dependencies.jobLease,
+      analysisLease: {
+        analysisId: claim.analysisId,
+        owner,
+        epoch: analysisLeaseEpoch
+      },
+      candidateId: candidate.id,
+      expectedCandidateState: 'AI Screening',
+      normalizationGeneration: candidate.normalization_generation,
+      locale,
+      prompt: buildNormalizationPrompt(candidate.keyword, locale),
+      inputHash: hash,
+      catalog: dependencies.catalog,
+      signal: dependencies.signal
+    })
   );
-  const output = KeywordNormalizationSchema.parse(result.output);
-  const state = targetState(output);
-  const reasons = mergeReasons(currentReasons(candidate.rule_reasons), [aiReason(output)]);
-  if (state === 'Ready for API Validation') {
-    const clusterId = await upsertCluster(dependencies.client, output);
-    await persistClusterLink(dependencies.client, candidate, clusterId);
-    await persistDecision(
-      dependencies.client,
-      candidate,
-      state,
-      reasons,
-      claim.analysisId,
-      clusterId,
-      promptVersion
-    );
-    return {
-      clustered: true,
-      rejected: false,
-      needsReview: false,
-      deferred: false,
-      reused
-    };
-  }
-
-  await persistDecision(
-    dependencies.client,
-    candidate,
-    state,
-    reasons,
-    claim.analysisId,
-    null,
-    promptVersion
-  );
-  return {
-    clustered: false,
-    rejected: state === 'Reject',
-    needsReview: state === 'Needs Review',
-    deferred: false,
-    reused
-  };
+  return counters(result, false);
 }
 
 export async function runNormalizeJob(
   input: NormalizeJobInput,
   dependencies: NormalizeJobDependencies
 ): Promise<NormalizeJobResult> {
+  if (input.candidateIds.length !== 1) {
+    throw new NormalizationJobError('Normalization jobs must contain exactly one candidate id.');
+  }
   const promptVersion = dependencies.promptVersion ?? NORMALIZATION_PROMPT_VERSION;
   const locale = LocaleSchema.parse(input.locale);
   const candidates = await loadCandidates(dependencies.client, input.candidateIds);

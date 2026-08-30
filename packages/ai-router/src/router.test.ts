@@ -314,4 +314,36 @@ describe('AI routing policy', () => {
       providerId: 'independent'
     });
   });
+
+  // Break: Highest Quality accidentally applies billing or provider priority before quality.
+  it('uses exact Highest Quality ordering before priority and billing', () => {
+    const lowerPriority = provider('lower-priority', 'free');
+    const higherQuality = provider('higher-quality', 'subscription');
+    const decision = routeAiRequest(
+      request({ routerMode: 'Highest Quality' }),
+      catalog([
+        {
+          provider: lowerPriority,
+          enabled: true,
+          priority: 1,
+          roles: ['niche_normalization'],
+          health: healthy,
+          models: [model(lowerPriority.id, 'lower-priority-model', 'free', 20)]
+        },
+        {
+          provider: higherQuality,
+          enabled: true,
+          priority: 100,
+          roles: ['niche_normalization'],
+          health: healthy,
+          models: [model(higherQuality.id, 'higher-quality-model', 'subscription', 1)]
+        }
+      ])
+    );
+    expect(decision).toMatchObject({
+      kind: 'route',
+      providerId: 'higher-quality',
+      model: { id: 'higher-quality-model' }
+    });
+  });
 });
