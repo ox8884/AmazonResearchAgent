@@ -208,9 +208,9 @@ integration('settings API to worker catalog', () => {
     providerIds.push(providerId);
 
     const saved = await authenticatedRequest('POST', {
+      product: 'openai_compatible_api',
       id: providerId,
       name: 'Settings integration provider',
-      kind: 'openai_http',
       billingType: 'subscription',
       baseUrl: mock.baseUrl,
       networkScope: 'loopback',

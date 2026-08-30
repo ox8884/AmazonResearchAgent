@@ -764,11 +764,20 @@ begin
       if same_provider_start_count >= 2 then
         raise exception 'provider_attempt_provider_replacement_rejected';
       end if;
-    elsif parent_row.event_type <> 'attempt_failed'
-       or parent_row.result_class not in (
-         'auth_expired', 'capacity_exhausted', 'rate_limited',
-         'transient_network', 'client_transient', 'timeout'
-       ) then
+    elsif not (
+      (
+        parent_row.event_type = 'attempt_failed'
+        and parent_row.result_class in (
+          'auth_expired', 'capacity_exhausted', 'rate_limited',
+          'transient_network', 'client_transient', 'timeout'
+        )
+      )
+      or (
+        parent_row.event_type = 'attempt_unknown_after_crash'
+        and parent_row.consumption_status = 'unknown'
+        and parent_row.result_class = 'worker_process_loss'
+      )
+    ) then
       raise exception 'provider_attempt_fallback_parent_rejected';
     end if;
   end if;
@@ -1722,6 +1731,11 @@ begin
           'profile_verification_failed_before_spawn',
           'semaphore_cancelled_before_authorization'
         )
+      )
+      or (
+        o.event_type = 'attempt_unknown_after_crash'
+        and o.consumption_status = 'unknown'
+        and o.result_class = 'worker_process_loss'
       )
     );
 

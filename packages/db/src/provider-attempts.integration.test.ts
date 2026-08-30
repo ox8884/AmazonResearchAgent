@@ -424,8 +424,8 @@ describe('provider attempt transactions', () => {
     )).resolves.toMatchObject({ attempt_sequence: 2, provider_id: grok.providerId });
   });
 
-  // Break: crash-unknown evidence is promoted into a DB-rejected fallback parent.
-  it('reconciles a bare start as excluded crash-unknown with no fallback parent', async () => {
+  // Break: reconciliation excludes crash-unknown from replay but cannot authorize a distinct fallback.
+  it('reconciles crash-unknown as the exact parent for a distinct provider only', async () => {
     const fixture = await seedCandidateAndLeases();
     const first = await beginAttempt(fixture);
     const [reconciliation] = await sql<{ result: {
@@ -442,20 +442,90 @@ describe('provider attempt transactions', () => {
     expect(reconciliation?.result).toEqual({
       attempted_provider_ids: [fixture.providerId],
       pending_winner_attempt_id: null,
-      fallback_parent_attempt_id: null,
+      fallback_parent_attempt_id: first.attempt_id,
     });
-    const [outcome] = await sql<{ event_type: string; result_class: string }[]>`
-      select event_type, result_class from provider_attempt_events
+    const [outcome] = await sql<{
+      event_type: string;
+      consumption_status: string;
+      result_class: string;
+    }[]>`
+      select event_type, consumption_status, result_class from provider_attempt_events
       where attempt_id = ${first.attempt_id} and event_type <> 'attempt_started'
     `;
     expect(outcome).toEqual({
       event_type: 'attempt_unknown_after_crash',
+      consumption_status: 'unknown',
       result_class: 'worker_process_loss',
     });
 
+    await expect(beginAttempt(fixture, first.attempt_id))
+      .rejects.toThrow(/provider_replay_rejected/u);
+
     const grok = await seedReadyProvider('grok');
-    await expect(beginAttempt({ ...fixture, ...grok }, null))
+    const second = await beginAttempt({ ...fixture, ...grok }, first.attempt_id);
+    expect(second).toMatchObject({
+      attempt_sequence: 2,
+      provider_id: grok.providerId,
+    });
+    const [child] = await sql<{ fallback_parent_attempt_id: string }[]>`
+      select fallback_parent_attempt_id from provider_attempt_events
+      where attempt_id = ${second.attempt_id} and event_type = 'attempt_started'
+    `;
+    expect(child?.fallback_parent_attempt_id).toBe(first.attempt_id);
+  });
+
+  // Break: a raw unresolved start is used as a distinct-provider parent before reconciliation.
+  it('rejects a distinct fallback before the original start is reconciled', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    const grok = await seedReadyProvider('grok');
+    await expect(beginAttempt({ ...fixture, ...grok }, first.attempt_id))
+      .rejects.toThrow(/unresolved_start/u);
+  });
+
+  // Break: an older crash-unknown attempt extends the chain after a newer parent exists.
+  it('rejects a stale crash-unknown parent', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(
+      fixture,
+      first.attempt_id,
+      'attempt_unknown_after_crash',
+      'unknown',
+      'worker_process_loss',
+    );
+    const grok = await seedReadyProvider('grok');
+    const secondFixture = { ...fixture, ...grok };
+    const second = await beginAttempt(secondFixture, first.attempt_id);
+    await appendOutcome(
+      secondFixture,
+      second.attempt_id,
+      'attempt_failed',
+      'unknown',
+      'capacity_exhausted',
+    );
+    const third = await seedReadyProvider('codex');
+    await expect(beginAttempt({ ...fixture, ...third }, first.attempt_id))
       .rejects.toThrow(/fallback_parent_rejected/u);
+  });
+
+  // Break: an unknown attempt from another logical analysis is accepted as a fallback parent.
+  it('rejects an unrelated crash-unknown parent', async () => {
+    const target = await seedCandidateAndLeases();
+    const unrelated = await seedCandidateAndLeases();
+    const unrelatedAttempt = await beginAttempt(unrelated);
+    await appendOutcome(
+      unrelated,
+      unrelatedAttempt.attempt_id,
+      'attempt_unknown_after_crash',
+      'unknown',
+      'worker_process_loss',
+    );
+    const grok = await seedReadyProvider('grok');
+    await expect(beginAttempt(
+      { ...target, ...grok },
+      unrelatedAttempt.attempt_id,
+    )).rejects.toThrow(/fallback_parent_rejected/u);
   });
 
   it('stages one winner and finalizes analysis and usage exactly once', async () => {
@@ -836,10 +906,16 @@ describe('provider attempt transactions', () => {
       await seedReadyProvider('grok'),
     ];
     let parent: string | null = null;
-    for (const provider of providers.slice(0, 3)) {
+    for (const [index, provider] of providers.slice(0, 3).entries()) {
       const scoped = { ...fixture, ...provider };
       const attempt = await beginAttempt(scoped, parent);
-      await appendOutcome(scoped, attempt.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+      await appendOutcome(
+        scoped,
+        attempt.attempt_id,
+        index === 0 ? 'attempt_unknown_after_crash' : 'attempt_failed',
+        'unknown',
+        index === 0 ? 'worker_process_loss' : 'capacity_exhausted',
+      );
       parent = attempt.attempt_id;
     }
     await expect(beginAttempt({ ...fixture, ...providers[3] }, parent)).rejects.toThrow(/provider_limit/i);
