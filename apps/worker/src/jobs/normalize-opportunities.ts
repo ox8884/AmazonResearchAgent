@@ -340,7 +340,6 @@ export async function runNormalizeJob(
     throw new NormalizationJobError('Normalization jobs must contain exactly one candidate id.');
   }
   const promptVersion = dependencies.promptVersion ?? NORMALIZATION_PROMPT_VERSION;
-  const locale = LocaleSchema.parse(input.locale);
   const candidates = await loadCandidates(dependencies.client, input.candidateIds);
   const candidate = candidates[0];
   if (!candidate || candidate.normalization_generation !== input.normalizationGeneration) {
