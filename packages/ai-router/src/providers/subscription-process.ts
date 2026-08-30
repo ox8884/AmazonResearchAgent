@@ -55,6 +55,7 @@ export type SubscriptionResultEnvelope = z.infer<
 >;
 
 export interface SubscriptionProcessTransport<Profile, Invocation, Result> {
+  readonly isolation: 'systemd-subscription-sandbox-v1';
   run(profile: Profile, invocation: Invocation, signal: AbortSignal): Promise<Result>;
 }
 

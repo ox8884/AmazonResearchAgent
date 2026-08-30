@@ -79,6 +79,7 @@ export class SystemdSubscriptionSandbox implements SubscriptionProcessTransport<
   SubscriptionInvocation,
   SubscriptionResultEnvelope
 > {
+  readonly isolation = 'systemd-subscription-sandbox-v1' as const;
   private readonly controller: SubscriptionSandboxController;
   private readonly lifecycle: SubscriptionSandboxLifecycle;
 

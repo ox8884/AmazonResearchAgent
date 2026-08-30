@@ -55,6 +55,21 @@ export type {
   SubscriptionSandboxErrorKind,
   SubscriptionSandboxPhase
 } from './providers/subscription-errors';
+export {
+  CODEX_SUBSCRIPTION_IDENTITY,
+  CodexSubscriptionAdapter,
+  CodexSubscriptionError,
+  parseCodexNormalizationOutput
+} from './providers/codex-subscription';
+export type {
+  CodexAuthHomeIdentity,
+  CodexBinaryIdentity,
+  CodexExecutionProfile,
+  CodexInvocation,
+  CodexSandboxProfile,
+  CodexSubscriptionTransport
+} from './providers/codex-subscription';
+
 
 export { routeAiRequest } from './router';
 export type {

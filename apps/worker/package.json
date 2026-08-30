@@ -22,7 +22,8 @@
     "@ara/research-engine": "workspace:*",
     "@ara/secret-store": "workspace:*",
     "@ara/shared": "workspace:*",
-    "undici": "^7.29.0"
+    "undici": "^7.29.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "tsx": "4.23.12"
