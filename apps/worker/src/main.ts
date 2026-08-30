@@ -69,6 +69,20 @@ export interface WorkerLoopOptions extends RunJobOptions {
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
+export interface WorkerRuntime {
+  readonly queue: WorkerQueue;
+  readonly handlers: JobHandlers;
+}
+
+export interface StartWorkerOptions {
+  readonly client: Parameters<typeof assertNormalizationWriterCapability>[0];
+  readonly claimedReleaseSha: string | undefined;
+  readonly createRuntime: () => WorkerRuntime;
+  readonly runLoop?: (options: WorkerLoopOptions) => Promise<void>;
+  readonly workerId: string;
+  readonly signal: AbortSignal;
+}
+
 const consoleLogger: WorkerLogger = {
   info(message) {
     console.info(formatLog({ level: 'info', service: 'worker', event: message }));
@@ -226,6 +240,17 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
   }
 }
 
+export async function startWorker(options: StartWorkerOptions): Promise<void> {
+  await assertNormalizationWriterCapability(options.client, options.claimedReleaseSha);
+  const runtime = options.createRuntime();
+  await (options.runLoop ?? runWorkerLoop)({
+    queue: runtime.queue,
+    handlers: runtime.handlers,
+    workerId: options.workerId,
+    signal: options.signal
+  });
+}
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -280,37 +305,41 @@ export async function main(): Promise<void> {
     url: requiredEnvironment('SUPABASE_URL'),
     serviceRoleKey: requiredEnvironment('SUPABASE_SERVICE_ROLE_KEY')
   });
-  await assertNormalizationWriterCapability(client);
-  const providerRuntime = createProviderRuntimeRepository(client);
-  const providerCatalog = new ProviderCatalogCache(() =>
-    resolvePersistedProviderCatalog(client, { runtimeRepository: providerRuntime })
-  );
-  const composition = createWorkerComposition();
-  const normalizationCoordinator = new NormalizationExecutionCoordinator({
-    attempts: createProviderAttemptRepository(client),
-    runtime: providerRuntime,
-    semaphores: composition.adapterSemaphores,
-    resolveTarget: (selection) => resolvePersistedNormalizationTarget(client, selection)
-  });
-  const queue = createQueue(client);
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
   try {
-    await runWorkerLoop({
-      queue,
-      handlers: createJobHandlers(client, {
-        ...composition.handlerOptions,
-        providerRuntime,
-        normalizationCoordinator,
-        resolveProviderProbe: async () => {
-          throw new ProviderSetupRequiredError();
-        },
-        resolveProviderCatalog: (forceRefresh) =>
-          providerCatalog.resolve(forceRefresh)
-      }),
+    await startWorker({
+      client,
+      claimedReleaseSha: process.env.NORMALIZATION_WRITER_RELEASE_SHA,
+      createRuntime: () => {
+        const providerRuntime = createProviderRuntimeRepository(client);
+        const providerCatalog = new ProviderCatalogCache(() =>
+          resolvePersistedProviderCatalog(client, { runtimeRepository: providerRuntime })
+        );
+        const composition = createWorkerComposition();
+        const normalizationCoordinator = new NormalizationExecutionCoordinator({
+          attempts: createProviderAttemptRepository(client),
+          runtime: providerRuntime,
+          semaphores: composition.adapterSemaphores,
+          resolveTarget: (selection) => resolvePersistedNormalizationTarget(client, selection)
+        });
+        return {
+          queue: createQueue(client),
+          handlers: createJobHandlers(client, {
+            ...composition.handlerOptions,
+            providerRuntime,
+            normalizationCoordinator,
+            resolveProviderProbe: async () => {
+              throw new ProviderSetupRequiredError();
+            },
+            resolveProviderCatalog: (forceRefresh) =>
+              providerCatalog.resolve(forceRefresh)
+          })
+        };
+      },
       workerId: process.env.WORKER_ID ?? `${hostname()}-${process.pid}`,
       signal: controller.signal
     });

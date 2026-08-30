@@ -1,9 +1,9 @@
 import type { QueueDatabaseClient } from '@ara/queue';
 
 export const NORMALIZATION_WRITER_MODE = 'canonical' as const;
-export const NORMALIZATION_WRITER_RELEASE_SHA = process.env.NORMALIZATION_WRITER_RELEASE_SHA;
-
-const RELEASE_SHA = /^[0-9a-f]{40}$/u;
+export const NORMALIZATION_WRITER_MIGRATION_IDENTITY = '202608290022' as const;
+export const NORMALIZATION_WRITER_RELEASE_SHA =
+  '13b51161a28f3fbef7a193f13c4fe8bb35c0f21f' as const;
 
 type WriterCapabilityClient = Pick<QueueDatabaseClient, 'rpc'>;
 
@@ -15,25 +15,46 @@ export class NormalizationWriterCapabilityError extends Error {
 }
 
 export async function assertNormalizationWriterCapability(
-  client: WriterCapabilityClient
+  client: WriterCapabilityClient,
+  claimedReleaseSha: string | undefined = process.env.NORMALIZATION_WRITER_RELEASE_SHA
 ): Promise<void> {
-  const { data, error } = await client.rpc('read_normalization_writer_capability');
-  if (error || data !== NORMALIZATION_WRITER_MODE) {
+  if (claimedReleaseSha === undefined) {
     throw new NormalizationWriterCapabilityError(
-      `Database writer capability must be exactly ${NORMALIZATION_WRITER_MODE}.`,
+      'NORMALIZATION_WRITER_RELEASE_SHA must claim the immutable Phase-B release SHA.'
+    );
+  }
+  normalizationWriterIdentity(claimedReleaseSha);
+  const { data, error } = await client.rpc('read_normalization_writer_capability');
+  const capability = typeof data === 'object' && data !== null && !Array.isArray(data)
+    ? data
+    : null;
+  if (
+    error ||
+    capability === null ||
+    capability.mode !== NORMALIZATION_WRITER_MODE ||
+    capability.migration_identity !== NORMALIZATION_WRITER_MIGRATION_IDENTITY
+  ) {
+    throw new NormalizationWriterCapabilityError(
+      `Database writer capability must be exactly ${NORMALIZATION_WRITER_MODE} ` +
+      `at migration ${NORMALIZATION_WRITER_MIGRATION_IDENTITY}.`,
       error ?? undefined
     );
   }
 }
 
-export function normalizationWriterIdentity(releaseSha: string | undefined = NORMALIZATION_WRITER_RELEASE_SHA): {
+export function normalizationWriterIdentity(
+  claimedReleaseSha: string = NORMALIZATION_WRITER_RELEASE_SHA
+): {
   readonly mode: typeof NORMALIZATION_WRITER_MODE;
-  readonly releaseSha: string;
+  readonly releaseSha: typeof NORMALIZATION_WRITER_RELEASE_SHA;
 } {
-  if (releaseSha === undefined || !RELEASE_SHA.test(releaseSha)) {
+  if (claimedReleaseSha !== NORMALIZATION_WRITER_RELEASE_SHA) {
     throw new NormalizationWriterCapabilityError(
-      'NORMALIZATION_WRITER_RELEASE_SHA must be an immutable 40-character release SHA.'
+      'NORMALIZATION_WRITER_RELEASE_SHA must match the immutable Phase-B release SHA.'
     );
   }
-  return { mode: NORMALIZATION_WRITER_MODE, releaseSha };
+  return {
+    mode: NORMALIZATION_WRITER_MODE,
+    releaseSha: NORMALIZATION_WRITER_RELEASE_SHA
+  };
 }

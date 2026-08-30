@@ -130,6 +130,38 @@ begin
 end;
 $$;
 
+drop function public.read_normalization_writer_capability();
+create function public.read_normalization_writer_capability()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  row_count integer;
+  selected_mode text;
+  selected_migration_identity text;
+begin
+  select count(*), min(mode), min(migration_identity)
+  into row_count, selected_mode, selected_migration_identity
+  from public.normalization_writer_capability;
+  if row_count <> 1
+     or selected_mode <> 'canonical'
+     or selected_migration_identity <> '202608290022' then
+    raise exception 'normalization_writer_capability_invalid';
+  end if;
+  return jsonb_build_object(
+    'mode', selected_mode,
+    'migration_identity', selected_migration_identity
+  );
+end;
+$$;
+revoke all on function public.read_normalization_writer_capability()
+  from public, anon, authenticated;
+grant execute on function public.read_normalization_writer_capability()
+  to service_role;
+
 create function public.rearm_candidate_normalization(
   candidate_id uuid,
   expected_candidate_state text,

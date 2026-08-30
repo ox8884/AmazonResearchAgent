@@ -2325,7 +2325,7 @@ export type Database = {
         }
         Returns: boolean
       }
-      read_normalization_writer_capability: { Args: never; Returns: string }
+      read_normalization_writer_capability: { Args: never; Returns: Json }
       rearm_candidate_normalization: {
         Args: {
           candidate_id: string

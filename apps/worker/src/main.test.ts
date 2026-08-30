@@ -7,6 +7,7 @@ import {
   retryDelayMilliseconds,
   runJob,
   runWorkerLoop,
+  startWorker,
   type WorkerLogger,
   type WorkerQueue
 } from './main';
@@ -224,5 +225,58 @@ describe('worker job execution', () => {
     expect(composition.adapterSemaphores).toBe(
       composition.handlerOptions.adapterSemaphores
     );
+  });
+});
+
+describe('worker startup identity gate', () => {
+  const phaseBReleaseSha = '13b51161a28f3fbef7a193f13c4fe8bb35c0f21f';
+
+  function startupFixture(data: unknown, claimedReleaseSha: string | undefined) {
+    const createRuntime = vi.fn(() => ({
+      queue: new FakeWorkerQueue(),
+      handlers: {} as never
+    }));
+    const runLoop = vi.fn(async () => undefined);
+    return {
+      options: {
+        client: { rpc: vi.fn(async () => ({ data, error: null })) } as never,
+        claimedReleaseSha,
+        createRuntime,
+        runLoop,
+        workerId: 'worker-a',
+        signal: new AbortController().signal
+      },
+      createRuntime,
+      runLoop
+    };
+  }
+
+  // Break: missing, mutable, or wrong-migration identity reaches queue construction or claims.
+  it.each([
+    ['missing release', { mode: 'canonical', migration_identity: '202608290022' }, undefined],
+    ['malformed release', { mode: 'canonical', migration_identity: '202608290022' }, 'not-a-sha'],
+    ['wrong valid release', { mode: 'canonical', migration_identity: '202608290022' }, 'b'.repeat(40)],
+    ['wrong migration', { mode: 'canonical', migration_identity: '202608290021' }, phaseBReleaseSha],
+    ['legacy mode', { mode: 'legacy', migration_identity: '202608290022' }, phaseBReleaseSha]
+  ] as const)('rejects %s before constructing claim-capable runtime', async (
+    _label,
+    capability,
+    claimedReleaseSha
+  ) => {
+    const fixture = startupFixture(capability, claimedReleaseSha);
+    await expect(startWorker(fixture.options)).rejects.toThrow(/writer capability|release SHA/u);
+    expect(fixture.createRuntime).not.toHaveBeenCalled();
+    expect(fixture.runLoop).not.toHaveBeenCalled();
+  });
+
+  // Break: the exact immutable identity cannot enter the worker loop after capability validation.
+  it('enters the worker loop only after exact Phase-B identity validation', async () => {
+    const fixture = startupFixture({
+      mode: 'canonical',
+      migration_identity: '202608290022'
+    }, phaseBReleaseSha);
+    await expect(startWorker(fixture.options)).resolves.toBeUndefined();
+    expect(fixture.createRuntime).toHaveBeenCalledOnce();
+    expect(fixture.runLoop).toHaveBeenCalledOnce();
   });
 });

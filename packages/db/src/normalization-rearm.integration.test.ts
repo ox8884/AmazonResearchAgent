@@ -73,6 +73,7 @@ async function seedCandidate(
   return candidateId;
 }
 
+
 async function seedReadyProvider(sql: ReturnType<typeof postgres>): Promise<{
   readonly providerId: string;
   readonly modelId: string;
@@ -176,6 +177,13 @@ describe('normalization generation cutover', () => {
       select mode, migration_identity from normalization_writer_capability
     `;
     expect(capability).toEqual({ mode: 'canonical', migration_identity: '202608290022' });
+    const [projectedCapability] = await sql<{ capability: unknown }[]>`
+      select read_normalization_writer_capability() as capability
+    `;
+    expect(projectedCapability?.capability).toEqual({
+      mode: 'canonical',
+      migration_identity: '202608290022'
+    });
     const [legacy] = await sql<{ count: number }[]>`
       select count(*)::integer as count
       from jobs
@@ -291,6 +299,7 @@ describe('normalization generation cutover', () => {
     expect(capability?.mode).toBe('legacy');
     await sql.end();
   }, 60_000);
+
 
   // Break: no Ready provider, ineligibility, or an advanced state consumes a generation.
   it('rejects unavailable providers and ineligible or advanced candidates', async () => {
