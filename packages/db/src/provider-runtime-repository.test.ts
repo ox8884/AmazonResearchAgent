@@ -8,6 +8,17 @@ const bindings = {
   expectedExecutionFingerprint: 'fp-codex-v4'
 } as const;
 
+const jobLease = {
+  jobId: '00000000-0000-4000-8000-000000000001',
+  owner: 'worker-a',
+  epoch: 3,
+} as const;
+const analysisLease = {
+  analysisId: '00000000-0000-4000-8000-000000000002',
+  owner: 'analysis-worker-a',
+  epoch: 4,
+} as const;
+
 function clientWith(
   data: unknown = {
     job_id: 'job-1',
@@ -82,17 +93,20 @@ describe('provider runtime repository', () => {
     const client = clientWith({ mutated: true, allow_fallback: true, allow_replay: false });
     const repository = createProviderRuntimeRepository(client as never);
     await repository.applyFailure({
-      ...bindings,
-      modelId: 'gpt-5.6',
+      attemptId: '00000000-0000-4000-8000-000000000003',
+      jobLease,
+      analysisLease,
       failureClass: 'capacity_exhausted',
       retryAfterSeconds: 47
     });
     expect(client.rpc).toHaveBeenCalledWith('apply_ai_provider_runtime_failure', {
-      provider_id: bindings.providerId,
-      model_id: 'gpt-5.6',
-      expected_settings_revision: 4,
-      expected_auth_generation: 2,
-      expected_execution_fingerprint: 'fp-codex-v4',
+      attempt_id: '00000000-0000-4000-8000-000000000003',
+      job_id: jobLease.jobId,
+      job_lease_owner: jobLease.owner,
+      job_lease_epoch: jobLease.epoch,
+      analysis_id: analysisLease.analysisId,
+      analysis_lease_owner: analysisLease.owner,
+      analysis_lease_epoch: analysisLease.epoch,
       failure_class: 'capacity_exhausted',
       retry_after_seconds: 47
     });

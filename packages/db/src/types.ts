@@ -1895,12 +1895,14 @@ export type Database = {
       }
       apply_ai_provider_runtime_failure: {
         Args: {
-          expected_auth_generation: number
-          expected_execution_fingerprint: string
-          expected_settings_revision: number
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          attempt_id: string
           failure_class: string
-          model_id: string
-          provider_id: string
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
           retry_after_seconds?: number
         }
         Returns: Json

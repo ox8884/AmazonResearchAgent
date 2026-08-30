@@ -1,5 +1,6 @@
 import type { SubscriptionAdapter, SubscriptionFailureClass } from '@ara/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { AnalysisLeaseIdentity, JobLeaseIdentity } from './provider-attempt-repository';
 import type { Database, Json } from './types';
 
 export const READINESS_MAX_AGE_SECONDS = 600;
@@ -26,6 +27,11 @@ export type RuntimeMutationResult = {
   readonly allow_replay: boolean;
 };
 
+type RuntimeFailureClass = Exclude<
+  SubscriptionFailureClass,
+  'process_spawn_failure_pre_consumption'
+>;
+
 export type AcceptanceProbeInput = RuntimeBindings & {
   readonly modelId: string;
   readonly adapter: SubscriptionAdapter;
@@ -47,9 +53,11 @@ export interface ProviderRuntimeRepository {
   activate(input: RuntimeBindings & { readonly modelId: string; readonly termsDigest: string }): Promise<ProbeRequest>;
   deactivate(input: { readonly providerId: string }): Promise<Json>;
   commitProbe(input: RuntimeBindings & { readonly modelId: string; readonly expectedProbeGeneration: number }): Promise<Json>;
-  applyFailure(input: RuntimeBindings & {
-    readonly modelId: string;
-    readonly failureClass: SubscriptionFailureClass;
+  applyFailure(input: {
+    readonly attemptId: string;
+    readonly jobLease: JobLeaseIdentity;
+    readonly analysisLease: AnalysisLeaseIdentity;
+    readonly failureClass: RuntimeFailureClass;
     readonly retryAfterSeconds: number | null;
   }): Promise<RuntimeMutationResult>;
   fenceAuth(input: RuntimeBindings): Promise<Json>;
@@ -176,8 +184,13 @@ export function createProviderRuntimeRepository(
     async applyFailure(input) {
       const operation = 'apply provider runtime failure';
       const { data, error } = await client.rpc('apply_ai_provider_runtime_failure', {
-        ...bindings(input),
-        model_id: input.modelId,
+        attempt_id: input.attemptId,
+        job_id: input.jobLease.jobId,
+        job_lease_owner: input.jobLease.owner,
+        job_lease_epoch: input.jobLease.epoch,
+        analysis_id: input.analysisLease.analysisId,
+        analysis_lease_owner: input.analysisLease.owner,
+        analysis_lease_epoch: input.analysisLease.epoch,
         failure_class: input.failureClass,
         ...(input.retryAfterSeconds === null
           ? {}
