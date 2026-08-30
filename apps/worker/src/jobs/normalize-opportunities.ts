@@ -232,11 +232,19 @@ async function loadExistingAnalysis(
 }
 
 
-interface AnalysisClaim {
-  readonly analysisId: string;
-  readonly status: 'claimed' | 'completed' | 'busy';
-  readonly completed: AiProviderResult<KeywordNormalization> | null;
-}
+type AnalysisClaim =
+  | {
+      readonly analysisId: string;
+      readonly status: 'claimed';
+      readonly analysisLeaseEpoch: number;
+      readonly completed: null;
+    }
+  | {
+      readonly analysisId: string;
+      readonly status: 'completed' | 'busy';
+      readonly analysisLeaseEpoch: null;
+      readonly completed: AiProviderResult<KeywordNormalization> | null;
+    };
 
 class AnalysisClaimBusyError extends Error {
   readonly retryable = true;
@@ -266,6 +274,8 @@ async function claimAnalysis(
     analysis_locale: locale,
     prompt_version: promptVersion,
     input_payload: asJson({
+      candidateId: candidate.id,
+      normalizationGeneration: candidate.normalization_generation,
       keyword: candidate.keyword,
       normalizedExactKeyword: candidate.normalized_exact_keyword
     })
@@ -275,7 +285,12 @@ async function claimAnalysis(
     throw new NormalizationJobError('claim AI analysis.', error);
   }
   if (claim.claim_status === 'busy') {
-    return { analysisId: claim.analysis_id, status: 'busy', completed: null };
+    return {
+      analysisId: claim.analysis_id,
+      status: 'busy',
+      analysisLeaseEpoch: null,
+      completed: null
+    };
   }
   if (claim.claim_status === 'completed') {
     const existing = await loadExistingAnalysis(client, hash);
@@ -285,10 +300,23 @@ async function claimAnalysis(
     return {
       analysisId: claim.analysis_id,
       status: 'completed',
+      analysisLeaseEpoch: null,
       completed: existing
     };
   }
-  return { analysisId: claim.analysis_id, status: 'claimed', completed: null };
+  if (
+    claim.claim_status !== 'claimed' ||
+    !Number.isSafeInteger(claim.analysis_lease_epoch) ||
+    claim.analysis_lease_epoch < 1
+  ) {
+    throw new NormalizationJobError('AI analysis claim returned an invalid lease epoch.');
+  }
+  return {
+    analysisId: claim.analysis_id,
+    status: 'claimed',
+    analysisLeaseEpoch: claim.analysis_lease_epoch,
+    completed: null
+  };
 }
 
 async function linkAnalysisEntity(
@@ -310,11 +338,13 @@ async function completeAnalysis(
   client: QueueDatabaseClient,
   analysisId: string,
   workerId: string,
+  analysisLeaseEpoch: number,
   result: AiProviderResult<KeywordNormalization>
 ): Promise<void> {
   const { data, error } = await client.rpc('complete_ai_analysis', {
     analysis_id: analysisId,
     worker_id: workerId,
+    analysis_lease_epoch: analysisLeaseEpoch,
     analysis_output: asJson(result.output),
     analysis_usage: asJson(result.usage),
     cost_class: result.costClass,
@@ -332,11 +362,13 @@ async function renewAnalysisLease(
   client: QueueDatabaseClient,
   analysisId: string,
   workerId: string,
+  analysisLeaseEpoch: number,
   leaseSeconds: number
 ): Promise<boolean> {
   const { data, error } = await client.rpc('renew_ai_analysis_lease', {
     analysis_id: analysisId,
     worker_id: workerId,
+    analysis_lease_epoch: analysisLeaseEpoch,
     lease_seconds: leaseSeconds
   });
   if (error) {
@@ -349,21 +381,27 @@ async function withAnalysisHeartbeat<T>(
   client: QueueDatabaseClient,
   analysisId: string,
   workerId: string,
+  analysisLeaseEpoch: number,
   leaseSeconds: number,
   heartbeatMs: number,
   work: () => Promise<T>
 ): Promise<T> {
+  const renew = (): Promise<boolean> =>
+    renewAnalysisLease(
+      client,
+      analysisId,
+      workerId,
+      analysisLeaseEpoch,
+      leaseSeconds
+    );
   const timer = setInterval(() => {
-    void renewAnalysisLease(client, analysisId, workerId, leaseSeconds).then((owned) => {
-      if (!owned) {
-        clearInterval(timer);
-      }
+    void renew().then((owned) => {
+      if (!owned) clearInterval(timer);
     });
   }, heartbeatMs);
   try {
     const result = await work();
-    const owned = await renewAnalysisLease(client, analysisId, workerId, leaseSeconds);
-    if (!owned) {
+    if (!(await renew())) {
       throw new AnalysisClaimBusyError();
     }
     return result;
@@ -376,12 +414,14 @@ async function failAnalysis(
   client: QueueDatabaseClient,
   analysisId: string,
   workerId: string,
+  analysisLeaseEpoch: number,
   usage: Json | null
 ): Promise<void> {
   if (usage) {
     const { error: usageError } = await client.rpc('record_failed_ai_usage', {
       analysis_id: analysisId,
       worker_id: workerId,
+      analysis_lease_epoch: analysisLeaseEpoch,
       analysis_usage: usage
     });
     if (usageError) {
@@ -391,6 +431,7 @@ async function failAnalysis(
   const { error } = await client.rpc('fail_ai_analysis', {
     analysis_id: analysisId,
     worker_id: workerId,
+    analysis_lease_epoch: analysisLeaseEpoch,
     error_code: 'provider_execution_failed',
     retry_at: new Date(Date.now() + 60_000).toISOString()
   });
@@ -519,12 +560,13 @@ async function normalizeCandidate(
 
   let result = claim.completed;
   const reused = result !== null;
-  if (!result) {
+  if (claim.status === 'claimed') {
     try {
       result = await withAnalysisHeartbeat(
         dependencies.client,
         claim.analysisId,
         workerId,
+        claim.analysisLeaseEpoch,
         dependencies.leaseSeconds ?? 120,
         dependencies.heartbeatMs ?? 30_000,
         () =>
@@ -541,6 +583,7 @@ async function normalizeCandidate(
         dependencies.client,
         claim.analysisId,
         workerId,
+        claim.analysisLeaseEpoch,
         result
       );
     } catch (error) {
@@ -548,6 +591,7 @@ async function normalizeCandidate(
         dependencies.client,
         claim.analysisId,
         workerId,
+        claim.analysisLeaseEpoch,
         error instanceof InvalidStructuredOutputError
           ? asJson({
               ...error.usage,
@@ -582,6 +626,10 @@ async function normalizeCandidate(
         reused: false
       };
     }
+  }
+
+  if (!result) {
+    throw new NormalizationJobError('AI analysis completed without a result.');
   }
 
   await linkAnalysisEntity(

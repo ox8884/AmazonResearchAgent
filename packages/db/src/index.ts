@@ -43,6 +43,20 @@ export type {
   ProviderRuntimeRepository,
   RuntimeMutationResult
 } from './provider-runtime-repository';
+export {
+  createProviderAttemptRepository,
+  ProviderAttemptRepositoryError
+} from './provider-attempt-repository';
+export type {
+  AnalysisLeaseIdentity,
+  AttemptAuthorization,
+  BeginProviderAttemptInput,
+  CandidateFinalizationResult,
+  FinalizeCandidateInput,
+  JobLeaseIdentity,
+  ProviderAttemptRepository
+} from './provider-attempt-repository';
+
 
 
 

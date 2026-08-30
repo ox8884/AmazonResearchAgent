@@ -36,8 +36,9 @@ function database() {
 }
 
 function makeProbeJob(candidateId: string): Job {
+  const id = randomUUID();
   return {
-    id: randomUUID(),
+    id,
     type: 'MARKET_PROBE',
     payload: { candidateId, locale: 'ko' },
     status: 'running',
@@ -45,6 +46,7 @@ function makeProbeJob(candidateId: string): Job {
     availableAt: '2026-08-27T00:00:00.000Z',
     leasedUntil: '2026-08-27T00:02:00.000Z',
     leasedBy: 'worker-a',
+    leaseIdentity: { jobId: id, owner: 'worker-a', epoch: 1 },
     attempts: 1,
     maxAttempts: 5,
     idempotencyKey: `probe-wire-${candidateId}`,

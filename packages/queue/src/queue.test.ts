@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DuplicateJobError,
   DurableQueue,
   type Job,
   type JobInsert,
+  type JobLeaseIdentity,
   type QueueRepository
 } from './queue';
 
@@ -28,6 +29,7 @@ class InMemoryQueueRepository implements QueueRepository {
       availableAt: input.availableAt,
       leasedUntil: null,
       leasedBy: null,
+      leaseIdentity: { jobId: id, owner: '', epoch: 0 },
       attempts: 0,
       maxAttempts: 5,
       idempotencyKey: input.idempotencyKey,
@@ -83,5 +85,33 @@ describe('durable queue', () => {
 
     expect(second).toBe(first);
     expect(repository.jobs.size).toBe(1);
+  });
+});
+
+describe('job lease epochs', () => {
+  // Break: a reclaimed job can be mutated by an old process that reused the same worker ID.
+  it('passes the claimed epoch to every ownership-sensitive mutation', async () => {
+    const repository = new InMemoryQueueRepository();
+    const queue = new DurableQueue(repository);
+    const lease: JobLeaseIdentity = { jobId: 'job-1', owner: 'worker-a', epoch: 7 };
+    const complete = vi.spyOn(repository, 'completeJob');
+    const fail = vi.spyOn(repository, 'failJob');
+    const heartbeat = vi.spyOn(repository, 'heartbeatJob');
+    const checkpoint = vi.spyOn(repository, 'checkpointJob');
+
+    await queue.completeJob(lease, { phase: 'done' });
+    await queue.failJob(lease, 'failed', '2026-08-30T00:00:00.000Z', { phase: 'failed' });
+    await queue.heartbeatJob(lease, 120);
+    await queue.checkpointJob(lease, { phase: 'saved' }, 120);
+
+    expect(complete).toHaveBeenCalledWith(lease, { phase: 'done' });
+    expect(fail).toHaveBeenCalledWith(
+      lease,
+      'failed',
+      '2026-08-30T00:00:00.000Z',
+      { phase: 'failed' }
+    );
+    expect(heartbeat).toHaveBeenCalledWith(lease, 120);
+    expect(checkpoint).toHaveBeenCalledWith(lease, { phase: 'saved' }, 120);
   });
 });

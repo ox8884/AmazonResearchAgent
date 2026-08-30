@@ -17,6 +17,7 @@ export type {
   EnqueueJobInput,
   Job,
   JobInsert,
+  JobLeaseIdentity,
   JobStatus,
   JobType,
   QueueDatabaseClient,

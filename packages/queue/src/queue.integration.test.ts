@@ -72,11 +72,13 @@ integration('Supabase queue adapter', () => {
       payload: {},
       idempotencyKey: key
     });
-    await queue.claimJobs('integration-worker-a', 1, 60);
+    const [claimed] = await queue.claimJobs('integration-worker-a', 1, 60);
+    if (!claimed) {
+      throw new Error('Expected the job to be claimed.');
+    }
 
     await queue.checkpointJob(
-      jobId,
-      'integration-worker-a',
+      claimed.leaseIdentity,
       { phase: 'persisted_raw' },
       60
     );

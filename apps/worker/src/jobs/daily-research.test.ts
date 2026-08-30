@@ -119,6 +119,7 @@ function orchestratorJob(id: string): Job {
     availableAt: '2099-01-01T00:00:00.000Z',
     leasedUntil: '2099-01-01T00:02:00.000Z',
     leasedBy: 'unit-worker',
+    leaseIdentity: { jobId: id, owner: 'unit-worker', epoch: 1 },
     attempts: 1,
     maxAttempts: 5,
     idempotencyKey: `daily-research:${DATE}`,

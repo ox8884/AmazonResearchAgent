@@ -104,8 +104,9 @@ integration('deep validation job', () => {
         isUpperBound: false
       })
     });
+    const jobId = randomUUID();
     const job: Job = {
-      id: randomUUID(),
+      id: jobId,
       type: 'DEEP_VALIDATION',
       payload: { candidateId, locale: 'ko' },
       status: 'running',
@@ -113,6 +114,7 @@ integration('deep validation job', () => {
       availableAt: '2026-08-27T00:00:00.000Z',
       leasedUntil: '2026-08-27T00:02:00.000Z',
       leasedBy: 'worker-a',
+      leaseIdentity: { jobId, owner: 'worker-a', epoch: 1 },
       attempts: 1,
       maxAttempts: 5,
       idempotencyKey: `deep-validation:${candidateId}`,
@@ -365,8 +367,9 @@ integration('deep validation job', () => {
         isUpperBound: false
       })
     });
+    const jobId = randomUUID();
     const job: Job = {
-      id: randomUUID(),
+      id: jobId,
       type: 'DEEP_VALIDATION',
       payload: { candidateId, locale: 'ko' },
       status: 'running',
@@ -374,6 +377,7 @@ integration('deep validation job', () => {
       availableAt: '2026-08-27T00:00:00.000Z',
       leasedUntil: '2026-08-27T00:02:00.000Z',
       leasedBy: 'worker-a',
+      leaseIdentity: { jobId, owner: 'worker-a', epoch: 1 },
       attempts: 1,
       maxAttempts: 5,
       idempotencyKey: `deep-validation:${candidateId}`,

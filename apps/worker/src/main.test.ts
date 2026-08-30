@@ -19,6 +19,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     availableAt: '2026-08-27T00:00:00.000Z',
     leasedUntil: '2026-08-27T00:02:00.000Z',
     leasedBy: 'worker-a',
+    leaseIdentity: { jobId: 'job-1', owner: 'worker-a', epoch: 1 },
     attempts: 1,
     maxAttempts: 5,
     idempotencyKey: 'fixture',
@@ -40,22 +41,22 @@ class FakeWorkerQueue implements WorkerQueue {
     return [];
   }
 
-  async completeJob(...args: [string, string, unknown]): Promise<void> {
+  async completeJob(...args: [Job['leaseIdentity'], unknown]): Promise<void> {
     this.completed.push(args);
   }
 
   async failJob(
-    ...args: [string, string, string, string, unknown]
+    ...args: [Job['leaseIdentity'], string, string, unknown]
   ): Promise<void> {
     this.failed.push(args);
   }
 
-  async heartbeatJob(...args: [string, string, number]): Promise<void> {
+  async heartbeatJob(...args: [Job['leaseIdentity'], number]): Promise<void> {
     this.heartbeats.push(args);
   }
 
   async checkpointJob(
-    ...args: [string, string, unknown, number]
+    ...args: [Job['leaseIdentity'], unknown, number]
   ): Promise<void> {
     this.checkpoints.push(args);
   }
@@ -101,10 +102,10 @@ describe('worker job execution', () => {
     });
 
     expect(queue.checkpoints).toEqual([
-      ['job-1', 'worker-a', { phase: 'parsed' }, 120]
+      [{ jobId: 'job-1', owner: 'worker-a', epoch: 1 }, { phase: 'parsed' }, 120]
     ]);
     expect(queue.completed).toEqual([
-      ['job-1', 'worker-a', { phase: 'completed' }]
+      [{ jobId: 'job-1', owner: 'worker-a', epoch: 1 }, { phase: 'completed' }]
     ]);
     expect(queue.failed).toEqual([]);
   });
@@ -113,8 +114,10 @@ describe('worker job execution', () => {
   it('redacts errors and schedules a failed second attempt five minutes later', async () => {
     const queue = new FakeWorkerQueue();
     const controller = new AbortController();
-
-    await runJob(makeJob({ attempts: 2 }), {
+    await runJob(makeJob({
+      attempts: 2,
+      leaseIdentity: { jobId: 'job-1', owner: 'worker-a', epoch: 2 }
+    }), {
       queue,
       handlers: {
         IMPORT_OPPORTUNITY_CSV: async (_job, context) => {
@@ -130,8 +133,7 @@ describe('worker job execution', () => {
 
     expect(queue.failed).toEqual([
       [
-        'job-1',
-        'worker-a',
+        { jobId: 'job-1', owner: 'worker-a', epoch: 2 },
         'request used [REDACTED]',
         '2026-08-27T00:05:00.000Z',
         { phase: 'persisted_raw' }
@@ -162,7 +164,9 @@ describe('worker job execution', () => {
     });
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(queue.heartbeats).toEqual([['job-1', 'worker-a', 120]]);
+    expect(queue.heartbeats).toEqual([
+      [{ jobId: 'job-1', owner: 'worker-a', epoch: 1 }, 120]
+    ]);
     if (!finish) {
       throw new Error('Expected the fixture handler to be waiting');
     }

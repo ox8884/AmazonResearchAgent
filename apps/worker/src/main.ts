@@ -20,18 +20,16 @@ const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
 
 export interface WorkerQueue {
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]>;
-  completeJob(jobId: string, workerId: string, checkpoint: unknown): Promise<void>;
+  completeJob(lease: Job['leaseIdentity'], checkpoint: unknown): Promise<void>;
   failJob(
-    jobId: string,
-    workerId: string,
+    lease: Job['leaseIdentity'],
     errorText: string,
     retryAt: string,
     checkpoint: unknown
   ): Promise<void>;
-  heartbeatJob(jobId: string, workerId: string, leaseSeconds: number): Promise<void>;
+  heartbeatJob(lease: Job['leaseIdentity'], leaseSeconds: number): Promise<void>;
   checkpointJob(
-    jobId: string,
-    workerId: string,
+    lease: Job['leaseIdentity'],
     checkpoint: unknown,
     leaseSeconds: number
   ): Promise<void>;
@@ -126,7 +124,7 @@ export async function runJob(job: Job, options: RunJobOptions): Promise<void> {
 
   const heartbeatTimer = setInterval(() => {
     void options.queue
-      .heartbeatJob(job.id, options.workerId, leaseSeconds)
+      .heartbeatJob(job.leaseIdentity, leaseSeconds)
       .catch((error: unknown) => {
         heartbeatFailure = error;
         executionController.abort(error);
@@ -143,8 +141,7 @@ export async function runJob(job: Job, options: RunJobOptions): Promise<void> {
       },
       async saveCheckpoint(nextCheckpoint) {
         await options.queue.checkpointJob(
-          job.id,
-          options.workerId,
+          job.leaseIdentity,
           nextCheckpoint,
           leaseSeconds
         );
@@ -158,7 +155,7 @@ export async function runJob(job: Job, options: RunJobOptions): Promise<void> {
       throw heartbeatFailure;
     }
 
-    await options.queue.completeJob(job.id, options.workerId, checkpoint);
+    await options.queue.completeJob(job.leaseIdentity, checkpoint);
     logger.info(`Completed job ${job.id} (${job.type})`);
   } catch (error) {
     if (error instanceof JobLeaseLostError || heartbeatFailure) {
@@ -171,8 +168,7 @@ export async function runJob(job: Job, options: RunJobOptions): Promise<void> {
     ).toISOString();
     const safeError = errorMessage(error);
     await options.queue.failJob(
-      job.id,
-      options.workerId,
+      job.leaseIdentity,
       safeError,
       retryAt,
       checkpoint

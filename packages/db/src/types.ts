@@ -79,6 +79,7 @@ export type Database = {
           locale: string
           model_id: string
           output: Json | null
+          output_sha256: string | null
           pending_output: Json | null
           pending_usage: Json | null
           pending_winner_attempt_id: string | null
@@ -88,6 +89,7 @@ export type Database = {
           started_at: string
           status: string
           usage: Json
+          winning_attempt_id: string | null
         }
         Insert: {
           attempts?: number
@@ -106,6 +108,7 @@ export type Database = {
           locale: string
           model_id: string
           output?: Json | null
+          output_sha256?: string | null
           pending_output?: Json | null
           pending_usage?: Json | null
           pending_winner_attempt_id?: string | null
@@ -115,6 +118,7 @@ export type Database = {
           started_at: string
           status?: string
           usage?: Json
+          winning_attempt_id?: string | null
         }
         Update: {
           attempts?: number
@@ -133,6 +137,7 @@ export type Database = {
           locale?: string
           model_id?: string
           output?: Json | null
+          output_sha256?: string | null
           pending_output?: Json | null
           pending_usage?: Json | null
           pending_winner_attempt_id?: string | null
@@ -142,6 +147,7 @@ export type Database = {
           started_at?: string
           status?: string
           usage?: Json
+          winning_attempt_id?: string | null
         }
         Relationships: [
           {
@@ -1199,6 +1205,89 @@ export type Database = {
         }
         Relationships: []
       }
+      normalization_writer_capability: {
+        Row: {
+          mode: string
+          singleton: boolean
+          updated_at: string
+        }
+        Insert: {
+          mode: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Update: {
+          mode?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      normalized_candidate_finalizations: {
+        Row: {
+          analysis_id: string
+          candidate_id: string
+          created_at: string
+          decision_id: string
+          finalized_output_sha256: string
+          niche_cluster_id: string | null
+          normalization_generation: number
+          target_state: string
+          winning_attempt_id: string
+        }
+        Insert: {
+          analysis_id: string
+          candidate_id: string
+          created_at?: string
+          decision_id: string
+          finalized_output_sha256: string
+          niche_cluster_id?: string | null
+          normalization_generation: number
+          target_state: string
+          winning_attempt_id: string
+        }
+        Update: {
+          analysis_id?: string
+          candidate_id?: string
+          created_at?: string
+          decision_id?: string
+          finalized_output_sha256?: string
+          niche_cluster_id?: string | null
+          normalization_generation?: number
+          target_state?: string
+          winning_attempt_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "normalized_candidate_finalizations_analysis_id_fkey"
+            columns: ["analysis_id"]
+            isOneToOne: false
+            referencedRelation: "ai_analyses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "normalized_candidate_finalizations_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "normalized_candidate_finalizations_decision_id_fkey"
+            columns: ["decision_id"]
+            isOneToOne: false
+            referencedRelation: "decision_history"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "normalized_candidate_finalizations_niche_cluster_id_fkey"
+            columns: ["niche_cluster_id"]
+            isOneToOne: false
+            referencedRelation: "niche_clusters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notifications: {
         Row: {
           attempts: number
@@ -1777,6 +1866,33 @@ export type Database = {
         }
         Returns: boolean
       }
+      append_ai_provider_attempt_outcome: {
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          attempt_id: string
+          consumption_status: string
+          event_type: string
+          input_tokens?: number
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+          latency_ms?: number
+          output?: Json
+          output_tokens?: number
+          proof_category?: string
+          provider_request_count?: number
+          result_class: string
+          safe_metadata?: Json
+          usage?: Json
+        }
+        Returns: Json
+      }
+      append_candidate_reason: {
+        Args: { existing: Json; reason_code: string; reason_detail: string }
+        Returns: Json
+      }
       apply_ai_provider_runtime_failure: {
         Args: {
           expected_auth_generation: number
@@ -1789,6 +1905,85 @@ export type Database = {
         }
         Returns: Json
       }
+      assert_ai_usage: { Args: { value: Json }; Returns: undefined }
+      assert_current_analysis_lease: {
+        Args: {
+          allowed_status: string
+          analysis_id: string
+          lease_epoch: number
+          lease_owner: string
+        }
+        Returns: {
+          attempts: number
+          available_at: string
+          completed_at: string | null
+          cost_class: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          input_hash: string
+          input_payload: Json
+          last_error: string | null
+          leased_by: string | null
+          leased_until: string | null
+          locale: string
+          model_id: string
+          output: Json | null
+          output_sha256: string | null
+          pending_output: Json | null
+          pending_usage: Json | null
+          pending_winner_attempt_id: string | null
+          prompt_version: string
+          provider_id: string
+          role: string
+          started_at: string
+          status: string
+          usage: Json
+          winning_attempt_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "ai_analyses"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      assert_current_job_lease: {
+        Args: { job_id: string; lease_epoch: number; lease_owner: string }
+        Returns: {
+          attempts: number
+          available_at: string
+          checkpoint: Json
+          created_at: string
+          id: string
+          idempotency_key: string
+          last_error: string | null
+          leased_by: string | null
+          leased_until: string | null
+          max_attempts: number
+          payload: Json
+          priority: number
+          status: string
+          type: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "jobs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      assert_normalization_job_payload: {
+        Args: {
+          candidate_id: string
+          normalization_generation: number
+          payload: Json
+        }
+        Returns: undefined
+      }
+      assert_normalization_output: { Args: { value: Json }; Returns: undefined }
       authorize_api_call: {
         Args: {
           daily_limit: number
@@ -1822,11 +2017,29 @@ export type Database = {
           remaining: number
         }[]
       }
+      begin_ai_provider_attempt: {
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          expected_auth_generation: number
+          expected_execution_fingerprint: string
+          expected_settings_revision: number
+          fallback_parent_attempt_id?: string
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+          model_id: string
+          provider_id: string
+        }
+        Returns: Json
+      }
       canonical_niche_key: { Args: { value: string }; Returns: string }
       checkpoint_job: {
         Args: {
           checkpoint: Json
           job_id: string
+          job_lease_epoch: number
           lease_seconds: number
           worker_id: string
         }
@@ -1846,6 +2059,7 @@ export type Database = {
         }
         Returns: {
           analysis_id: string
+          analysis_lease_epoch: number
           claim_status: string
           output: Json
           usage: Json
@@ -1861,6 +2075,20 @@ export type Database = {
           claimed_cache_key: string
           decision_kind: string
         }[]
+      }
+      claim_completed_ai_analysis_finalization: {
+        Args: {
+          analysis_id: string
+          candidate_id: string
+          expected_candidate_state: string
+          expected_normalization_generation: number
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+          lease_seconds: number
+          new_analysis_lease_owner: string
+        }
+        Returns: Json
       }
       claim_jobs: {
         Args: { job_limit: number; lease_seconds: number; worker_id: string }
@@ -1923,6 +2151,7 @@ export type Database = {
       complete_ai_analysis: {
         Args: {
           analysis_id: string
+          analysis_lease_epoch: number
           analysis_output: Json
           analysis_usage: Json
           completed_at: string
@@ -1936,7 +2165,12 @@ export type Database = {
         Returns: boolean
       }
       complete_job: {
-        Args: { checkpoint: Json; job_id: string; worker_id: string }
+        Args: {
+          checkpoint: Json
+          job_id: string
+          job_lease_epoch: number
+          worker_id: string
+        }
         Returns: boolean
       }
       consume_admin_login_attempt: {
@@ -1947,11 +2181,27 @@ export type Database = {
         Args: { provider_id: string }
         Returns: Json
       }
+      defer_candidate_normalization: {
+        Args: {
+          analysis_id: string
+          candidate_id: string
+          expected_candidate_state: string
+          expected_normalization_generation: number
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+        }
+        Returns: Json
+      }
       enqueue_ai_provider_probe_locked: {
         Args: {
           provider_row: Database["public"]["Tables"]["ai_providers"]["Row"]
           runtime_row: Database["public"]["Tables"]["ai_provider_runtime_state"]["Row"]
         }
+        Returns: Json
+      }
+      enqueue_initial_candidate_normalization: {
+        Args: { candidate_id: string; locale: string; writer_mode: string }
         Returns: Json
       }
       expire_ai_provider_ready_lease: {
@@ -1966,6 +2216,7 @@ export type Database = {
       fail_ai_analysis: {
         Args: {
           analysis_id: string
+          analysis_lease_epoch: number
           error_code: string
           retry_at: string
           worker_id: string
@@ -1977,6 +2228,7 @@ export type Database = {
           checkpoint: Json
           error_text: string
           job_id: string
+          job_lease_epoch: number
           retry_at: string
           worker_id: string
         }
@@ -1991,8 +2243,39 @@ export type Database = {
         }
         Returns: Json
       }
+      finalize_ai_analysis_from_attempt: {
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          attempt_id: string
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+        }
+        Returns: Json
+      }
+      finalize_normalized_candidate: {
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          candidate_id: string
+          expected_candidate_state: string
+          expected_normalization_generation: number
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+        }
+        Returns: Json
+      }
       heartbeat_job: {
-        Args: { job_id: string; lease_seconds: number; worker_id: string }
+        Args: {
+          job_id: string
+          job_lease_epoch: number
+          lease_seconds: number
+          worker_id: string
+        }
         Returns: boolean
       }
       is_ai_provider_routable: {
@@ -2022,6 +2305,18 @@ export type Database = {
         }
         Returns: boolean
       }
+      read_normalization_writer_capability: { Args: never; Returns: string }
+      reconcile_ai_provider_attempts: {
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_lease_owner: string
+          job_id: string
+          job_lease_epoch: number
+          job_lease_owner: string
+        }
+        Returns: Json
+      }
       record_ai_provider_execution_probe: {
         Args: { expected_fingerprint: string; probe: Json; provider_id: string }
         Returns: boolean
@@ -2043,7 +2338,12 @@ export type Database = {
         Returns: boolean
       }
       record_failed_ai_usage: {
-        Args: { analysis_id: string; analysis_usage: Json; worker_id: string }
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          analysis_usage: Json
+          worker_id: string
+        }
         Returns: boolean
       }
       release_admin_login_scrypt: {
@@ -2051,7 +2351,12 @@ export type Database = {
         Returns: boolean
       }
       renew_ai_analysis_lease: {
-        Args: { analysis_id: string; lease_seconds: number; worker_id: string }
+        Args: {
+          analysis_id: string
+          analysis_lease_epoch: number
+          lease_seconds: number
+          worker_id: string
+        }
         Returns: boolean
       }
       request_ai_provider_probe: {

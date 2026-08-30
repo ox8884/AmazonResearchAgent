@@ -52,20 +52,26 @@ describe('core research schema', () => {
     `;
     const jobId = requireJobId(created);
 
-    await sql`select id from claim_jobs('worker-a', 1, 60)`;
+    const [claimed] = await sql<{ attempts: number }[]>`
+      select attempts from claim_jobs('worker-a', 1, 60)
+    `;
+    if (!claimed) throw new Error('Expected a claimed job.');
     const [otherHeartbeat] = await sql<{ result: boolean }[]>`
-      select heartbeat_job(${jobId}::uuid, 'worker-b', 60) as result
+      select heartbeat_job(${jobId}::uuid, 'worker-b', ${claimed.attempts}, 60) as result
     `;
     const [ownerHeartbeat] = await sql<{ result: boolean }[]>`
-      select heartbeat_job(${jobId}::uuid, 'worker-a', 60) as result
+      select heartbeat_job(${jobId}::uuid, 'worker-a', ${claimed.attempts}, 60) as result
     `;
     const [otherComplete] = await sql<{ result: boolean }[]>`
-      select complete_job(${jobId}::uuid, 'worker-b', '{}'::jsonb) as result
+      select complete_job(
+        ${jobId}::uuid, 'worker-b', ${claimed.attempts}, '{}'::jsonb
+      ) as result
     `;
     const [ownerComplete] = await sql<{ result: boolean }[]>`
       select complete_job(
         ${jobId}::uuid,
         'worker-a',
+        ${claimed.attempts},
         '{"phase":"completed"}'::jsonb
       ) as result
     `;
@@ -126,11 +132,15 @@ describe('core research schema', () => {
     `;
     const jobId = requireJobId(created);
 
-    await sql`select id from claim_jobs('worker-a', 1, 60)`;
+    const [claimed] = await sql<{ attempts: number }[]>`
+      select attempts from claim_jobs('worker-a', 1, 60)
+    `;
+    if (!claimed) throw new Error('Expected a claimed job.');
     const [failed] = await sql<{ result: boolean }[]>`
       select fail_job(
         ${jobId}::uuid,
         'worker-a',
+        ${claimed.attempts},
         'fixture failure',
         now(),
         '{"phase":"parsed"}'::jsonb
@@ -179,8 +189,12 @@ describe('AI analysis and cluster hardening RPCs', () => {
     const providerId = await seedProvider();
     const hash = 'a'.repeat(64);
 
-    const first = await sql<{ analysis_id: string; claim_status: string }[]>`
-      select analysis_id, claim_status from claim_ai_analysis(
+    const first = await sql<{
+      analysis_id: string;
+      claim_status: string;
+      analysis_lease_epoch: number;
+    }[]>`
+      select analysis_id, claim_status, analysis_lease_epoch from claim_ai_analysis(
         'niche_normalization',
         ${hash},
         'worker-a',
@@ -210,14 +224,16 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(busy[0]?.claim_status).toBe('busy');
 
     const analysisId = first[0]?.analysis_id;
-    if (!analysisId) {
-      throw new Error('Expected a claimed analysis id');
+    const analysisLeaseEpoch = first[0]?.analysis_lease_epoch;
+    if (!analysisId || !analysisLeaseEpoch) {
+      throw new Error('Expected a claimed analysis identity');
     }
 
     await sql`
       select fail_ai_analysis(
         ${analysisId}::uuid,
         'worker-a',
+        ${analysisLeaseEpoch},
         'provider_execution_failed',
         now() + interval '2 minutes'
       )
@@ -359,8 +375,8 @@ describe('AI analysis and cluster hardening RPCs', () => {
   it('lets only the current analysis owner renew the lease', async () => {
     const providerId = await seedProvider();
     const hash = 'b'.repeat(64);
-    const claimed = await sql<{ analysis_id: string }[]>`
-      select analysis_id from claim_ai_analysis(
+    const claimed = await sql<{ analysis_id: string; analysis_lease_epoch: number }[]>`
+      select analysis_id, analysis_lease_epoch from claim_ai_analysis(
         'niche_normalization',
         ${hash},
         'worker-a',
@@ -373,14 +389,19 @@ describe('AI analysis and cluster hardening RPCs', () => {
       )
     `;
     const analysisId = claimed[0]?.analysis_id;
-    if (!analysisId) {
-      throw new Error('Expected claimed analysis');
+    const analysisLeaseEpoch = claimed[0]?.analysis_lease_epoch;
+    if (!analysisId || !analysisLeaseEpoch) {
+      throw new Error('Expected claimed analysis identity');
     }
     const [owner] = await sql<{ result: boolean }[]>`
-      select renew_ai_analysis_lease(${analysisId}::uuid, 'worker-a', 30) as result
+      select renew_ai_analysis_lease(
+        ${analysisId}::uuid, 'worker-a', ${analysisLeaseEpoch}, 30
+      ) as result
     `;
     const [other] = await sql<{ result: boolean }[]>`
-      select renew_ai_analysis_lease(${analysisId}::uuid, 'worker-b', 30) as result
+      select renew_ai_analysis_lease(
+        ${analysisId}::uuid, 'worker-b', ${analysisLeaseEpoch}, 30
+      ) as result
     `;
     expect(owner?.result).toBe(true);
     expect(other?.result).toBe(false);

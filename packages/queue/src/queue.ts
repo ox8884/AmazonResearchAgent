@@ -18,6 +18,11 @@ export type QueueDatabaseClient = ReturnType<typeof createServerDatabaseClient>;
 
 type JobRow = Database['public']['Tables']['jobs']['Row'];
 
+export interface JobLeaseIdentity {
+  readonly jobId: string;
+  readonly owner: string;
+  readonly epoch: number;
+}
 export interface Job {
   id: string;
   type: JobType;
@@ -27,6 +32,7 @@ export interface Job {
   availableAt: string;
   leasedUntil: string | null;
   leasedBy: string | null;
+  leaseIdentity: JobLeaseIdentity;
   attempts: number;
   maxAttempts: number;
   idempotencyKey: string;
@@ -56,26 +62,16 @@ export interface QueueRepository {
   insertJob(input: JobInsert): Promise<string>;
   findJobIdByIdempotencyKey(key: string): Promise<string | null>;
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]>;
-  completeJob(
-    jobId: string,
-    workerId: string,
-    checkpoint: Json
-  ): Promise<boolean>;
+  completeJob(lease: JobLeaseIdentity, checkpoint: Json): Promise<boolean>;
   failJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     errorText: string,
     retryAt: string,
     checkpoint: Json
   ): Promise<boolean>;
-  heartbeatJob(
-    jobId: string,
-    workerId: string,
-    leaseSeconds: number
-  ): Promise<boolean>;
+  heartbeatJob(lease: JobLeaseIdentity, leaseSeconds: number): Promise<boolean>;
   checkpointJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     checkpoint: Json,
     leaseSeconds: number
   ): Promise<boolean>;
@@ -112,6 +108,7 @@ function mapJob(row: JobRow): Job {
     availableAt: row.available_at,
     leasedUntil: row.leased_until,
     leasedBy: row.leased_by,
+    leaseIdentity: { jobId: row.id, owner: row.leased_by ?? '', epoch: row.attempts },
     attempts: row.attempts,
     maxAttempts: row.max_attempts,
     idempotencyKey: row.idempotency_key,
@@ -204,13 +201,13 @@ export class SupabaseQueueRepository implements QueueRepository {
   }
 
   async completeJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     checkpoint: Json
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('complete_job', {
-      job_id: jobId,
-      worker_id: workerId,
+      job_id: lease.jobId,
+      worker_id: lease.owner,
+      job_lease_epoch: lease.epoch,
       checkpoint
     });
     if (error) {
@@ -220,15 +217,15 @@ export class SupabaseQueueRepository implements QueueRepository {
   }
 
   async failJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     errorText: string,
     retryAt: string,
     checkpoint: Json
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('fail_job', {
-      job_id: jobId,
-      worker_id: workerId,
+      job_id: lease.jobId,
+      worker_id: lease.owner,
+      job_lease_epoch: lease.epoch,
       error_text: errorText,
       retry_at: retryAt,
       checkpoint
@@ -240,13 +237,13 @@ export class SupabaseQueueRepository implements QueueRepository {
   }
 
   async heartbeatJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     leaseSeconds: number
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('heartbeat_job', {
-      job_id: jobId,
-      worker_id: workerId,
+      job_id: lease.jobId,
+      worker_id: lease.owner,
+      job_lease_epoch: lease.epoch,
       lease_seconds: leaseSeconds
     });
     if (error) {
@@ -256,14 +253,14 @@ export class SupabaseQueueRepository implements QueueRepository {
   }
 
   async checkpointJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     checkpoint: Json,
     leaseSeconds: number
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('checkpoint_job', {
-      job_id: jobId,
-      worker_id: workerId,
+      job_id: lease.jobId,
+      worker_id: lease.owner,
+      job_lease_epoch: lease.epoch,
       checkpoint,
       lease_seconds: leaseSeconds
     });
@@ -321,69 +318,49 @@ export class DurableQueue {
     return this.repository.claimJobs(workerId, limit, leaseSeconds);
   }
 
-  async completeJob(
-    jobId: string,
-    workerId: string,
-    checkpoint: unknown
-  ): Promise<void> {
-    const completed = await this.repository.completeJob(
-      jobId,
-      workerId,
-      asJson(checkpoint)
-    );
+  async completeJob(lease: JobLeaseIdentity, checkpoint: unknown): Promise<void> {
+    const completed = await this.repository.completeJob(lease, asJson(checkpoint));
     if (!completed) {
-      throw new JobLeaseLostError(jobId, 'complete');
+      throw new JobLeaseLostError(lease.jobId, 'complete');
     }
   }
 
   async failJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     errorText: string,
     retryAt: string,
     checkpoint: unknown
   ): Promise<void> {
     const failed = await this.repository.failJob(
-      jobId,
-      workerId,
+      lease,
       errorText,
       retryAt,
       asJson(checkpoint)
     );
     if (!failed) {
-      throw new JobLeaseLostError(jobId, 'fail');
+      throw new JobLeaseLostError(lease.jobId, 'fail');
     }
   }
 
-  async heartbeatJob(
-    jobId: string,
-    workerId: string,
-    leaseSeconds: number
-  ): Promise<void> {
-    const heartbeated = await this.repository.heartbeatJob(
-      jobId,
-      workerId,
-      leaseSeconds
-    );
+  async heartbeatJob(lease: JobLeaseIdentity, leaseSeconds: number): Promise<void> {
+    const heartbeated = await this.repository.heartbeatJob(lease, leaseSeconds);
     if (!heartbeated) {
-      throw new JobLeaseLostError(jobId, 'heartbeat');
+      throw new JobLeaseLostError(lease.jobId, 'heartbeat');
     }
   }
 
   async checkpointJob(
-    jobId: string,
-    workerId: string,
+    lease: JobLeaseIdentity,
     checkpoint: unknown,
     leaseSeconds: number
   ): Promise<void> {
     const checkpointed = await this.repository.checkpointJob(
-      jobId,
-      workerId,
+      lease,
       asJson(checkpoint),
       leaseSeconds
     );
     if (!checkpointed) {
-      throw new JobLeaseLostError(jobId, 'checkpoint');
+      throw new JobLeaseLostError(lease.jobId, 'checkpoint');
     }
   }
 }
@@ -419,48 +396,32 @@ export function claimJobs(
 }
 
 export function completeJob(
-  jobId: string,
-  workerId: string,
+  lease: JobLeaseIdentity,
   checkpoint: unknown
 ): Promise<void> {
-  return getConfiguredQueue().completeJob(jobId, workerId, checkpoint);
+  return getConfiguredQueue().completeJob(lease, checkpoint);
 }
 
 export function failJob(
-  jobId: string,
-  workerId: string,
+  lease: JobLeaseIdentity,
   errorText: string,
   retryAt: string,
   checkpoint: unknown
 ): Promise<void> {
-  return getConfiguredQueue().failJob(
-    jobId,
-    workerId,
-    errorText,
-    retryAt,
-    checkpoint
-  );
+  return getConfiguredQueue().failJob(lease, errorText, retryAt, checkpoint);
 }
 
 export function heartbeatJob(
-  jobId: string,
-  workerId: string,
+  lease: JobLeaseIdentity,
   leaseSeconds: number
 ): Promise<void> {
-  return getConfiguredQueue().heartbeatJob(jobId, workerId, leaseSeconds);
+  return getConfiguredQueue().heartbeatJob(lease, leaseSeconds);
 }
 
-
 export function checkpointJob(
-  jobId: string,
-  workerId: string,
+  lease: JobLeaseIdentity,
   checkpoint: unknown,
   leaseSeconds: number
 ): Promise<void> {
-  return getConfiguredQueue().checkpointJob(
-    jobId,
-    workerId,
-    checkpoint,
-    leaseSeconds
-  );
+  return getConfiguredQueue().checkpointJob(lease, checkpoint, leaseSeconds);
 }
