@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { ProviderRuntimeRepository } from '@ara/db';
+import {
+  createNormalizationRearmRepository,
+  type ProviderRuntimeRepository
+} from '@ara/db';
 import type { ProviderCatalog } from '@ara/ai-router';
 import {
   DeepValidationJobPayloadSchema,
@@ -7,6 +10,7 @@ import {
   MarketProbeJobPayloadSchema,
   NormalizeOpportunitiesJobPayloadSchema,
   ImportOpportunityCsvJobPayloadSchema,
+  LocaleSchema,
   TestAiProviderConnectionJobPayloadSchema
 } from '@ara/shared';
 
@@ -180,7 +184,11 @@ export function createJobHandlers(
       if (!catalog) throw new Error('Normalization provider catalog is required.');
       throwIfAborted(context.signal);
       const result = await runNormalizeJob(
-        { candidateIds: payload.candidateIds, locale: payload.locale },
+        {
+          candidateIds: payload.candidateIds,
+          locale: payload.locale,
+          normalizationGeneration: payload.normalizationGeneration
+        },
         {
           client,
           coordinator,
@@ -215,6 +223,16 @@ export function createJobHandlers(
       const resolution = await resolveProviderProbe(payload.providerId);
       const result = await runProviderReadinessProbe({
         payload,
+        onReady: async () => {
+          const { data: settings, error } = await client
+            .from('app_settings')
+            .select('locale')
+            .eq('id', true)
+            .maybeSingle();
+          if (error) throw new Error('Could not read normalization locale.', { cause: error });
+          const locale = LocaleSchema.parse(settings?.locale ?? 'ko');
+          await createNormalizationRearmRepository(client).rearmWaitingCandidates(locale);
+        },
         ...resolution,
         runtime: providerRuntime,
         semaphores: probeSemaphores,

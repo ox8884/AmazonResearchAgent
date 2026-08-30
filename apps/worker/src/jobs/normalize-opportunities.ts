@@ -12,6 +12,7 @@ import type { NormalizationExecutionCoordinator } from '../providers/normalizati
 export interface NormalizeJobInput {
   readonly candidateIds: readonly string[];
   readonly locale: Locale;
+  readonly normalizationGeneration: number;
 }
 
 export interface NormalizeJobDependencies {
@@ -341,17 +342,21 @@ export async function runNormalizeJob(
   const promptVersion = dependencies.promptVersion ?? NORMALIZATION_PROMPT_VERSION;
   const locale = LocaleSchema.parse(input.locale);
   const candidates = await loadCandidates(dependencies.client, input.candidateIds);
+  const candidate = candidates[0];
+  if (!candidate || candidate.normalization_generation !== input.normalizationGeneration) {
+    throw new NormalizationJobError('Normalization payload generation does not match the candidate.');
+  }
   let clusteredCount = 0;
   let rejectedCount = 0;
   let needsReviewCount = 0;
   let deferredCount = 0;
   let reusedAnalysisCount = 0;
 
-  for (const [index, candidate] of candidates.entries()) {
+  for (const [index, currentCandidate] of candidates.entries()) {
     const result = await normalizeCandidate(
-      { candidateIds: input.candidateIds, locale },
+      input,
       dependencies,
-      candidate,
+      currentCandidate,
       promptVersion
     );
     clusteredCount += result.clustered ? 1 : 0;

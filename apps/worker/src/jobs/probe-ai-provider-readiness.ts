@@ -49,6 +49,7 @@ interface ProbeDependencies {
   >;
   readonly semaphores: AdapterSemaphoreRegistry;
   readonly signal: AbortSignal;
+  readonly onReady?: () => Promise<void>;
 }
 
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
@@ -203,5 +204,6 @@ export async function runProviderReadinessProbe(
     boundedBehaviorDigest: inspection.boundedBehaviorDigest,
     containmentDigest
   });
+  await dependencies.onReady?.();
   return { mode: 'readiness', ...resultObject(committed) };
 }

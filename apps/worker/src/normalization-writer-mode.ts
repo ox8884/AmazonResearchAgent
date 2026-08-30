@@ -1,6 +1,6 @@
 import type { QueueDatabaseClient } from '@ara/queue';
 
-export const NORMALIZATION_WRITER_MODE = 'legacy' as const;
+export const NORMALIZATION_WRITER_MODE = 'canonical' as const;
 export const NORMALIZATION_WRITER_RELEASE_SHA = process.env.NORMALIZATION_WRITER_RELEASE_SHA;
 
 const RELEASE_SHA = /^[0-9a-f]{40}$/u;

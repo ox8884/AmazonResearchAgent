@@ -307,8 +307,8 @@ export type Database = {
           execution_fingerprint: string
           id: string
           provider_id: string
-          security_profile_version: string
           security_profile_digest: string | null
+          security_profile_version: string
           settings_revision: number
         }
         Insert: {
@@ -320,8 +320,8 @@ export type Database = {
           execution_fingerprint: string
           id?: string
           provider_id: string
-          security_profile_version: string
           security_profile_digest?: string | null
+          security_profile_version: string
           settings_revision: number
         }
         Update: {
@@ -333,8 +333,8 @@ export type Database = {
           execution_fingerprint?: string
           id?: string
           provider_id?: string
-          security_profile_version?: string
           security_profile_digest?: string | null
+          security_profile_version?: string
           settings_revision?: number
         }
         Relationships: [
@@ -366,8 +366,8 @@ export type Database = {
           ready_valid_until: string | null
           reason: string | null
           retry_not_before: string | null
-          security_profile_version: string
           security_profile_digest: string | null
+          security_profile_version: string
           settings_revision: number
           state: string
           terms_digest: string | null
@@ -392,8 +392,8 @@ export type Database = {
           ready_valid_until?: string | null
           reason?: string | null
           retry_not_before?: string | null
-          security_profile_version: string
           security_profile_digest?: string | null
+          security_profile_version: string
           settings_revision: number
           state?: string
           terms_digest?: string | null
@@ -418,8 +418,8 @@ export type Database = {
           ready_valid_until?: string | null
           reason?: string | null
           retry_not_before?: string | null
-          security_profile_version?: string
           security_profile_digest?: string | null
+          security_profile_version?: string
           settings_revision?: number
           state?: string
           terms_digest?: string | null
@@ -1213,16 +1213,19 @@ export type Database = {
       }
       normalization_writer_capability: {
         Row: {
+          migration_identity: string | null
           mode: string
           singleton: boolean
           updated_at: string
         }
         Insert: {
+          migration_identity?: string | null
           mode: string
           singleton?: boolean
           updated_at?: string
         }
         Update: {
+          migration_identity?: string | null
           mode?: string
           singleton?: boolean
           updated_at?: string
@@ -2140,8 +2143,8 @@ export type Database = {
           model_id: string
           provider_id: string
           readiness_policy_version: string
-          security_profile_version: string
           security_profile_digest: string
+          security_profile_version: string
           terms_digest: string
         }
         Returns: Json
@@ -2157,10 +2160,10 @@ export type Database = {
           expected_execution_fingerprint: string
           expected_probe_generation: number
           expected_settings_revision: number
-          security_profile_digest: string
           framing_digest: string
           model_id: string
           provider_id: string
+          security_profile_digest: string
           terms_digest: string
         }
         Returns: Json
@@ -2323,6 +2326,15 @@ export type Database = {
         Returns: boolean
       }
       read_normalization_writer_capability: { Args: never; Returns: string }
+      rearm_candidate_normalization: {
+        Args: {
+          candidate_id: string
+          expected_candidate_state: string
+          expected_normalization_generation: number
+          locale: string
+        }
+        Returns: Json
+      }
       reconcile_ai_provider_attempts: {
         Args: {
           analysis_id: string

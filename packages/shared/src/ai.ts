@@ -232,12 +232,11 @@ export interface AiResult<T> {
 
 
 export const NormalizeOpportunitiesJobPayloadSchema = z.object({
-  candidateIds: z.array(z.uuid()).min(1).max(1000),
+  candidateIds: z.tuple([z.uuid()]),
   locale: LocaleSchema,
-  providerId: z.string().trim().min(1).optional(),
-  modelId: z.string().trim().min(1).optional(),
+  normalizationGeneration: z.number().int().nonnegative().safe(),
   promptVersion: z.string().trim().min(1).default('niche-normalization-v1')
-});
+}).strict();
 export type NormalizeOpportunitiesJobPayload = z.infer<
   typeof NormalizeOpportunitiesJobPayloadSchema
 >;

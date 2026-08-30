@@ -145,11 +145,11 @@ async function seedExecution(
   const queue = createQueue(client);
   await queue.enqueueJob({
     type: 'NORMALIZE_OPPORTUNITIES',
-    payload: { candidateIds: [candidateId], locale: 'ko' },
-    idempotencyKey: `normalize:${candidateId}`
+    payload: { candidateIds: [candidateId], locale: 'ko', normalizationGeneration: 0 },
+    idempotencyKey: `normalize:${candidateId}:0`
   });
   const jobs = await queue.claimJobs(`worker-${suffix}`, 100, 120);
-  const job = jobs.find((candidate) => candidate.idempotencyKey === `normalize:${candidateId}`);
+  const job = jobs.find((candidate) => candidate.idempotencyKey === `normalize:${candidateId}:0`);
   if (!job) throw new Error('Normalization fixture job was not claimed.');
   const selectedCatalog = catalog(providerId, modelId);
   const execute: NormalizationExecutionTarget['execute'] = executeOverride ?? (async (_attemptId, request) => {
@@ -220,8 +220,14 @@ integration('opportunity normalization job', () => {
       signal: new AbortController().signal,
       workerId: `analysis-${fixture.job.id}`
     };
-    const first = await runNormalizeJob({ candidateIds: [fixture.candidateId], locale: 'ko' }, dependencies);
-    const repeat = await runNormalizeJob({ candidateIds: [fixture.candidateId], locale: 'ko' }, dependencies);
+    const first = await runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
+      dependencies
+    );
+    const repeat = await runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
+      dependencies
+    );
     const { data: candidate } = await client.from('candidates')
       .select('state,niche_cluster_id').eq('id', fixture.candidateId).single();
     const { data: attempts } = await client.from('provider_attempt_events')
@@ -249,7 +255,7 @@ integration('opportunity normalization job', () => {
       throw Object.assign(new Error('capacity'), { failureClass: 'capacity_exhausted' as const });
     });
     const result = await runNormalizeJob(
-      { candidateIds: [fixture.candidateId], locale: 'ko' },
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
       {
         client,
         coordinator: fixture.coordinator,
@@ -268,6 +274,31 @@ integration('opportunity normalization job', () => {
     expect(analysis.winning_attempt_id).toBeNull();
   });
 
+  // Break: a stale generation payload claims or finalizes the current candidate analysis.
+  it('rejects a payload generation mismatch before analysis claim', async () => {
+    const fixture = await seedExecution(client, {
+      classification: 'ambiguous', canonicalNiche: null, canonicalEnglish: null,
+      catalogPhrases: [], aliases: [], productFit: 'possible', riskFlags: [],
+      confidence: 0.4, reason: 'unused'
+    });
+    await expect(runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 1 },
+      {
+        client,
+        coordinator: fixture.coordinator,
+        catalog: fixture.catalog,
+        jobLease: fixture.job.leaseIdentity,
+        signal: new AbortController().signal
+      }
+    )).rejects.toThrow(/generation does not match/u);
+    const { count, error } = await client
+      .from('ai_analyses')
+      .select('id', { count: 'exact', head: true })
+      .eq('input_payload->>candidateId', fixture.candidateId);
+    if (error) throw error;
+    expect(count).toBe(0);
+  });
+
   // Break: canonical finalization fabricates a non-null English name.
   it('preserves nullable canonical English through authority-owned cluster mutation', async () => {
     const fixture = await seedExecution(client, {
@@ -282,7 +313,7 @@ integration('opportunity normalization job', () => {
       reason: 'Valid niche without an English translation.'
     });
     await runNormalizeJob(
-      { candidateIds: [fixture.candidateId], locale: 'ko' },
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
       {
         client,
         coordinator: fixture.coordinator,

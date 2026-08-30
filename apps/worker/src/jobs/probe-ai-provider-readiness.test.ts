@@ -153,6 +153,22 @@ describe('subscription readiness orchestration', () => {
     });
   });
 
+  // Break: a successfully Ready provider leaves Waiting normalization dormant.
+  it('rearms Waiting normalization only after readiness commits', async () => {
+    const onReady = vi.fn(async () => undefined);
+    await runProviderReadinessProbe({
+      payload,
+      target: target(),
+      currentProbeGeneration: 9,
+      inspector: inspector(),
+      runtime: repository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      signal: new AbortController().signal,
+      onReady
+    });
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
   // Break: one hostile probe failure or cancellation still persists evidence/Ready.
   it('does not commit after containment failure or cancellation', async () => {
     const cases = [

@@ -255,7 +255,7 @@ integration('settings API to worker catalog', () => {
       throw new Error('Expected the settings-persisted provider to be routable.');
     }
     const result = await runNormalizeJob(
-      { candidateIds: [fixture.candidateId], locale: 'ko' },
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
       {
         client,
         provider: decision.provider,

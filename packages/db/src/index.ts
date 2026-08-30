@@ -62,6 +62,15 @@ export type {
   ProviderAttemptOutcome,
   ProviderAttemptRepository
 } from './provider-attempt-repository';
+export {
+  createNormalizationRearmRepository,
+  NormalizationRearmRepositoryError
+} from './normalization-rearm-repository';
+export type {
+  NormalizationRearmRepository,
+  NormalizationRearmResult,
+  RearmCandidateNormalizationInput
+} from './normalization-rearm-repository';
 
 
 

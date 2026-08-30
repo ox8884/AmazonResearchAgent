@@ -466,23 +466,25 @@ integration('daily research orchestration', () => {
         now: () => new Date('2099-01-03T12:00:00.000Z')
       });
 
+      const canonicalKeys = extraCandidateIds.map((id) => `normalize:${id}:0`);
       const { data: normalizeJobs, error: normalizeError } = await client
         .from('jobs')
         .select('id, type, payload, idempotency_key')
         .eq('type', 'NORMALIZE_OPPORTUNITIES')
-        .in('idempotency_key', extraCandidateIds.map((id) => `normalize:${id}`));
+        .in('idempotency_key', canonicalKeys);
       if (normalizeError) throw normalizeError;
       expect(normalizeJobs).toHaveLength(1);
-      expect(normalizeJobs?.[0]?.idempotency_key).toBe(`normalize:${screeningEligibleId}`);
-      expect(normalizeJobs?.[0]?.payload).toMatchObject({
+      expect(normalizeJobs?.[0]?.idempotency_key).toBe(`normalize:${screeningEligibleId}:0`);
+      expect(normalizeJobs?.[0]?.payload).toEqual({
         candidateIds: [screeningEligibleId],
-        locale: 'ko'
+        locale: 'ko',
+        normalizationGeneration: 0
       });
 
       const { data: readyNormalize, error: readyNormalizeError } = await client
         .from('jobs')
         .select('id')
-        .eq('idempotency_key', `normalize:${readyId}`);
+        .eq('idempotency_key', `normalize:${readyId}:0`);
       if (readyNormalizeError) throw readyNormalizeError;
       expect(readyNormalize ?? []).toHaveLength(0);
 
@@ -502,10 +504,7 @@ integration('daily research orchestration', () => {
       await client
         .from('jobs')
         .delete()
-        .in(
-          'idempotency_key',
-          extraCandidateIds.map((id) => `normalize:${id}`)
-        );
+        .in('idempotency_key', extraCandidateIds.map((id) => `normalize:${id}:0`));
       await cleanupDailyFixtures(client, [date]);
       await client.from('candidates').delete().in('id', extraCandidateIds);
       await client.from('import_runs').delete().in('id', extraImportIds);

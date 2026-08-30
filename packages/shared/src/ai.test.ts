@@ -6,6 +6,7 @@ import {
   assertPersistableModelId,
   BillingTypeSchema,
   ModelIdSchema,
+  NormalizeOpportunitiesJobPayloadSchema,
   ProviderAttemptEventTypeSchema,
   ProviderCapabilitySchema,
   ProviderConsumptionStatusSchema,
@@ -160,6 +161,27 @@ describe('AI provider schemas', () => {
       )
     ).toThrow(UnsafeModelIdError);
     expect(assertPersistableModelId('model-ab', 'ab')).toBe('model-ab');
+  });
+
+  // Break: a legacy or multi-candidate payload reaches the canonical writer.
+  it('requires one candidate and a canonical normalization generation', () => {
+    expect(NormalizeOpportunitiesJobPayloadSchema.parse({
+      candidateIds: ['00000000-0000-4000-8000-000000000001'],
+      locale: 'ko',
+      normalizationGeneration: 0
+    })).toMatchObject({ normalizationGeneration: 0 });
+    expect(() => NormalizeOpportunitiesJobPayloadSchema.parse({
+      candidateIds: ['00000000-0000-4000-8000-000000000001'],
+      locale: 'ko'
+    })).toThrow();
+    expect(() => NormalizeOpportunitiesJobPayloadSchema.parse({
+      candidateIds: [
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002'
+      ],
+      locale: 'ko',
+      normalizationGeneration: 0
+    })).toThrow();
   });
 
 });

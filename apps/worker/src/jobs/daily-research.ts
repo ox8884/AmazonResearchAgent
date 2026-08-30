@@ -1,4 +1,8 @@
-import { createMigration019CompatibilityRepository, type Database } from '@ara/db';
+import {
+  createMigration019CompatibilityRepository,
+  createNormalizationRearmRepository,
+  type Database
+} from '@ara/db';
 import {
   AnalysisVerdictEvidenceSchema,
   DailyResearchCheckpointSchema,
@@ -586,12 +590,13 @@ async function enqueueEligibleNormalizationJobs(
     const { error } = await client.rpc('enqueue_initial_candidate_normalization', {
       candidate_id: candidate.id,
       locale,
-      writer_mode: 'legacy'
+      writer_mode: 'canonical'
     });
     if (error) {
       throw new DailyResearchError(`Failed to enqueue candidate normalization: ${error.message}`);
     }
   }
+  await createNormalizationRearmRepository(client).rearmWaitingCandidates(locale);
 }
 
 

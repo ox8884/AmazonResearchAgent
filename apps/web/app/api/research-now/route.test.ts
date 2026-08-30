@@ -127,6 +127,7 @@ describe('research now route', () => {
     expect(await response.json()).toEqual({
       research_run_id: '7a985480-7a5d-4ef1-9648-2f443468e2fe'
     });
+    expect(enqueueResearchNow).toHaveBeenCalledOnce();
     expect(enqueueResearchNow).toHaveBeenCalledWith('normal');
   });
 });
