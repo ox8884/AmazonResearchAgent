@@ -69,6 +69,39 @@ describe('provider runtime repository', () => {
     );
   });
 
+  // Break: the repository drops freshly observed evidence before the authoritative Ready CAS.
+  it('forwards every fresh evidence digest to the Ready CAS', async () => {
+    const client = clientWith({ ready: true });
+    const repository = createProviderRuntimeRepository(client as never);
+    await repository.commitProbe({
+      ...bindings,
+      modelId: 'gpt-5.6',
+      expectedProbeGeneration: 8,
+      termsDigest: '1'.repeat(64),
+      credentialSourceDigest: '2'.repeat(64),
+      binaryIdentityDigest: '3'.repeat(64),
+      capabilityDigest: '4'.repeat(64),
+      framingDigest: '5'.repeat(64),
+      boundedBehaviorDigest: '6'.repeat(64),
+      containmentDigest: '7'.repeat(64)
+    });
+    expect(client.rpc).toHaveBeenCalledWith('commit_ai_provider_probe', {
+      provider_id: bindings.providerId,
+      model_id: 'gpt-5.6',
+      expected_settings_revision: 4,
+      expected_auth_generation: 2,
+      expected_execution_fingerprint: 'fp-codex-v4',
+      expected_probe_generation: 8,
+      terms_digest: '1'.repeat(64),
+      credential_source_digest: '2'.repeat(64),
+      binary_identity_digest: '3'.repeat(64),
+      capability_digest: '4'.repeat(64),
+      framing_digest: '5'.repeat(64),
+      bounded_behavior_digest: '6'.repeat(64),
+      containment_digest: '7'.repeat(64)
+    });
+  });
+
   it.each([
     ['commitProbe', 'commit_ai_provider_probe'],
     ['activate', 'activate_subscription_provider'],

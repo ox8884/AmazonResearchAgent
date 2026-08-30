@@ -370,7 +370,14 @@ create or replace function public.commit_ai_provider_probe(
   expected_settings_revision integer,
   expected_auth_generation bigint,
   expected_execution_fingerprint text,
-  expected_probe_generation bigint
+  expected_probe_generation bigint,
+  terms_digest text,
+  credential_source_digest text,
+  binary_identity_digest text,
+  capability_digest text,
+  framing_digest text,
+  bounded_behavior_digest text,
+  containment_digest text
 )
 returns jsonb
 language plpgsql
@@ -381,6 +388,8 @@ as $$
 declare
   provider_row public.ai_providers%rowtype;
   runtime_row public.ai_provider_runtime_state%rowtype;
+  capability_row public.ai_provider_capability_attestations%rowtype;
+  containment_row public.ai_provider_containment_attestations%rowtype;
   checked timestamptz := clock_timestamp();
 begin
   select * into provider_row from public.ai_providers p where p.id = provider_id for update;
@@ -394,7 +403,6 @@ begin
      or runtime_row.probe_generation is distinct from expected_probe_generation
      or runtime_row.capability_attestation_id is null
      or runtime_row.containment_attestation_id is null
-     or runtime_row.terms_digest is null
      or not exists (
        select 1 from public.ai_models m
        where m.provider_id = commit_ai_provider_probe.provider_id
@@ -403,6 +411,35 @@ begin
      ) then
     raise exception 'provider_probe_cas_conflict';
   end if;
+
+  select * into capability_row
+  from public.ai_provider_capability_attestations c
+  where c.id = runtime_row.capability_attestation_id;
+  select * into containment_row
+  from public.ai_provider_containment_attestations c
+  where c.id = runtime_row.containment_attestation_id;
+  if runtime_row.terms_digest is distinct from terms_digest
+     or runtime_row.credential_source_digest is distinct from credential_source_digest
+     or runtime_row.binary_identity_digest is distinct from binary_identity_digest
+     or capability_row.id is null
+     or capability_row.provider_id is distinct from commit_ai_provider_probe.provider_id
+     or capability_row.model_id is distinct from commit_ai_provider_probe.model_id
+     or capability_row.settings_revision is distinct from expected_settings_revision
+     or capability_row.auth_generation is distinct from expected_auth_generation
+     or capability_row.execution_fingerprint is distinct from expected_execution_fingerprint
+     or capability_row.capability_digest is distinct from capability_digest
+     or capability_row.framing_digest is distinct from framing_digest
+     or capability_row.bounded_behavior_digest is distinct from bounded_behavior_digest
+     or containment_row.id is null
+     or containment_row.provider_id is distinct from commit_ai_provider_probe.provider_id
+     or containment_row.settings_revision is distinct from expected_settings_revision
+     or containment_row.auth_generation is distinct from expected_auth_generation
+     or containment_row.execution_fingerprint is distinct from expected_execution_fingerprint
+     or containment_row.security_profile_version is distinct from runtime_row.security_profile_version
+     or containment_row.containment_digest is distinct from containment_digest then
+    raise exception 'provider_probe_evidence_mismatch';
+  end if;
+
   update public.ai_provider_runtime_state
   set state = 'ready', available = true, reason = null,
       checked_at = checked, ready_valid_until = checked + interval '10 minutes',
@@ -695,7 +732,7 @@ alter function public.request_ai_provider_probe(text, integer, bigint, text) own
 alter function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) owner to ara_provider_authority;
 alter function public.activate_subscription_provider(text, text, integer, bigint, text, text) owner to ara_provider_authority;
 alter function public.deactivate_subscription_provider(text) owner to ara_provider_authority;
-alter function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) owner to ara_provider_authority;
+alter function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) owner to ara_provider_authority;
 alter function public.is_ai_provider_routable(text, text, integer, bigint, text) owner to ara_provider_authority;
 alter function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) owner to ara_provider_authority;
 alter function public.fence_ai_provider_auth(text, integer, bigint, text) owner to ara_provider_authority;
@@ -706,7 +743,7 @@ revoke all on function public.request_ai_provider_probe(text, integer, bigint, t
 revoke all on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
 revoke all on function public.activate_subscription_provider(text, text, integer, bigint, text, text) from public, anon, authenticated;
 revoke all on function public.deactivate_subscription_provider(text) from public, anon, authenticated;
-revoke all on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) from public, anon, authenticated;
+revoke all on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) from public, anon, authenticated;
 revoke all on function public.is_ai_provider_routable(text, text, integer, bigint, text) from public, anon, authenticated;
 revoke all on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) from public, anon, authenticated;
 revoke all on function public.fence_ai_provider_auth(text, integer, bigint, text) from public, anon, authenticated;
@@ -715,7 +752,7 @@ grant execute on function public.request_ai_provider_probe(text, integer, bigint
 grant execute on function public.commit_ai_provider_acceptance_probe(text, text, text, integer, bigint, text, text, text, text, text, text, text, text, text, text, jsonb) to service_role;
 grant execute on function public.activate_subscription_provider(text, text, integer, bigint, text, text) to service_role;
 grant execute on function public.deactivate_subscription_provider(text) to service_role;
-grant execute on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint) to service_role;
+grant execute on function public.commit_ai_provider_probe(text, text, integer, bigint, text, bigint, text, text, text, text, text, text, text) to service_role;
 grant execute on function public.is_ai_provider_routable(text, text, integer, bigint, text) to service_role;
 grant execute on function public.apply_ai_provider_runtime_failure(uuid, uuid, text, integer, uuid, text, integer, text, integer) to service_role;
 grant execute on function public.fence_ai_provider_auth(text, integer, bigint, text) to service_role;

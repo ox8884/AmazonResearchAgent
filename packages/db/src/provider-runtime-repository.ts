@@ -47,12 +47,24 @@ export type AcceptanceProbeInput = RuntimeBindings & {
   readonly evidence: Json;
 };
 
+export type ReadinessProbeInput = RuntimeBindings & {
+  readonly modelId: string;
+  readonly expectedProbeGeneration: number;
+  readonly termsDigest: string;
+  readonly credentialSourceDigest: string;
+  readonly binaryIdentityDigest: string;
+  readonly capabilityDigest: string;
+  readonly framingDigest: string;
+  readonly boundedBehaviorDigest: string;
+  readonly containmentDigest: string;
+};
+
 export interface ProviderRuntimeRepository {
   requestProbe(input: RuntimeBindings): Promise<ProbeRequest>;
   commitAcceptanceProbe(input: AcceptanceProbeInput): Promise<Json>;
   activate(input: RuntimeBindings & { readonly modelId: string; readonly termsDigest: string }): Promise<ProbeRequest>;
   deactivate(input: { readonly providerId: string }): Promise<Json>;
-  commitProbe(input: RuntimeBindings & { readonly modelId: string; readonly expectedProbeGeneration: number }): Promise<Json>;
+  commitProbe(input: ReadinessProbeInput): Promise<Json>;
   applyFailure(input: {
     readonly attemptId: string;
     readonly jobLease: JobLeaseIdentity;
@@ -175,7 +187,14 @@ export function createProviderRuntimeRepository(
       const { data, error } = await client.rpc('commit_ai_provider_probe', {
         ...bindings(input),
         model_id: input.modelId,
-        expected_probe_generation: input.expectedProbeGeneration
+        expected_probe_generation: input.expectedProbeGeneration,
+        terms_digest: input.termsDigest,
+        credential_source_digest: input.credentialSourceDigest,
+        binary_identity_digest: input.binaryIdentityDigest,
+        capability_digest: input.capabilityDigest,
+        framing_digest: input.framingDigest,
+        bounded_behavior_digest: input.boundedBehaviorDigest,
+        containment_digest: input.containmentDigest
       });
       if (error) throw new ProviderRuntimeRepositoryError(operation, error);
       return requireJsonObject(data, operation);

@@ -139,7 +139,14 @@ describe('subscription readiness orchestration', () => {
     expect(runtime.commitProbe).toHaveBeenCalledWith({
       ...bindings,
       modelId: 'gpt-5.6',
-      expectedProbeGeneration: 9
+      expectedProbeGeneration: 9,
+      termsDigest: '1'.repeat(64),
+      credentialSourceDigest: '2'.repeat(64),
+      binaryIdentityDigest: '3'.repeat(64),
+      capabilityDigest: '4'.repeat(64),
+      framingDigest: '5'.repeat(64),
+      boundedBehaviorDigest: '6'.repeat(64),
+      containmentDigest: expect.stringMatching(/^[0-9a-f]{64}$/u)
     });
   });
 

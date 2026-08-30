@@ -186,12 +186,19 @@ export async function runProviderReadinessProbe(
     dependencies.target,
     dependencies.currentProbeGeneration
   );
-  await collectEvidence(dependencies);
+  const { inspection, containmentDigest } = await collectEvidence(dependencies);
   dependencies.signal.throwIfAborted();
   const committed = await dependencies.runtime.commitProbe({
     ...bindingInput(dependencies.target),
     modelId: dependencies.target.modelId,
-    expectedProbeGeneration: dependencies.payload.probeGeneration
+    expectedProbeGeneration: dependencies.payload.probeGeneration,
+    termsDigest: inspection.termsDigest,
+    credentialSourceDigest: inspection.credentialSourceDigest,
+    binaryIdentityDigest: inspection.binaryIdentityDigest,
+    capabilityDigest: inspection.capabilityDigest,
+    framingDigest: inspection.framingDigest,
+    boundedBehaviorDigest: inspection.boundedBehaviorDigest,
+    containmentDigest
   });
   return { mode: 'readiness', ...resultObject(committed) };
 }

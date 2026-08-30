@@ -2141,12 +2141,19 @@ export type Database = {
       }
       commit_ai_provider_probe: {
         Args: {
+          binary_identity_digest: string
+          bounded_behavior_digest: string
+          capability_digest: string
+          containment_digest: string
+          credential_source_digest: string
           expected_auth_generation: number
           expected_execution_fingerprint: string
           expected_probe_generation: number
           expected_settings_revision: number
+          framing_digest: string
           model_id: string
           provider_id: string
+          terms_digest: string
         }
         Returns: Json
       }

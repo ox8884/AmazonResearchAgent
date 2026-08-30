@@ -16,13 +16,24 @@ const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migr
 const securityProfile = 'subscription-isolation-v1';
 const readinessPolicy = 'ready-lease-v1';
 
+type Evidence = {
+  readonly termsDigest: string;
+  readonly credentialSourceDigest: string;
+  readonly binaryIdentityDigest: string;
+  readonly capabilityDigest: string;
+  readonly framingDigest: string;
+  readonly boundedBehaviorDigest: string;
+  readonly containmentDigest: string;
+};
+
 type Fixture = {
-  providerId: string;
-  modelId: string;
-  settingsRevision: number;
-  authGeneration: number;
-  fingerprint: string;
-  termsDigest: string;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly settingsRevision: number;
+  readonly authGeneration: number;
+  readonly fingerprint: string;
+  readonly termsDigest: string;
+  readonly evidence: Evidence;
 };
 
 async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<Fixture> {
@@ -31,6 +42,15 @@ async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promis
   const modelId = `model-${suffix}`;
   const fingerprint = `fingerprint-${suffix}`;
   const termsDigest = `terms-${suffix}`;
+  const evidence = {
+    termsDigest,
+    credentialSourceDigest: `credential-${suffix}`,
+    binaryIdentityDigest: `binary-${suffix}`,
+    capabilityDigest: `capability-${suffix}`,
+    framingDigest: `framing-${suffix}`,
+    boundedBehaviorDigest: `bounded-${suffix}`,
+    containmentDigest: `containment-${suffix}`
+  };
   await sql`
     insert into ai_providers (
       id, name, kind, adapter, billing_type, enabled, config, settings_revision
@@ -50,9 +70,10 @@ async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promis
   await sql`
     select commit_ai_provider_acceptance_probe(
       ${providerId}, ${modelId}, ${adapter}, 1, 0, ${fingerprint},
-      ${securityProfile}, ${readinessPolicy}, ${termsDigest},
-      ${`credential-${suffix}`}, ${`binary-${suffix}`}, ${`capability-${suffix}`},
-      ${`framing-${suffix}`}, ${`bounded-${suffix}`}, ${`containment-${suffix}`},
+      ${securityProfile}, ${readinessPolicy}, ${evidence.termsDigest},
+      ${evidence.credentialSourceDigest}, ${evidence.binaryIdentityDigest},
+      ${evidence.capabilityDigest}, ${evidence.framingDigest},
+      ${evidence.boundedBehaviorDigest}, ${evidence.containmentDigest},
       '{"verified":true}'::jsonb
     )
   `;
@@ -62,7 +83,8 @@ async function seedAcceptedProvider(adapter: 'codex' | 'grok' = 'codex'): Promis
     settingsRevision: 1,
     authGeneration: 0,
     fingerprint,
-    termsDigest
+    termsDigest,
+    evidence
   };
 }
 
@@ -81,7 +103,11 @@ async function commitReady(fixture: Fixture, generation: number): Promise<void> 
   await sql`
     select commit_ai_provider_probe(
       ${fixture.providerId}, ${fixture.modelId}, ${fixture.settingsRevision},
-      ${fixture.authGeneration}, ${fixture.fingerprint}, ${generation}
+      ${fixture.authGeneration}, ${fixture.fingerprint}, ${generation},
+      ${fixture.evidence.termsDigest}, ${fixture.evidence.credentialSourceDigest},
+      ${fixture.evidence.binaryIdentityDigest}, ${fixture.evidence.capabilityDigest},
+      ${fixture.evidence.framingDigest}, ${fixture.evidence.boundedBehaviorDigest},
+      ${fixture.evidence.containmentDigest}
     )
   `;
 }
@@ -298,11 +324,56 @@ describe('subscription provider runtime CAS', () => {
       await expect(sql`
         select commit_ai_provider_probe(
           ${fixture.providerId}, ${fixture.modelId}, ${values[0]}, ${values[1]},
-          ${values[2]}, ${values[3]}
+          ${values[2]}, ${values[3]},
+          ${fixture.evidence.termsDigest}, ${fixture.evidence.credentialSourceDigest},
+          ${fixture.evidence.binaryIdentityDigest}, ${fixture.evidence.capabilityDigest},
+          ${fixture.evidence.framingDigest}, ${fixture.evidence.boundedBehaviorDigest},
+          ${fixture.evidence.containmentDigest}
         )
       `).rejects.toThrow(/provider_probe_cas_conflict/);
     }
     await commitReady(fixture, request.probe_generation);
+  });
+
+  // Break: stale fresh evidence can install a Ready lease while accepted bindings stay unchanged.
+  it('requires exact fresh evidence inside the Ready transaction', async () => {
+    const fixture = await seedAcceptedProvider();
+    const request = await activate(fixture);
+    const commit = (evidence: Evidence) => sql`
+      select commit_ai_provider_probe(
+        ${fixture.providerId}, ${fixture.modelId}, ${fixture.settingsRevision},
+        ${fixture.authGeneration}, ${fixture.fingerprint}, ${request.probe_generation},
+        ${evidence.termsDigest}, ${evidence.credentialSourceDigest},
+        ${evidence.binaryIdentityDigest}, ${evidence.capabilityDigest},
+        ${evidence.framingDigest}, ${evidence.boundedBehaviorDigest},
+        ${evidence.containmentDigest}
+      )
+    `;
+    for (const drift of [
+      { binaryIdentityDigest: 'binary-drift' },
+      { credentialSourceDigest: 'credential-drift' },
+      { containmentDigest: 'containment-drift' },
+      { framingDigest: 'framing-drift' },
+      { boundedBehaviorDigest: 'bounded-drift' }
+    ]) {
+      await expect(commit({ ...fixture.evidence, ...drift })).rejects.toThrow(
+        /provider_probe_evidence_mismatch/
+      );
+      const [runtime] = await sql<{
+        state: string;
+        available: boolean;
+        ready_valid_until: string | null;
+      }[]>`
+        select state, available, ready_valid_until
+        from ai_provider_runtime_state where provider_id = ${fixture.providerId}
+      `;
+      expect(runtime).toEqual({
+        state: 'authorization_required',
+        available: false,
+        ready_valid_until: null
+      });
+    }
+    await expect(commit(fixture.evidence)).resolves.toBeDefined();
   });
 
   it('deactivation and auth fencing invalidate routing and probe ownership', async () => {
