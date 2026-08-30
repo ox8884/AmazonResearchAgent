@@ -1,0 +1,15 @@
+polkit.addRule(function(action, subject) {
+  if (subject.user !== 'amazon-research') {
+    return polkit.Result.NOT_HANDLED;
+  }
+  if (action.id !== 'org.freedesktop.systemd1.manage-units') {
+    return polkit.Result.NOT_HANDLED;
+  }
+  var unit = action.lookup('unit');
+  var verb = action.lookup('verb');
+  var acceptedUnit = /^amazon-research-(codex|grok)@[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.service$/;
+  if (acceptedUnit.test(unit) && (verb === 'start' || verb === 'stop' || verb === 'kill')) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

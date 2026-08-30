@@ -30,6 +30,31 @@ export type {
   CommandPromptMode,
   CommandProviderConfig
 } from './providers/command';
+export {
+  IPC_LIMITS,
+  SubscriptionIpcError,
+  SubscriptionRequestEnvelopeSchema,
+  SubscriptionResultEnvelopeSchema,
+  createExclusiveRegularFile,
+  openVerifiedRegularFile,
+  readVerifiedIpcJson,
+  verifyInvocationDirectory,
+  writeAtomicIpcJson
+} from './providers/subscription-process';
+export type {
+  SubscriptionProcessTransport,
+  SubscriptionRequestEnvelope,
+  SubscriptionResultEnvelope,
+  VerifiedInvocationDirectory
+} from './providers/subscription-process';
+export {
+  SubscriptionSandboxError
+} from './providers/subscription-errors';
+export type {
+  SubscriptionIpcErrorKind,
+  SubscriptionSandboxErrorKind,
+  SubscriptionSandboxPhase
+} from './providers/subscription-errors';
 
 export { routeAiRequest } from './router';
 export type {

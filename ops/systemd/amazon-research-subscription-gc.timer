@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic Amazon Research subscription invocation GC
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=amazon-research-subscription-gc.service
+
+[Install]
+WantedBy=timers.target
