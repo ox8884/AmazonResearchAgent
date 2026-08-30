@@ -383,4 +383,124 @@ integration('daily research orchestration', () => {
       await client.from('research_runs').delete().eq('id', foreignRun.id);
     }
   });
+
+  it('enqueues one normalization job for eligible AI Screening candidates only', async () => {
+    const date = `${fixtureYear}-01-03`;
+    const screeningEligibleId = randomUUID();
+    const screeningIneligibleId = randomUUID();
+    const rejectedId = randomUUID();
+    const extraImportIds = [randomUUID(), randomUUID(), randomUUID()];
+    const extraCandidateIds = [screeningEligibleId, screeningIneligibleId, rejectedId];
+    const readyId = candidateIds[0];
+    if (!readyId) {
+      throw new Error('Ready-for-API fixture was not created.');
+    }
+
+    const seed = [
+      {
+        id: screeningEligibleId,
+        importRunId: extraImportIds[0],
+        state: 'AI Screening',
+        eligible: true,
+        keyword: `${fixturePrefix}-screen-eligible`
+      },
+      {
+        id: screeningIneligibleId,
+        importRunId: extraImportIds[1],
+        state: 'AI Screening',
+        eligible: false,
+        keyword: `${fixturePrefix}-screen-ineligible`
+      },
+      {
+        id: rejectedId,
+        importRunId: extraImportIds[2],
+        state: 'Reject',
+        eligible: false,
+        keyword: `${fixturePrefix}-rejected`
+      }
+    ] as const;
+
+    try {
+      for (const row of seed) {
+        const importRunId = row.importRunId;
+        if (!importRunId) {
+          throw new Error('Import fixture id was missing.');
+        }
+        const { error: importError } = await client.from('import_runs').insert({
+          id: importRunId,
+          submission_hash: `${fixturePrefix}-${importRunId}`
+        });
+        if (importError) throw importError;
+        const { error: candidateError } = await client.from('candidates').insert({
+          id: row.id,
+          import_run_id: importRunId,
+          keyword: row.keyword,
+          normalized_exact_keyword: row.keyword,
+          state: row.state,
+          preliminary_score: 80,
+          rule_passed: row.eligible,
+          eligible_for_ai_normalization: row.eligible
+        });
+        if (candidateError) throw candidateError;
+      }
+
+      const first = await enqueueDailyResearch(client, { logicalRunDate: date });
+      const job = makeOrchestratorJob(randomUUID(), first.researchRunId, date);
+      await runDailyResearch(job, {
+        client,
+        queue: queueFor(client),
+        now: () => new Date('2099-01-03T12:00:00.000Z')
+      });
+      await runDailyResearch(job, {
+        client,
+        queue: queueFor(client),
+        now: () => new Date('2099-01-03T12:00:00.000Z')
+      });
+
+      const { data: normalizeJobs, error: normalizeError } = await client
+        .from('jobs')
+        .select('id, type, payload, idempotency_key')
+        .eq('type', 'NORMALIZE_OPPORTUNITIES')
+        .in('idempotency_key', extraCandidateIds.map((id) => `normalize:${id}`));
+      if (normalizeError) throw normalizeError;
+      expect(normalizeJobs).toHaveLength(1);
+      expect(normalizeJobs?.[0]?.idempotency_key).toBe(`normalize:${screeningEligibleId}`);
+      expect(normalizeJobs?.[0]?.payload).toMatchObject({
+        candidateIds: [screeningEligibleId],
+        locale: 'ko'
+      });
+
+      const { data: readyNormalize, error: readyNormalizeError } = await client
+        .from('jobs')
+        .select('id')
+        .eq('idempotency_key', `normalize:${readyId}`);
+      if (readyNormalizeError) throw readyNormalizeError;
+      expect(readyNormalize ?? []).toHaveLength(0);
+
+      const { data: probeJobs, error: probeError } = await client
+        .from('jobs')
+        .select('id, type, payload')
+        .like('idempotency_key', `daily-research:${first.researchRunId}:%`);
+      if (probeError) throw probeError;
+      expect(probeJobs).toHaveLength(2);
+      expect(probeJobs?.every((child) => child.type === 'MARKET_PROBE')).toBe(true);
+      expect(
+        probeJobs?.some((child) =>
+          JSON.stringify(child.payload).includes(screeningEligibleId)
+        )
+      ).toBe(false);
+    } finally {
+      await client
+        .from('jobs')
+        .delete()
+        .in(
+          'idempotency_key',
+          extraCandidateIds.map((id) => `normalize:${id}`)
+        );
+      await cleanupDailyFixtures(client, [date]);
+      await client.from('candidates').delete().in('id', extraCandidateIds);
+      await client.from('import_runs').delete().in('id', extraImportIds);
+    }
+  });
+
 });

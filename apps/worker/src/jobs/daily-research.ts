@@ -7,6 +7,7 @@ import {
   LocaleSchema,
   LogicalRunDateSchema,
   ResearchSettingsSchema,
+  NormalizeOpportunitiesJobPayloadSchema,
   ScheduledMarketProbePayloadSchema,
   type DailyResearchCheckpoint,
   type DailyResearchJobPayload,
@@ -573,6 +574,33 @@ function childPayload(
   });
 }
 
+async function enqueueEligibleNormalizationJobs(
+  client: QueueDatabaseClient,
+  queue: DailyResearchQueue,
+  locale: Locale
+): Promise<void> {
+  const candidates = await collectDailyResearchPages((from, to) =>
+    client
+      .from('candidates')
+      .select('id')
+      .eq('state', 'AI Screening')
+      .eq('eligible_for_ai_normalization', true)
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  for (const candidate of candidates) {
+    await queue.enqueueJob({
+      type: 'NORMALIZE_OPPORTUNITIES',
+      payload: NormalizeOpportunitiesJobPayloadSchema.parse({
+        candidateIds: [candidate.id],
+        locale
+      }),
+      idempotencyKey: `normalize:${candidate.id}`
+    });
+  }
+}
+
+
 async function enqueueDigestBestEffort(
   dependencies: RunDailyResearchDependencies,
   researchRunId: string,
@@ -674,6 +702,14 @@ export async function runDailyResearch(
   }
   if (!checkpoint) {
     throw new DailyResearchError('Daily research selection checkpoint was not created.');
+  }
+
+  if (dependencies.client) {
+    await enqueueEligibleNormalizationJobs(
+      dependencies.client,
+      dependencies.queue,
+      payload.locale
+    );
   }
 
   const enqueuedCandidateIds = new Set(checkpoint.enqueuedCandidateIds);
