@@ -123,8 +123,8 @@ Cancellation checkpoints are normative: cancellation while waiting for the semap
 ## Dependency Order
 
 ```text
-019 schema, existing-row preflight, probe generation, and generated DB types
-  -> shared/exhaustive kind and failure model
+019 schema, existing-row preflight, probe generation, generated DB types, and the final migration-019 DB repository row/RPC cutover
+  -> shared/exhaustive kind and failure model plus worker/catalog fail-closed dispatch
   -> runtime CAS, acceptance/activation, and repeatable probe-generation repository
   -> dual lease epochs, attempt transactions, staged winner, candidate-domain finalization, and legacy writer capability
   -> concrete cross-UID SystemdSubscriptionSandbox IPC transport + semaphore
@@ -147,50 +147,55 @@ Tasks 7–9 may use fake sandbox fixtures locally, but no production adapter pro
 **Files**
 - Create: `supabase/migrations/202608290019_subscription_ai_provider_schema.sql`
 - Create: `packages/db/src/subscription-provider-schema.integration.test.ts`
+- Modify: `packages/db/src/core-schema.integration.test.ts`
 - Modify: `packages/db/src/types.ts`
+- Modify: `packages/db/src/provider-repository.ts`
+- Modify: `packages/db/src/provider-repository.test.ts`
 - Modify: `package.json`
-- Test: `packages/db/src/subscription-provider-schema.integration.test.ts`
+- Test: `packages/db/src/subscription-provider-schema.integration.test.ts`, `packages/db/src/core-schema.integration.test.ts`, `packages/db/src/provider-repository.test.ts`
 
 **Interfaces**
-- Consumes: existing `ai_providers`, `ai_models`, `provider_secrets`, `ai_analyses`, `candidates`, `jobs`, service-role RLS convention, and migration 018 baseline.
-- Produces: `adapter`, `normalization_generation`, runtime state with `probe_generation`, both attestation tables, attempt events, protected staged-winner fields, database constraints/triggers, and generated types consumed by Tasks 2–18.
+- Consumes: existing `ai_providers`, `ai_models`, `provider_secrets`, `ai_analyses`, `candidates`, `jobs`, `save_ai_provider_settings`, the current DB repository boundary, service-role RLS convention, and migration 018 baseline.
+- Produces: `adapter`, `normalization_generation`, runtime state with `probe_generation`, both attestation tables, attempt events, protected staged-winner fields, authoritative generated types, and the final migration-019-compatible DB repository row/RPC mapping consumed by Tasks 2–18.
+- Owns the complete migration-019 DB repository cutover once: `ProviderRow.adapter` is always present as `string | null`; HTTP/legacy rows map `adapter=null`; existing subscription rows preserve `codex|grok`; exported `ProviderRuntimeStateRow` plus `listRuntimeStates()` / `findRuntimeState(providerId)` expose read-only runtime rows with `probe_generation` unchanged; `save_ai_provider_settings` optional-only generated arguments are omitted when absent rather than passed as `null`; committed provider snapshots validate and return the stored kind/adapter without converting family. The existing settings RPC does not become a subscription-provider creation path. No temporary compatibility shim, generated-type weakening, or duplicate Task-2 mapping is permitted.
 
 - [ ] Write failing integration cases named `preserves a valid existing HTTP provider`, `preserves a valid legacy command provider`, `aborts on existing provider-model billing mismatch`, `aborts on a forbidden existing secret`, `aborts on cross-family config or adapter collision`, `accepts only the approved kind-adapter-billing matrix`, `keeps provider family immutable`, `keeps unproven subscription models disabled`, `rejects updates and deletes of provider attempt events`, and `rejects contradictory attempt outcomes`. Run `pnpm --filter @ara/db exec vitest run src/subscription-provider-schema.integration.test.ts`; expected RED is missing migration-019 columns/tables/preflight constraints.
+- [ ] Add repository/schema cutover cases named `maps null adapter from a committed HTTP provider snapshot`, `maps codex and grok adapters from committed subscription provider snapshots`, `maps runtime probe generation without coercion`, `omits absent optional settings revision instead of passing null`, and `preserves an existing provider kind and adapter in the committed settings snapshot`. Preserve the existing committed-snapshot and HTTP repository assertions. Run `pnpm --filter @ara/db exec vitest run src/provider-repository.test.ts && pnpm --filter @ara/db typecheck`; expected RED is the pre-019 mapper omitting required `adapter`, rejecting the generated optional-only RPC argument shape, and lacking `ProviderRuntimeStateRow` plus read-only runtime queries. These are the authoritative RED checks for the repository cutover; Task 2 must not recreate them.
+- [ ] Legalize only the three obsolete fixtures in `core-schema.integration.test.ts` that test rollback, discovery preservation, and stale-revision protection: seed `openai_http` directly instead of incidental `command` secret ownership or `command -> openai_http` conversion. Keep every behavioral assertion unchanged and do not weaken HTTP-only secrets or family immutability.
 - [ ] Begin migration 019 with deterministic `DO`-block preflight before any new validated constraint: preserve `openai_http` rows with optional secrets and HTTP-only config; preserve readable legacy `command` rows only when they have no secret and only command-family config; abort with sanitized provider IDs/counts on provider/model billing mismatch, command-owned secret, cross-family config, any pre-existing/future adapter key, unsupported kind, or a shape that would collide with one-row-per-adapter. Do not delete secrets, change billing, convert family, or silently disable data. The only deterministic additions are nullable `adapter`, candidate generation `0`, and runtime generation `0`.
 - [ ] Extend kind CHECK to `subscription_command`; enforce kind/adapter/billing/secret/config matrix, one subscription row per adapter, provider/model billing agreement, subscription-model disabled-until-proof, and immutable family with validated constraints/triggers after preflight. Mixed-version old readers continue to read valid HTTP/legacy rows; unknown new kind remains worker-fail-closed.
 - [ ] Add `candidates.normalization_generation bigint NOT NULL DEFAULT 0 CHECK (normalization_generation >= 0)`; do not alter initial enqueue behavior before migration 022 cutover.
 - [ ] Create `ai_provider_runtime_state` with spec Section 11 fields plus `probe_generation bigint NOT NULL DEFAULT 0 CHECK (probe_generation >= 0)`, current probe job/reference metadata, and service-role-only RLS. Create immutable capability/containment attestation tables without raw prompt/output/auth columns.
 - [ ] Create `provider_attempt_events` with dual lease owner/epoch context, bindings, safe metadata, usage, and consumption status. Enforce one start per attempt, unique `(logical_analysis_id, attempt_sequence)` on starts, one partial unique outcome across all outcome types, legal event/status combinations, and append-only update/delete rejection.
 - [ ] Add protected nullable `ai_analyses.pending_winner_attempt_id`, `pending_output`, and `pending_usage` staging fields. Only migration-021 RPCs may write them; attempt events remain free of output.
-- [ ] Regenerate DB types and register the integration file. Run `pnpm --filter @ara/db exec vitest run src/subscription-provider-schema.integration.test.ts && pnpm --filter @ara/db test && pnpm --filter @ara/db typecheck && git diff --check`; expected GREEN is all migration/preflight/immutability cases passing. Commit only Task 1 files as `db: add subscription provider execution schema`.
+- [ ] Regenerate DB types, implement the final schema-compatible provider row, exported `ProviderRuntimeStateRow`, `listRuntimeStates()` / `findRuntimeState(providerId)`, and settings-RPC argument/return mapping in `provider-repository.ts`, and register the integration file. Repository parsing must fail closed on invalid adapter/runtime shapes, preserve stored provider family values verbatim, preserve `probe_generation` as a non-negative integer, omit absent optional RPC keys instead of writing null, and adapt code to generated types rather than make `adapter` optional or use assertions/suppressions. Do not add subscription provider creation to the legacy settings RPC. Run `pnpm --filter @ara/db exec vitest run src/subscription-provider-schema.integration.test.ts && pnpm --filter @ara/db test && pnpm --filter @ara/db typecheck && git diff --check`; expected GREEN is all migration/preflight/immutability, legal fixture, repository mapping, optional-argument, and generated-schema compatibility cases passing. Commit only Task 1 files as `db: add subscription provider execution schema`.
 
 ## Task 2: Make provider-kind and adapter dispatch exhaustive
 
 **Spec:** Sections 1, 3, 9–10, 15, 24–25.
 
 **Files**
-- Create: none
+- Create: `packages/db/src/execution-identity.test.ts`
 - Modify: `packages/shared/src/ai.ts`
 - Modify: `packages/shared/src/index.ts`
 - Modify: `packages/shared/src/ai.test.ts`
 - Modify: `packages/db/src/execution-identity.ts`
-- Modify: `packages/db/src/provider-repository.ts`
-- Modify: `packages/db/src/provider-repository.test.ts`
 - Modify: `packages/db/src/index.ts`
 - Modify: `apps/worker/src/providers/provider-catalog.ts`
 - Modify: `apps/worker/src/providers/provider-catalog.test.ts`
-- Test: `packages/shared/src/ai.test.ts`, `packages/db/src/provider-repository.test.ts`, `apps/worker/src/providers/provider-catalog.test.ts`
+- Test: `packages/shared/src/ai.test.ts`, `packages/db/src/execution-identity.test.ts`, `apps/worker/src/providers/provider-catalog.test.ts`
 
 **Interfaces**
-- Consumes: migration 019 row types and current provider fingerprint/catalog interfaces.
+- Consumes: the fully GREEN and committed Task-1 migration-019 row types plus final provider/runtime repository contract, and current fingerprint/catalog interfaces.
 - Produces: exported `SubscriptionAdapterSchema`, `ProviderRuntimeStateSchema`, attempt/failure enums, discriminated persisted provider configuration, subscription-aware fingerprint inputs, and exhaustive provider-kind dispatch with unknown kinds fail-closed.
+- Does not modify or remap `provider-repository.ts`; Task 1 already owns its complete migration-019 adapter/read-only-runtime/probe-generation and settings-RPC cutover. Task 2 consumes that contract and owns only the remaining shared schema, fingerprint, export, and worker/catalog dispatch surfaces.
 
-- [ ] Write failing tests named `parses only canonical subscription failure classes`, `parses only codex and grok subscription adapters`, `requires subscription kind adapter and subscription billing`, `includes auth security and sandbox bindings in subscription fingerprints`, `maps adapter runtime and probe generation from repository rows`, and `never sends an unknown kind through CommandProvider`. Run `pnpm --filter @ara/shared exec vitest run src/ai.test.ts && pnpm --filter @ara/db exec vitest run src/provider-repository.test.ts && pnpm --filter @ara/worker exec vitest run src/providers/provider-catalog.test.ts`; expected RED is missing schemas/exhaustive branches.
+- [ ] Write failing tests named `parses only canonical subscription failure classes`, `parses only codex and grok subscription adapters`, `requires subscription kind adapter and subscription billing`, `includes auth security and sandbox bindings in subscription fingerprints`, and `never sends an unknown kind through CommandProvider`. Run `pnpm --filter @ara/shared exec vitest run src/ai.test.ts && pnpm --filter @ara/db exec vitest run src/execution-identity.test.ts && pnpm --filter @ara/worker exec vitest run src/providers/provider-catalog.test.ts`; expected RED is missing shared schemas, exhaustive family fingerprints, and explicit fail-closed catalog branches—not any pre-019 repository mapper behavior.
 - [ ] Extend `ProviderKindSchema`; add/export the canonical adapter, runtime, attempt, consumption, expanded failure, dual-lease identity, and probe-generation schemas/types. Define a discriminated subscription config accepting only fixed role `niche_normalization` plus product-visible model/priority state and no executable, argv, auth-home, base URL, API key, or command profile.
 - [ ] Replace family-agnostic fingerprint scanning with exhaustive family functions. Subscription fingerprint requires adapter, absolute binary digest/version, execution-profile ID, systemd unit/policy digest, dedicated auth-home identity, auth generation, settings revision, security/readiness versions, endpoint allowlist digest, containment binding, capability binding, and terms digest; preserve identical HTTP fingerprints.
-- [ ] Extend repository mapping for `adapter` and `probe_generation`; remove implicit `openai_http else command`. Unknown kind/adapter yields `ProviderCatalogError` and unavailable omission, never legacy `CommandProvider` construction.
+- [ ] Consume Task 1's validated provider adapter and `listRuntimeStates()` / `findRuntimeState()` read contract in catalog snapshots, including exact `probe_generation`; remove implicit `openai_http else command`. Unknown kind/adapter yields `ProviderCatalogError` and unavailable omission, never legacy `CommandProvider` construction.
 - [ ] Add a temporary explicit `subscription_command` catalog branch that is unavailable and cannot construct a sandbox process until Tasks 5, 7–9, and production Task 14 evidence match.
-- [ ] Run `pnpm --filter @ara/shared exec vitest run src/ai.test.ts && pnpm --filter @ara/db exec vitest run src/provider-repository.test.ts && pnpm --filter @ara/worker exec vitest run src/providers/provider-catalog.test.ts && pnpm --filter @ara/shared test && pnpm --filter @ara/db test && pnpm --filter @ara/worker test && pnpm --filter @ara/shared typecheck && pnpm --filter @ara/db typecheck && pnpm --filter @ara/worker typecheck && git diff --check`; expected GREEN is exhaustive parsing/fail-closed dispatch. Commit `refactor: make AI provider dispatch exhaustive`.
+- [ ] Run `pnpm --filter @ara/shared exec vitest run src/ai.test.ts && pnpm --filter @ara/db exec vitest run src/execution-identity.test.ts && pnpm --filter @ara/worker exec vitest run src/providers/provider-catalog.test.ts && pnpm --filter @ara/shared test && pnpm --filter @ara/db test && pnpm --filter @ara/worker test && pnpm --filter @ara/shared typecheck && pnpm --filter @ara/db typecheck && pnpm --filter @ara/worker typecheck && git diff --check`; expected GREEN is exhaustive parsing, stable family-specific fingerprints, and fail-closed dispatch from a compiling committed Task-1 repository contract. Commit `refactor: make AI provider dispatch exhaustive`.
 
 
 ## Task 3: Implement authoritative runtime state, repeatable probes, and activation CAS
@@ -202,7 +207,7 @@ Tasks 7–9 may use fake sandbox fixtures locally, but no production adapter pro
 - Create: `packages/db/src/provider-runtime-repository.ts`
 - Create: `packages/db/src/provider-runtime-repository.test.ts`
 - Create: `packages/db/src/provider-runtime.integration.test.ts`
-- Modify: `packages/db/src/provider-repository.ts`
+- Modify: `packages/db/src/provider-repository.ts` only to remove superseded subscription `config.executionProbe`/`recordExecutionProbe` writes after the new strict runtime repository exists; retain Task 1's provider-row and read-only `listRuntimeStates()` / `findRuntimeState()` contract and do not redo adapter/probe-generation parsing.
 - Modify: `packages/db/src/index.ts`
 - Modify: `packages/db/src/types.ts`
 - Modify: `package.json`
