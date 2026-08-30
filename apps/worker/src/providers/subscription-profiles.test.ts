@@ -5,9 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import {
+  CODEX_SUBSCRIPTION_MANIFEST,
+  GROK_SUBSCRIPTION_MANIFEST,
   createCodexExecutionProfile,
-  inspectSubscriptionBinary,
-  CODEX_SUBSCRIPTION_MANIFEST
+  createGrokExecutionProfile,
+  inspectSubscriptionBinary
 } from './subscription-profiles';
 import { loadSubscriptionSandboxPolicy } from './subscription-sandbox-policy';
 
@@ -121,5 +123,49 @@ describe('Codex subscription execution profile', () => {
       authHome: profile.authHome,
       policyDigest: CODEX_SUBSCRIPTION_MANIFEST.policyDigest
     })).toThrow();
+  });
+});
+
+describe('Grok subscription execution profile', () => {
+  // Break: guessed or Codex-derived client evidence makes Grok production-routable.
+  it('remains independently setup-required without an accepted client identity', () => {
+    expect(GROK_SUBSCRIPTION_MANIFEST).toMatchObject({
+      adapter: 'grok',
+      activation: 'disabled',
+      clientAcceptance: 'setup_required',
+      modelId: null,
+      profileId: 'grok-subscription-v1',
+      unitTemplate: 'amazon-research-grok@.service',
+      invocationRoot: '/run/amazon-research/subscription/grok',
+      authHomePath: '/var/lib/amazon-research/subscription/grok',
+      binaryPath: '/usr/local/libexec/amazon-research/grok-subscription-client'
+    });
+    expect(() => createGrokExecutionProfile({
+      binary: {
+        path: '/usr/local/libexec/amazon-research/grok-subscription-client',
+        ownerUid: 501,
+        ownerGid: 501,
+        mode: 0o500,
+        version: 'codex-evidence-must-not-activate-grok',
+        sha256: 'a'.repeat(64)
+      },
+      authHome: {
+        path: '/var/lib/amazon-research/subscription/codex',
+        ownerUid: 501,
+        ownerGid: 501,
+        mode: 0o700
+      },
+      policyDigest: CODEX_SUBSCRIPTION_MANIFEST.policyDigest
+    })).toThrowError(/Setup Required/u);
+  });
+
+  // Break: Grok silently reuses the Codex sandbox policy attestation.
+  it('pins a distinct Grok sandbox artifact digest', async () => {
+    const [codex, grok] = await Promise.all([
+      loadSubscriptionSandboxPolicy(repositoryRoot, 'codex'),
+      loadSubscriptionSandboxPolicy(repositoryRoot, 'grok')
+    ]);
+    expect(grok.digest).toBe(GROK_SUBSCRIPTION_MANIFEST.policyDigest);
+    expect(grok.digest).not.toBe(codex.digest);
   });
 });

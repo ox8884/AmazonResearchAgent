@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   inspectCodexAuthHome,
-  inspectCodexCredentialSource
+  inspectCodexCredentialSource,
+  inspectGrokAuthHome,
+  inspectGrokCredentialSource
 } from './subscription-auth-home';
 
 const roots: string[] = [];
@@ -80,6 +82,54 @@ describe('Codex auth home and credential source', () => {
     }));
     await expect(inspectCodexCredentialSource(path, {})).rejects.toMatchObject({
       state: 'authorization_required'
+    });
+  });
+});
+
+describe('Grok auth home and OAuth source', () => {
+  // Break: Grok accepts Codex/shared auth-home evidence or inherited credential precedence.
+  it('requires a dedicated Grok home and Grok-owned OAuth evidence', async () => {
+    const path = await authFixture();
+    await expect(inspectGrokAuthHome(path, {
+      expectedUid: process.getuid?.(),
+      expectedGid: process.getgid?.()
+    })).resolves.toMatchObject({ path });
+    await writeFile(join(path, 'credential-source.json'), JSON.stringify({
+      kind: 'grok_oauth_subscription',
+      authenticated: true,
+      endpoint: 'official',
+      providerOverride: null
+    }), { mode: 0o600 });
+    await expect(inspectGrokCredentialSource(path, {})).resolves.toMatchObject({
+      kind: 'grok_oauth_subscription',
+      authenticated: true
+    });
+    for (const environment of [
+      { XAI_API_KEY: 'secret' },
+      { GROK_ACCESS_TOKEN: 'secret' },
+      { XAI_BASE_URL: 'https://example.invalid' },
+      { GROK_PROVIDER: 'custom' }
+    ]) {
+      await expect(inspectGrokCredentialSource(path, environment)).rejects.toMatchObject({
+        failureClass: 'credential_source_mismatch'
+      });
+    }
+  });
+
+  // Break: Codex credential evidence can satisfy Grok authorization.
+  it('rejects missing and Codex credential evidence as setup required', async () => {
+    const path = await authFixture();
+    await expect(inspectGrokCredentialSource(path, {})).rejects.toMatchObject({
+      state: 'setup_required'
+    });
+    await writeFile(join(path, 'credential-source.json'), JSON.stringify({
+      kind: 'chatgpt_subscription',
+      authenticated: true,
+      endpoint: 'official',
+      providerOverride: null
+    }));
+    await expect(inspectGrokCredentialSource(path, {})).rejects.toMatchObject({
+      state: 'setup_required'
     });
   });
 });

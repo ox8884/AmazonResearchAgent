@@ -69,6 +69,21 @@ export type {
   CodexSandboxProfile,
   CodexSubscriptionTransport
 } from './providers/codex-subscription';
+export {
+  GROK_SUBSCRIPTION_IDENTITY,
+  GrokSetupRequiredError,
+  GrokSubscriptionAdapter,
+  GrokSubscriptionError,
+  inspectGrokCredentialSource,
+  parseGrokNormalizationOutput
+} from './providers/grok-subscription';
+export type {
+  GrokAuthHomeIdentity,
+  GrokBinaryIdentity,
+  GrokExecutionProfile,
+  GrokSandboxProfile,
+  GrokSubscriptionTransport
+} from './providers/grok-subscription';
 
 
 export { routeAiRequest } from './router';

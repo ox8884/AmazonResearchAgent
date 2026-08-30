@@ -4,10 +4,15 @@ import { lstat, open, realpath, type FileHandle } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import {
   CODEX_SUBSCRIPTION_IDENTITY,
+  GROK_SUBSCRIPTION_IDENTITY,
   CodexSubscriptionError,
+  GrokSetupRequiredError,
   type CodexAuthHomeIdentity,
   type CodexBinaryIdentity,
-  type CodexExecutionProfile
+  type CodexExecutionProfile,
+  type GrokAuthHomeIdentity,
+  type GrokBinaryIdentity,
+  type GrokExecutionProfile
 } from '@ara/ai-router';
 
 
@@ -26,6 +31,24 @@ export const CODEX_SUBSCRIPTION_MANIFEST = Object.freeze({
   environment: Object.freeze({}),
   authHomePath: CODEX_SUBSCRIPTION_IDENTITY.authHomePath,
   policyDigest: CODEX_SUBSCRIPTION_IDENTITY.policyDigest
+});
+
+export const GROK_SUBSCRIPTION_MANIFEST = Object.freeze({
+  adapter: 'grok' as const,
+  activation: 'disabled' as const,
+  clientAcceptance: 'setup_required' as const,
+  profileId: GROK_SUBSCRIPTION_IDENTITY.profileId,
+  modelId: GROK_SUBSCRIPTION_IDENTITY.acceptedModelId,
+  unitTemplate: GROK_SUBSCRIPTION_IDENTITY.unitTemplate,
+  invocationRoot: GROK_SUBSCRIPTION_IDENTITY.invocationRoot,
+  binaryPath: GROK_SUBSCRIPTION_IDENTITY.binaryPath,
+  fixedClientArguments: Object.freeze([
+    '--fixed-profile',
+    GROK_SUBSCRIPTION_IDENTITY.profileId
+  ]),
+  environment: Object.freeze({}),
+  authHomePath: GROK_SUBSCRIPTION_IDENTITY.authHomePath,
+  policyDigest: GROK_SUBSCRIPTION_IDENTITY.policyDigest
 });
 
 export interface InspectSubscriptionBinaryOptions {
@@ -146,4 +169,19 @@ export function createCodexExecutionProfile(
       policyDigest: options.policyDigest
     })
   });
+}
+
+export interface CreateGrokExecutionProfileOptions {
+  readonly binary: GrokBinaryIdentity;
+  readonly authHome: GrokAuthHomeIdentity;
+  readonly policyDigest: string;
+}
+
+export function createGrokExecutionProfile(
+  options: CreateGrokExecutionProfileOptions
+): GrokExecutionProfile {
+  void options;
+  throw new GrokSetupRequiredError(
+    'Grok Setup Required: no production client and model identity has been accepted.'
+  );
 }

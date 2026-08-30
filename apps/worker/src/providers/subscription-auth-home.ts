@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import {
   CodexSubscriptionError,
-  type CodexAuthHomeIdentity
+  GrokSetupRequiredError,
+  GrokSubscriptionError,
+  inspectGrokCredentialSource as parseGrokCredentialSource,
+  type CodexAuthHomeIdentity,
+  type GrokAuthHomeIdentity
 } from '@ara/ai-router';
 
 const CREDENTIAL_SOURCE_FILE = 'credential-source.json';
@@ -150,6 +154,73 @@ export async function inspectCodexCredentialSource(
       'Codex subscription authorization evidence is invalid.',
       cause
     );
+  } finally {
+    await handle.close();
+  }
+}
+
+const GROK_FORBIDDEN_ENVIRONMENT = [
+  'XAI_API_KEY',
+  'XAI_BASE_URL',
+  'GROK_ACCESS_TOKEN',
+  'GROK_PROVIDER'
+] as const;
+
+export async function inspectGrokAuthHome(
+  path: string,
+  options: CodexAuthInspectionOptions
+): Promise<GrokAuthHomeIdentity> {
+  try {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new GrokSetupRequiredError('Grok auth home must be a real directory.');
+    }
+    if (
+      (options.expectedUid !== undefined && info.uid !== options.expectedUid) ||
+      (options.expectedGid !== undefined && info.gid !== options.expectedGid) ||
+      (process.platform !== 'win32' && (info.mode & 0o7777) !== 0o700) ||
+      await realpath(path) !== path
+    ) {
+      throw new GrokSetupRequiredError('Grok auth home identity does not match.');
+    }
+    return { path, ownerUid: info.uid, ownerGid: info.gid, mode: info.mode & 0o7777 };
+  } catch (cause) {
+    if (cause instanceof GrokSubscriptionError) throw cause;
+    throw new GrokSetupRequiredError('Grok auth home inspection failed.');
+  }
+}
+
+export async function inspectGrokCredentialSource(
+  authHomePath: string,
+  environment: Readonly<Record<string, string | undefined>>
+): Promise<ReturnType<typeof parseGrokCredentialSource>> {
+  if (GROK_FORBIDDEN_ENVIRONMENT.some((name) => environment[name] !== undefined)) {
+    throw new GrokSubscriptionError(
+      'Grok effective credential source is not OAuth-only.',
+      'credential_source_mismatch',
+      false
+    );
+  }
+  const path = join(authHomePath, CREDENTIAL_SOURCE_FILE);
+  let handle: FileHandle;
+  try {
+    const before = await lstat(path);
+    if (!before.isFile() || before.isSymbolicLink()) throw new GrokSetupRequiredError();
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (cause) {
+    if (cause instanceof GrokSubscriptionError) throw cause;
+    throw new GrokSetupRequiredError('Grok OAuth authorization is required.');
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > 16 * 1024) throw new GrokSetupRequiredError();
+    let evidence: unknown;
+    try {
+      evidence = JSON.parse((await handle.readFile()).toString('utf8'));
+    } catch {
+      throw new GrokSetupRequiredError('Grok OAuth evidence is invalid.');
+    }
+    return parseGrokCredentialSource(evidence, environment);
   } finally {
     await handle.close();
   }
