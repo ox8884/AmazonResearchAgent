@@ -183,15 +183,22 @@ Required fields:
 - `available` boolean, constrained so only `state=ready` can be true;
 - sanitized `reason`;
 - `checked_at`;
+- persisted `ready_valid_until`;
+- nullable worker-owned `retry_not_before`;
+- bounded transient-failure count used only to derive retry timing;
 - `settings_revision`;
 - `execution_fingerprint`;
 - monotonically increasing `auth_generation`;
 - `security_profile_version`;
 - adapter capability/containment attestation references or digests.
 
-`Disabled` is derived from `ai_providers.enabled=false`. `Not configured` is derived from a missing/unsupported adapter or binary. UI and router derive all status from the provider row plus this runtime row. Web/API writes cannot set runtime state.
+The authoritative freshness semantic is a persisted readiness lease. A successful full worker probe writes `checked_at` and `ready_valid_until = checked_at + 10 minutes` in the same transaction using the database clock. Ten minutes is the MVP `readinessMaxAge`: finite and conservative enough to detect subscription auth or client drift without probing before every request. It is trusted server/worker configuration, never browser-controlled provider config. A later tightening changes a trusted readiness-policy version included in the execution fingerprint, invalidates existing Ready evidence, and requires a fresh probe.
 
-## 12. Auth generation, fingerprint, and CAS
+A subscription provider is routable only when `state=ready`, `available=true`, database time is strictly earlier than `ready_valid_until`, `retry_not_before` is null, and the current settings revision, auth generation, execution fingerprint, security profile, capability proof, and containment proof all match. At `now >= ready_valid_until`, the row is stale and is unroutable even if it still says Ready/available. The first worker or router observation CAS-writes `available=false` with sanitized reason `readiness_stale` and durably requests the adapter's normal deduplicated readiness probe. Only a successful full probe can issue a new lease; time passage or reaching `retry_not_before` never restores availability by itself.
+
+`Disabled` is derived from `ai_providers.enabled=false`. `Not configured` is derived from a missing/unsupported adapter or binary. UI and router derive all status from the provider row plus this runtime row. Web/API writes cannot set runtime state, expiry, retry timing, or availability.
+
+## 12. Auth generation, fingerprint, CAS, and failure writeback
 
 Increment `authGeneration` whenever auth identity may change: initial authorization, logout, reauthorization, auth-home replacement, credential revocation, provider adoption/reset, or adapter/auth identity change.
 
@@ -203,9 +210,25 @@ The execution fingerprint includes:
 - auth-home identity;
 - `authGeneration`;
 - provider settings revision;
-- security-profile version and hostile-probe binding.
+- security-profile version, readiness-policy version, and hostile-probe binding.
 
-Probe persistence compares provider ID, expected settings revision, expected auth generation, and expected execution fingerprint in one CAS. A stale probe, auth operation, or execution completion cannot restore Ready after a newer event. Auth mutations fence new execution before incrementing generation and invalidate Ready atomically.
+Every probe, auth operation, lease-expiry transition, retry suspension, and execution-result writeback uses one CAS bound to provider ID, expected settings revision, expected auth generation, and expected execution fingerprint. A stale probe, auth operation, or execution completion cannot restore or invalidate state produced by a newer event. Auth mutations fence new execution before incrementing generation and invalidate Ready atomically.
+
+Adapter error classification has the following normative MVP writeback:
+
+| Classified result | Authoritative worker writeback |
+| --- | --- |
+| Auth expired or revoked | `state=expired`, `available=false`, sanitized `auth_expired` reason, clear lease/retry; blocked until supported reauthorization and a successful full probe. |
+| Effective credential-source mismatch | `state=needs_attention`, `available=false`, sanitized reason, clear lease/retry. |
+| Binary/version/digest/profile mismatch | `state=needs_attention`, `available=false`, sanitized reason, clear lease/retry. |
+| Containment attestation failure | `state=needs_attention`, `available=false`, sanitized reason, clear lease/retry and invalidate the containment proof. |
+| Capability mismatch | Invalidate the affected adapter/model capability proof and make that model unroutable; if provider-level structured capability or framing proof is invalid, also set provider `state=needs_attention`, `available=false`, and clear lease/retry. |
+| Subscription quota/capacity temporarily exhausted | Preserve `state=ready` as identity/auth truth, set `available=false`, reason `temporary_capacity`, and set `retry_not_before` to a sanitized provider Retry-After clamped to 1–15 minutes, or 5 minutes when absent. |
+| Recoverable network/client failure | Preserve `state=ready`, set `available=false`, reason `transient_client_failure`, and set `retry_not_before` by deterministic exponential backoff of 30 seconds, 1 minute, 2 minutes, then 5 minutes maximum. |
+
+Temporary suspension never becomes a second auth truth. At or after `retry_not_before`, a fresh full probe is required; success resets the transient count, clears reason/retry, and issues a new ten-minute lease. A failed probe applies the same classifier and bounded timing. Unknown, unsafe, or unclassified failures fail closed as `needs_attention` rather than being mislabeled transient.
+
+After any result that expires, invalidates, or suspends readiness, the CAS writeback completes before the current logical request can select a fallback. Every later router selection reads the current authoritative row and lease and therefore cannot reselect that provider until the required reauthorization/remediation and fresh probe succeed. The current request may consider only another eligible non-PAYG provider.
 
 ## 13. Auth-home cardinality and ownership
 
@@ -253,15 +276,17 @@ Preserve the current mode-specific comparator and explain it in the UI:
 
 Lower numeric priority wins at the priority step. Provider priority is therefore not a universal fallback order. With `allowPaidFallback=false`, PAYG providers/models are removed before ranking in every mode.
 
-Eligibility also requires enabled provider, current runtime `available=true`, matching role, adapter-owned proven model capabilities, and consistent provider/model billing.
+Eligibility also requires enabled provider, `state=ready`, persisted `available=true`, database time before `ready_valid_until`, no `retry_not_before`, exact settings/auth-generation/execution-fingerprint bindings, matching role, adapter-owned proven model capabilities, and consistent provider/model billing. Selection never trusts an in-memory Ready snapshot without rechecking these persisted predicates.
 
-## 17. Execution-time non-PAYG fallback
+## 17. Execution-time precondition, writeback, and non-PAYG fallback
 
-Preflight health is not sufficient. One logical normalization request may make at most three distinct provider attempts. Each provider is attempted at most once. After a classified recoverable failure, reroute the same logical analysis/request/role with attempted provider IDs excluded.
+Preflight health is not sufficient. After acquiring the adapter semaphore and immediately before any external client spawn/network/provider consumption, the worker re-reads the authoritative runtime row and verifies every routability predicate, including the readiness lease and CAS bindings. The same transaction that authorizes the invocation must assert those predicates and commit the `attempt_started` event described below. If the lease is expired or any binding changed, no attempt event is created and no client executes: the worker CAS-marks unavailable where needed, durably runs/requeues the deduplicated supported readiness probe, and defers or reroutes through the normal worker flow. A stale Ready row can never launch a child process.
 
-Eligible fallback classes are authentication expiry, timeout, subscription quota/capacity, temporary adapter unavailability, and explicitly classified recoverable client failure. Invalid input/output schema, business-rule failure, unsafe output, containment failure, or unknown error is not cross-provider fallback unless a reviewed classifier proves it is provider-transient. Containment failure immediately invalidates adapter readiness.
+One logical normalization request may make at most three externally consumable, distinct-provider attempts. Each provider is externally executed at most once. After a classified recoverable failure, its authoritative runtime writeback must commit first; the router then reroutes the same logical analysis/request/role with the durable attempted-provider set excluded.
 
-Fallback preserves logical analysis ownership and request identity, records each attempt, and never duplicates a successful attempt. It never selects PAYG when `allowPaidFallback=false`. After all eligible non-PAYG providers or the three-attempt bound are exhausted, durably defer to `Waiting for AI Capacity`/Needs Attention.
+Eligible fallback classes are authentication expiry, timeout, subscription quota/capacity, temporary adapter unavailability, and explicitly classified recoverable client failure. Invalid input/output schema, business-rule failure, unsafe output, containment failure, capability mismatch, or unknown error is not cross-provider fallback unless a reviewed classifier proves it is provider-transient. Containment failure immediately invalidates adapter readiness. Runtime state changes follow Section 12 and are never inferred merely from whether fallback succeeded.
+
+Fallback preserves logical analysis ownership and request identity, records each attempt through the write-ahead event model, and never duplicates a successful or possibly consumed attempt. It never selects PAYG when `allowPaidFallback=false`. After all eligible non-PAYG providers or the three-attempt bound are exhausted, durably defer to `Waiting for AI Capacity`/Needs Attention.
 
 ## 18. Per-adapter concurrency
 
@@ -269,21 +294,38 @@ Current deployment is one worker process. Use one in-process semaphore per adapt
 
 Queue leases and analysis leases are not concurrency controls. Before introducing multiple worker processes or hosts, replace or augment the local semaphore with a durable distributed lease/semaphore keyed by adapter/auth home.
 
-## 19. Immutable provider-attempt audit
+## 19. Crash-safe immutable provider-attempt events
 
-Add an append-only provider-attempt record per invocation. Each row records:
+Migration 019+ adds immutable `provider_attempt_events` as write-ahead execution evidence, separate from final `ai_analysis`/`ai_usage`. Every intended provider invocation receives a stable `attempt_id` and a transactionally allocated, monotonically increasing `attempt_sequence` within its logical analysis.
 
-- logical analysis ID and request identity;
+Before any child spawn, network call, or possible provider consumption, the worker durably appends and commits `attempt_started`. If this commit fails, provider execution is prohibited. The event contains only sanitized metadata:
+
+- `event_id`, `attempt_id`, logical analysis/request ID, and `attempt_sequence`;
 - provider ID, model ID, adapter, role, and billing type;
-- attempt sequence;
-- start/finish timestamps and latency;
-- result class and sanitized error;
-- request count;
-- reliable token counts only when the adapter reports them;
-- fallback/repair relationship;
-- execution fingerprint and auth-generation references where useful.
+- `started_at` from the database clock;
+- settings revision, auth generation, and execution fingerprint;
+- nullable `fallback_parent_attempt_id`;
+- request-count intent exactly `1`;
+- safe job/worker ownership and lease-epoch context needed for reconciliation.
 
-Do not record raw prompts, raw stdout/stderr, auth tokens/files, API keys, credential paths/content, or invented subscription USD. Final `ai_analysis`/`ai_usage` remains the logical result record; immutable attempts are execution evidence. Attempt writes occur for both success and failure and cannot be updated into a different result.
+After execution the worker appends exactly one immutable normal outcome where possible: `attempt_succeeded`, `attempt_failed`, or `attempt_cancelled`. It references `attempt_id` and records `finished_at`, latency, sanitized result/error class, reliable token counts only when available, provider/client request-count evidence, fallback relationship, and a consumption status of `consumed|not_consumed|unknown` supported by evidence. The original `attempt_started` event is never updated.
+
+If failure occurs after `attempt_started` commits but the worker can prove that spawn/network/provider execution never began, it appends the reconciliation outcome `attempt_not_consumed` with result class `pre_spawn_failure`, `consumption_status=not_consumed`, and sanitized affirmative proof category. This permits at most one replacement write-ahead attempt with a new `attempt_id` and next `attempt_sequence` for that provider under the bounded job retry policy; it does not count as an externally consumable provider attempt.
+
+If a worker/process/host is lost after `attempt_started` and before an outcome, restart/reclaim reconciliation appends `attempt_unknown_after_crash`. It records `detected_at`, prior `attempt_id`, safe job/worker ownership context, sanitized reason `worker_process_loss`, and `consumption_status=unknown`. It must never claim zero usage. `attempt_not_consumed` is allowed only when durable worker/supervisor evidence affirmatively proves that no child, network call, or provider execution began; an `attempt_started` timestamp alone is not proof. Absence or loss of that evidence always yields `attempt_unknown_after_crash`.
+
+The migration conceptually enforces one `attempt_started` per `attempt_id`, unique `(logical_analysis_id, attempt_sequence)`, and at most one outcome across the normal and reconciliation outcome event types for an `attempt_id`, using unique/partial constraints. Append-only database permissions and constraints prohibit update/delete and contradictory outcomes such as succeeded plus failed or unknown-after-crash. Competing completion and reconciliation writers race on the unique outcome constraint; the loser reloads the committed outcome and does not append another.
+
+Job retry/reclaim reconstructs provider history from durable events, never only in-memory router state:
+
+- succeeded: do not execute that provider again;
+- definitive failed/cancelled after possible consumption: provider remains attempted and bounded fallback applies;
+- started with no outcome, or `attempt_unknown_after_crash`: reconcile as unknown and exclude that provider from replay;
+- `attempt_not_consumed`: one bounded replacement attempt may be allocated because external execution is disproven.
+
+Thus an orphaned Codex attempt may fall back to eligible Grok, but Codex is not silently repeated without an explicit provider-level idempotency guarantee. If no eligible non-PAYG provider remains, the same logical analysis is durably deferred/Needs Attention. Resume preserves logical analysis ownership, role, request identity, and the existing `normalization_generation`; attempt events are subordinate evidence and never create a second normalization ownership system.
+
+No event stores raw prompt, raw stdout/stderr, auth tokens/files, API keys, credential paths/content, or invented subscription USD. A failed or orphaned attempt may still represent one consumed subscription request, and the event model preserves that uncertainty.
 
 ## 20. Subscription usage and budget semantics
 
@@ -300,12 +342,11 @@ A model remains disabled/unavailable when proof is absent or stale. Codex and Gr
 ## 22. Durable recovery from Waiting for AI Capacity
 
 Add `candidates.normalization_generation bigint NOT NULL DEFAULT 0` in migration 019+ and a controlled service-role RPC that atomically rearms normalization.
-
 The RPC may increment generation and insert exactly one queued normalization job with idempotency key `normalize:<candidateId>:<generation>` only when all conditions hold under row locks:
 
 - candidate state is `Waiting for AI Capacity`;
 - candidate remains eligible for AI normalization;
-- at least one role-compatible non-PAYG provider has current authoritative readiness;
+- at least one role-compatible non-PAYG provider satisfies every current authoritative routability predicate, including an unexpired readiness lease and no retry suspension;
 - no active normalization analysis ownership or queued/running normalization job exists;
 - the candidate state/generation observed by the caller still matches.
 
@@ -391,10 +432,19 @@ Rollback is not “revert commit.” Credential files cannot be silently orphane
 - unknown kind/adapter fails closed;
 - legacy command remains production-disabled.
 
-### Auth/state
+### Auth/state/readiness
 
 - generation increments for every auth mutation;
-- stale settings/generation/fingerprint probe CAS is discarded;
+- stale settings/generation/fingerprint probe or execution CAS is rejected and preserves the newer Ready state;
+- Ready evidence inside its ten-minute lease is routable when every other binding passes;
+- Ready evidence at/past `ready_valid_until` is unroutable and requires a fresh probe;
+- auth expiry after prior Ready writes `expired`/unavailable and later requests cannot select it;
+- credential-source mismatch writes Needs Attention/unavailable;
+- binary/version/digest/profile mismatch writes Needs Attention/unavailable;
+- containment attestation failure writes Needs Attention/unavailable and invalidates containment proof;
+- provider-level capability mismatch writes Needs Attention/unavailable, while a model-only mismatch disables only that model;
+- temporary capacity writes worker-owned `retry_not_before`, never enables PAYG, and requires a post-delay probe;
+- recoverable transient failures use bounded backoff without becoming permanent auth failure;
 - logout/reauthorize/probe races;
 - auth-home isolation and serialized mutations;
 - Disable does not revoke.
@@ -403,20 +453,30 @@ Rollback is not “revert commit.” Credential files cannot be silently orphane
 
 - exact Saver/Balanced/Highest Quality precedence;
 - no PAYG fallback;
-- execution-time fallback only for approved classes;
-- attempted provider exclusion and three-attempt bound;
+- immediate pre-spawn freshness/binding check rejects stale Ready and does not execute;
+- execution-time fallback only for approved classes and only after authoritative writeback;
+- later requests cannot select invalid, stale, expired, or temporarily suspended providers;
+- durable attempted-provider exclusion and three externally consumable attempt bound;
 - same logical analysis ownership.
 
 ### Concurrency/audit
 
 - adapter limit 1 and release on success/error/timeout/cancel;
-- failed Codex then successful Grok creates two immutable attempts;
-- attempt immutability, sanitization, and no fake subscription USD.
+- `attempt_started` commit succeeds before provider spawn is allowed;
+- failed `attempt_started` persistence means provider never executes;
+- death after start but provably before spawn appends `attempt_not_consumed`;
+- death after spawn before outcome appends `attempt_unknown_after_crash`, preserves unknown consumption, and excludes same-provider replay;
+- Codex started/unknown then Grok success reconstructs both attempts;
+- started+succeeded and started+failed each reject contradictory second outcomes;
+- failed attempt evidence remains immutable after fallback;
+- job resume reconstructs the attempted-provider set from durable events;
+- event sanitization excludes prompt/stdout/stderr/auth material and no fake subscription USD is recorded.
 
 ### Recovery
 
-- Waiting candidate plus Ready transition produces exactly one generation-keyed executable job;
+- Waiting candidate plus currently leased Ready transition produces exactly one generation-keyed executable job;
 - concurrent readiness/daily/Research Now calls do not duplicate ownership;
+- job reclaim preserves the same normalization generation and reconstructs attempts from events;
 - successful normalization is required before Market Probe.
 
 ### Security/capability
@@ -444,7 +504,7 @@ Before using a subscription adapter for the Plan 04 crash/resume acceptance:
 3. authorize through the supported subscription flow;
 4. prove effective credential source and endpoint;
 5. prove hostile containment and structured capability;
-6. persist current Ready only through worker CAS;
+6. persist current Ready with a ten-minute lease only through worker CAS;
 7. recover the controlled candidate naturally through generation rearm;
 8. complete real normalization;
 9. reach Ready for API Validation naturally;
@@ -483,20 +543,21 @@ After supported installation, independently record the Grok equivalents: fixed b
 
 ## 31. Design self-review
 
-The remediated design addresses C1, I1–I12, and M1–M2 from the independent review:
+The remediated design preserves the closed C1, I1–I12, and M1–M2 architecture and closes the two residual independent-review findings:
 
+- R1: persisted ten-minute readiness leases, trusted policy versioning, immediate pre-spawn freshness enforcement, CAS-bound failure-class writeback, explicit auth/capability/containment invalidation, bounded capacity/transient suspension, and later-request exclusion;
+- R2: durable write-ahead `attempt_started`, no external execution before commit, immutable single outcomes, honest crash reconciliation, unknown-versus-proven-not-consumed distinction, same-provider replay prevention, durable resume reconstruction, and contradiction-preventing constraints;
 - normative credential-source and hostile-containment routability gate;
 - dedicated adapter semantics with transport-only executor reuse;
 - single worker-owned runtime truth, auth generation, fingerprint, and CAS;
-- first-class constrained adapter column and database invariant matrix;
+- first-class constrained adapter column and database invariant matrix at migration 019+;
 - one row/auth home per adapter and explicit auth lifecycle;
 - immutable provider family and no stale secret transition;
 - exhaustive dispatch and mixed-version fail-closed behavior;
-- deterministic mode-specific priority and bounded execution fallback;
-- adapter semaphore and immutable attempt audit;
-- adapter-owned capability proof;
-- generation-keyed durable Waiting recovery;
-- ordered rollout/rollback and preserved HTTP behavior;
-- exact MVP role scope and corrected operational wording.
+- deterministic mode-specific priority and bounded non-PAYG execution fallback;
+- adapter semaphore and adapter-owned capability proof;
+- unchanged generation-keyed durable Waiting recovery ownership;
+- ordered rollout/rollback, HTTP security, and preserved `openai_http` behavior;
+- unchanged three implementation acceptance gates.
 
 No production behavior is authorized by this document alone. The common terms gate and the relevant adapter-specific implementation acceptance gate must pass before that adapter becomes routable.
