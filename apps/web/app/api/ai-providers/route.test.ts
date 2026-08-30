@@ -352,7 +352,7 @@ describe('provider settings route', () => {
       billingType: 'subscription',
       enabled: false,
       role: 'niche_normalization',
-      setupStatus: 'setup_required'
+      setupStatus: 'disabled'
     });
     expect(JSON.stringify(body)).not.toMatch(
       /subscription_command|commandProfile|authHome|systemd|executionFingerprint|apiKey|secretLast4/u
@@ -546,10 +546,91 @@ describe('provider settings route', () => {
       provider: {
         product: 'grok_subscription',
         modelLabel: 'Setup required',
-        setupStatus: 'setup_required'
+        setupStatus: 'disabled'
       }
     });
   });
+
+  // Break: deactivation leaves authorization_required runtime state that outranks provider.enabled.
+  it('projects the real deactivation state as disabled', async () => {
+    fixtures.listProviders.mockResolvedValue([{
+      id: 'codex-subscription-v1',
+      name: 'OpenAI Codex Subscription',
+      kind: 'subscription_command',
+      adapter: 'codex',
+      billing_type: 'subscription',
+      enabled: false,
+      priority: 20,
+      config: { roles: ['niche_normalization'] },
+      settings_revision: 1,
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString()
+    }]);
+    fixtures.listRuntimeStates.mockResolvedValue([{
+      provider_id: 'codex-subscription-v1',
+      state: 'authorization_required',
+      available: false,
+      reason: 'provider_disabled',
+      checked_at: null,
+      ready_valid_until: null,
+      retry_not_before: null
+    }]);
+
+    const response = await GET(new Request('https://app.example.test/api/ai-providers'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      providers: [{
+        enabled: false,
+        setupStatus: 'disabled',
+        statusReason: 'disabled'
+      }]
+    });
+  });
+
+  it.each([
+    ['authorization_required', false, null, null, 'setup_required', 'setup_required'],
+    ['ready', true, '2999-01-01T00:00:00.000Z', null, 'ready', null],
+    ['expired', false, null, null, 'expired', 'authorization_expired'],
+    ['needs_attention', false, null, null, 'needs_attention', null],
+    ['ready', false, '2999-01-01T00:00:00.000Z', null, 'unavailable', null]
+  ])(
+    'preserves enabled %s runtime projection as %s',
+    async (state, available, readyValidUntil, retryNotBefore, expectedStatus, expectedReason) => {
+      fixtures.listProviders.mockResolvedValue([{
+        id: 'codex-subscription-v1',
+        name: 'OpenAI Codex Subscription',
+        kind: 'subscription_command',
+        adapter: 'codex',
+        billing_type: 'subscription',
+        enabled: true,
+        priority: 20,
+        config: { roles: ['niche_normalization'] },
+        settings_revision: 1,
+        created_at: new Date(0).toISOString(),
+        updated_at: new Date(0).toISOString()
+      }]);
+      fixtures.listRuntimeStates.mockResolvedValue([{
+        provider_id: 'codex-subscription-v1',
+        state,
+        available,
+        reason: null,
+        checked_at: null,
+        ready_valid_until: readyValidUntil,
+        retry_not_before: retryNotBefore
+      }]);
+
+      const response = await GET(new Request('https://app.example.test/api/ai-providers'));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        providers: [{
+          setupStatus: expectedStatus,
+          statusReason: expectedReason
+        }]
+      });
+    }
+  );
 
   // Break: GET exposes raw provider families, adapters, runtime bindings, or unsanitized reasons.
   it('projects authoritative subscription state into a sanitized product response', async () => {

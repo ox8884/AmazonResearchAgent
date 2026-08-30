@@ -91,7 +91,7 @@ test('subscription products expose only safe status, Test, and Disable', async (
     productLabel: 'OpenAI Codex Subscription',
     name: 'OpenAI Codex Subscription',
     billingType: 'subscription',
-    enabled: false,
+    enabled: true,
     priority: 20,
     role: 'niche_normalization',
     modelLabel: 'GPT-5.6',
@@ -134,6 +134,9 @@ test('subscription products expose only safe status, Test, and Disable', async (
       return;
     }
     providerRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+    provider.enabled = false;
+    provider.setupStatus = 'disabled';
+    provider.statusReason = 'disabled';
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -164,4 +167,10 @@ test('subscription products expose only safe status, Test, and Disable', async (
   await expect.poll(() => providerRequests).toEqual([
     { action: 'disable', providerId: provider.id }
   ]);
+  await expect(page.getByText('비활성화됨')).toBeVisible();
+  await expect(page.getByText('설정 필요')).toHaveCount(0);
+
+  await page.goto('/en/settings/ai');
+  await expect(page.getByText('Disabled')).toBeVisible();
+  await expect(page.getByText('Setup Required')).toHaveCount(0);
 });

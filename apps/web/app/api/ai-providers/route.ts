@@ -206,10 +206,10 @@ function setupStatus(
   provider: ProviderRow,
   state: ProviderRuntimeStateRow | null
 ): SetupStatus {
+  if (!provider.enabled) return 'disabled';
   if (!state || state.state === 'authorization_required') return 'setup_required';
   if (state.state === 'expired') return 'expired';
   if (state.state === 'needs_attention') return 'needs_attention';
-  if (!provider.enabled) return 'disabled';
   const leaseIsCurrent = state.ready_valid_until !== null && Date.parse(state.ready_valid_until) > Date.now();
   return state.available && state.retry_not_before === null && leaseIsCurrent
     ? 'ready'
@@ -220,9 +220,9 @@ function sanitizedReason(
   provider: ProviderRow,
   state: ProviderRuntimeStateRow | null
 ): PublicSubscriptionProvider['statusReason'] {
+  if (!provider.enabled) return 'disabled';
   if (!state || state.state === 'authorization_required') return 'setup_required';
   if (state.state === 'expired') return 'authorization_expired';
-  if (!provider.enabled) return 'disabled';
   if (state.reason === 'readiness_stale') return 'probe_pending';
   if (
     state.reason === 'temporary_capacity' ||
