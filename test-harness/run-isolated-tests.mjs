@@ -17,6 +17,10 @@ import {
 } from './harness-boundaries.mjs';
 
 const root = resolve(import.meta.dirname, '..');
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+  throw new Error('Isolated integration harness requires SUPABASE_SERVICE_ROLE_KEY.');
+}
+
 const databaseUrl = process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const runId = assertRunId(`ara_it_${process.pid}_${randomUUID().replaceAll('-', '').slice(0, 8)}`);

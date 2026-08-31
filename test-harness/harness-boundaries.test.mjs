@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -18,6 +20,35 @@ import {
   runOwnedDatabasePrefix,
   withGlobalDdlLock,
 } from './harness-boundaries.mjs';
+
+test('worker runner rejects absent or blank service-role authority before provisioning or Vitest', async (t) => {
+  const root = resolve(import.meta.dirname, '..');
+  for (const [name, serviceRoleKey] of [['absent', undefined], ['blank', ' \t ']]) {
+    await t.test(name, () => {
+      const env = { ...process.env };
+      if (serviceRoleKey === undefined) delete env.SUPABASE_SERVICE_ROLE_KEY;
+      else env.SUPABASE_SERVICE_ROLE_KEY = serviceRoleKey;
+      env.TEST_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:1/postgres';
+
+      const result = spawnSync(
+        process.execPath,
+        [resolve(import.meta.dirname, 'run-isolated-tests.mjs'), '--rest'],
+        {
+          cwd: resolve(root, 'apps/worker'),
+          encoding: 'utf8',
+          env,
+          timeout: 10_000,
+        },
+      );
+
+      const output = `${result.stdout}${result.stderr}`;
+      assert.equal(result.signal, null);
+      assert.notEqual(result.status, 0);
+      assert.match(output, /Isolated integration harness requires SUPABASE_SERVICE_ROLE_KEY\./u);
+      assert.doesNotMatch(output, /ECONNREFUSED|No test files found|Vitest/u);
+    });
+  }
+});
 
 test('database identifiers reject malformed and foreign ownership input', () => {
   const runId = 'ara_it_1234_abcdef12';
