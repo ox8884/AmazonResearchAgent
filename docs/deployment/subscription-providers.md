@@ -6,45 +6,27 @@ This runbook installs and verifies repository-owned Task-5 artifacts on Ubuntu 2
 
 ## Immutable inputs
 
-The repository authority `ops/subscription-providers/endpoint-bindings.json` is fixture-only and cannot be installed on Oracle. Before approval, a network reviewer must publish one production authority at `/etc/amazon-research/subscription/endpoint-bindings.json`: regular/no-symlink, root-owned `0444`, schema version 1, `fixtureOnly:false`, explicit review identity/version, canonical nonempty resolver and per-adapter provider/auth IPv4/IPv6 sets, and the parser-computed `bindingsSha256`. Resolve live names only in that bounded root-owned review procedure. A changed answer, TTL boundary, review version, or digest invalidates acceptance and requires atomic temp-file + rename publication of a newly reviewed artifact. Workers and callers cannot override this path or provide commands/prefixes.
+The checked-in `ops/subscription-providers/endpoint-bindings.json` is deterministic local-fixture authority only. It cannot establish Oracle acceptance. Production schema version 2 requires canonical adapter-specific resolver/provider/auth hostnames; exact hostname-to-canonical-prefix bindings; canonical resolution timestamps and bounded TTLs; canonical review/expiry timestamps; the fixed network-security reviewer identity and schema version; exact release commit/runtime profile; an installed-artifact path/mode/digest manifest; and one digest over the canonical complete authority. The repository intentionally publishes no approved production hostname binding map. Therefore every production authority currently fails closed with `No reviewed production hostname authority is published`; no endpoint values were invented.
 
-Record the release SHA and fixture artifact digests locally before any approved host copying:
-
-```bash
-set -euo pipefail
-cd /opt/amazon-research/releases/RELEASE_SHA
-git rev-parse HEAD
-sha256sum \
-  ops/subscription-providers/{subscription-supervisor.mjs,manage-invocation.sh,endpoint-bindings.json} \
-  ops/systemd/amazon-research-{codex,grok}@.service \
-  ops/systemd/amazon-research-subscription-gc.{service,timer} \
-  ops/polkit/50-amazon-research-subscription.rules \
-  ops/nftables/amazon-research-subscription.nft
-bash ops/subscription-providers/install-systemd-sandbox.sh dry-run
-bash ops/subscription-providers/install-auth-homes.sh dry-run
-bash ops/subscription-providers/verify-runtime-profile.sh dry-run codex
-bash ops/subscription-providers/verify-runtime-profile.sh dry-run grok
-```
-
-The fixed lifecycle is `systemctl start --no-block amazon-research-{codex,grok}@UUID.service`; root `ExecStartPre` creates and validates the UUID directory and waits at most five seconds for atomic `request.tmp` → `request.json`; MAIN validates the sealed request, emits `READY=1`, runs only the fixed fixture/client, atomically publishes result, stays active while the worker reads it, and exits only after explicit stop/cgroup termination/`ExecStopPost` cleanup. `STATUS=` never substitutes for READY.
-
+A future separately reviewed release must add the exact hostname-to-prefix binding map and publish the complete authority atomically at `/etc/amazon-research/subscription/endpoint-bindings.json`: create a private root-owned sibling on the same filesystem, write and fsync it, validate canonical semantics/digest/freshness/release/profile, then rename it into the fixed root-owned `0444` regular-file path. DNS answer, TTL, reviewer/version, release/profile, installed byte, or rendered-policy drift invalidates approval. A self-consistent digest or root authorship is never approval.
 ## Oracle host install — explicit approval required
 
-Do not run this section until a separate review has approved the exact production endpoint authority described above and explicit host-change approval is granted. Both installers finish all read-only source, target, identity, membership, path, unit, policy, digest, and tool preflight before their first mutation. The systemd installer stages and validates the complete artifact set, renders only validated tokens into fixed set names, refuses existing drift, and removes newly created files if a later bounded copy fails. It never loads nftables or starts an adapter.
+Do not run this section: production endpoint authority is intentionally unpublished and Oracle approval remains blocked. After a separate review publishes exact production authority and explicit host-change approval is granted, provision `amazon-research`, `ara-codex`, `ara-grok`, their exact primary groups, and exact IPC memberships through the separately governed host-identity process. `install-auth-homes.sh` deliberately never calls `groupadd`, `useradd`, or `usermod`; NSS and supplementary-membership mutations cannot truthfully be rolled back. It fails before filesystem mutation unless every identity, primary group, supplementary group, shell, and membership already matches.
+
+The systemd installer completes source, authority, target-parent, tool, syntax, and digest preflight first. Every absent destination is staged in its final parent, written/fsynced, metadata/digest checked, and hard-linked atomically into an absent target. The rollback ledger records files and created parents before mutation, removes only invocation-created state in reverse order, and never overwrites pre-existing drift. It does not load nftables or start an adapter.
+
+The commands below remain blocked documentation, not an executable packet:
 
 ```bash
-set -euo pipefail
-cd /opt/amazon-research/releases/RELEASE_SHA
 sudo bash ops/subscription-providers/install-auth-homes.sh install
 sudo bash ops/subscription-providers/install-systemd-sandbox.sh install
-sudo systemctl enable --now amazon-research-subscription-gc.timer
 sudo bash ops/subscription-providers/install-auth-homes.sh verify
 sudo bash ops/subscription-providers/install-systemd-sandbox.sh verify
 sudo bash ops/subscription-providers/verify-runtime-profile.sh verify codex
 sudo bash ops/subscription-providers/verify-runtime-profile.sh verify grok
 ```
 
-Changes: system users `ara-codex`/`ara-grok`; groups `ara-codex-ipc`/`ara-grok-ipc`; worker membership in both; separate `0700` auth homes; root/group `0750` runtime parents; two fixed template units; GC service/timer; one UUID-only polkit rule; one concrete rendered UID/resolver/provider/auth-prefix nftables policy. Runtime profile digests bind both the canonical authority source and final rendered policy. The installer reloads systemd but does not load nftables, start an adapter unit, activate credentials, or call a provider.
+`verify-runtime-profile.sh verify` reads only fixed installed unit/helper/supervisor/GC/polkit/authority/nft paths, rejects missing/non-regular/symlinked or byte-drifted artifacts, compares installed nft bytes to the authority-rendered policy, checks the installed table through the fixed `nft list table inet amazon_research_subscription` plan, and validates production freshness/reviewer/release/profile before it can emit `oracleHostVerified:true`. Repository or staging bytes cannot establish Oracle acceptance. With the current empty production hostname authority, that output is unreachable.
 
 ## Disabled host acceptance evidence
 

@@ -36,15 +36,18 @@ preflight_path() {
 }
 
 preflight_identity() {
-  local adapter="$1" user="$2" ipc="$3" auth runtime
+  local adapter="$1" user="$2" ipc="$3" auth runtime primary_group
   getent passwd "$WORKER" >/dev/null || fail 'missing existing worker identity'
-  if getent passwd "$user" >/dev/null; then
-    [[ "$(getent passwd "$user" | cut -d: -f7)" == /usr/sbin/nologin ]] || fail "unsafe existing identity $user"
-    allow_only_groups "$user" "$user,$ipc"
-  fi
-  if getent group "$ipc" >/dev/null; then
-    allow_only_groups "$WORKER" 'amazon-research,ara-codex-ipc,ara-grok-ipc'
-  fi
+  getent group "$ipc" >/dev/null || fail "missing pre-provisioned IPC group $ipc"
+  getent group "$user" >/dev/null || fail "missing pre-provisioned primary group $user"
+  getent passwd "$user" >/dev/null || fail "missing pre-provisioned identity $user"
+  [[ "$(getent passwd "$user" | cut -d: -f7)" == /usr/sbin/nologin ]] || fail "unsafe existing identity $user"
+  primary_group="$(id -gn "$user")"
+  [[ "$primary_group" == "$user" ]] || fail "primary group drift for $user"
+  allow_only_groups "$user" "$user,$ipc"
+  allow_only_groups "$WORKER" 'amazon-research,ara-codex-ipc,ara-grok-ipc'
+  exact_groups "$WORKER" "$(printf '%s\n' "$WORKER" ara-codex-ipc ara-grok-ipc | sort | paste -sd, -)"
+  exact_groups "$user" "$(printf '%s\n' "$user" "$ipc" | sort | paste -sd, -)"
   auth="$(root_path "/var/lib/amazon-research/subscription/$adapter")"
   runtime="$(root_path "/run/amazon-research/subscription/$adapter")"
   preflight_path "$auth" "$user:$user:700"
@@ -68,33 +71,35 @@ verify_identity() {
   exact_groups "$user" "$expected_adapter"
 }
 
-install_identity() {
+install_identity_paths() {
   local adapter="$1" user="$2" ipc="$3" auth runtime
-  getent group "$ipc" >/dev/null || groupadd --system "$ipc"
-  if getent passwd "$user" >/dev/null; then
-    [[ "$(getent passwd "$user" | cut -d: -f7)" == /usr/sbin/nologin ]] || fail "unsafe existing identity $user"
-  else
-    useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$user"
-  fi
-  getent passwd "$WORKER" >/dev/null || fail "missing existing worker identity"
-  allow_only_groups "$WORKER" 'amazon-research,ara-codex-ipc,ara-grok-ipc'
-  allow_only_groups "$user" "$user,$ipc"
-  usermod --append --groups "$ipc" "$WORKER"
-  usermod --append --groups "$ipc" "$user"
-  auth="/var/lib/amazon-research/subscription/$adapter"
-  runtime="/run/amazon-research/subscription/$adapter"
-  [[ ! -e "$auth" && ! -L "$auth" ]] || {
-    [[ -d "$auth" && ! -L "$auth" && "$(stat -c '%U:%G:%a' -- "$auth")" == "$user:$user:700" ]] || fail "unsafe existing auth home $auth"
-  }
-  install -d -o "$user" -g "$user" -m 0700 -- "$auth"
-  [[ ! -e "$runtime" && ! -L "$runtime" ]] || {
-    [[ -d "$runtime" && ! -L "$runtime" && "$(stat -c '%U:%G:%a' -- "$runtime")" == "root:$ipc:750" ]] || fail "unsafe existing runtime parent $runtime"
-  }
-  install -d -o root -g "$ipc" -m 0750 -- "$runtime"
+  auth="$(root_path "/var/lib/amazon-research/subscription/$adapter")"
+  runtime="$(root_path "/run/amazon-research/subscription/$adapter")"
+  install_path "$auth" "$user" "$user" 0700
+  install_path "$runtime" root "$ipc" 0750
+}
+declare -a CREATED_PATHS=()
+rollback_paths() {
+  local index
+  for ((index=${#CREATED_PATHS[@]}-1; index>=0; index--)); do
+    rmdir -- "${CREATED_PATHS[$index]}" 2>/dev/null || true
+  done
+}
+install_path() {
+  local path="$1" owner="$2" group="$3" mode="$4"
+  if [[ ! -e "$path" && ! -L "$path" ]]; then CREATED_PATHS+=("$path"); fi
+  install -d -o "$owner" -g "$group" -m "$mode" -- "$path"
+}
+transaction_exit() {
+  local status=$?
+  if (( status != 0 )); then rollback_paths; fi
+  exit "$status"
 }
 
 if [[ "$MODE" == install ]]; then
-  # Complete shared read-only preflight before the first group/user/path mutation.
+  # Identity/group creation and membership changes are deliberately outside this
+  # installer: NSS mutations are not truthfully rollback-safe. Require the exact
+  # pre-provisioned state before the first filesystem mutation.
   for spec in "${ADAPTERS[@]}"; do
     IFS='|' read -r adapter user ipc <<<"$spec"
     preflight_identity "$adapter" "$user" "$ipc"
@@ -102,10 +107,12 @@ if [[ "$MODE" == install ]]; then
   codex_auth="$(root_path /var/lib/amazon-research/subscription/codex)"
   grok_auth="$(root_path /var/lib/amazon-research/subscription/grok)"
   [[ "$codex_auth" != "$grok_auth" ]] || fail 'shared auth home rejected'
+  trap transaction_exit EXIT
   for spec in "${ADAPTERS[@]}"; do
     IFS='|' read -r adapter user ipc <<<"$spec"
-    install_identity "$adapter" "$user" "$ipc"
+    install_identity_paths "$adapter" "$user" "$ipc"
   done
+  trap - EXIT
 fi
 for spec in "${ADAPTERS[@]}"; do
   IFS='|' read -r adapter user ipc <<<"$spec"

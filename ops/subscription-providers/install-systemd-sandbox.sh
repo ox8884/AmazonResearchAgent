@@ -2,18 +2,23 @@
 set -euo pipefail
 
 readonly MODE="${1:-}"
-readonly REPOSITORY_ROOT="${ARA_REPOSITORY_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
-readonly PREFIX="${ARA_INSTALL_ROOT:-}"
-readonly FIXTURE_MODE="${ARA_FIXTURE_MODE:-0}"
+readonly FIXTURE_ROOT_ARG="$([[ "${2:-}" == --fixture-root ]] && printf '%s' "${3:-}")"
+readonly FIXTURE_REPOSITORY_ARG="$([[ "${4:-}" == --repository-root ]] && printf '%s' "${5:-}")"
+readonly FIXTURE_MODE="$([[ -n "$FIXTURE_ROOT_ARG" ]] && printf 1 || printf '%s' "${ARA_FIXTURE_MODE:-0}")"
+readonly REPOSITORY_ROOT="${FIXTURE_REPOSITORY_ARG:-${ARA_REPOSITORY_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}}"
+readonly PREFIX="${FIXTURE_ROOT_ARG:-${ARA_INSTALL_ROOT:-}}"
 readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
 readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json"
 readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
+readonly FIXTURE_FAIL_AT="$([[ "${6:-}" == --fail-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_FAIL_AT:-}")"
 
 fail() { printf 'install-systemd-sandbox: %s\n' "$1" >&2; exit 1; }
 root_path() { printf '%s%s' "$PREFIX" "$1"; }
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 
 case "$MODE" in install|verify|dry-run) ;; *) fail 'usage: install-systemd-sandbox.sh install|verify|dry-run' ;; esac
+[[ $# -eq 1 || ( ( $# -eq 5 || $# -eq 7 ) && "$MODE" == install && "${2:-}" == --fixture-root && "${4:-}" == --repository-root && -n "$FIXTURE_ROOT_ARG" && -n "$FIXTURE_REPOSITORY_ARG" ) ]] || fail 'closed fixture arguments rejected'
+[[ -z "$FIXTURE_FAIL_AT" || ( $# -eq 7 && "${6:-}" == --fail-at && "$FIXTURE_FAIL_AT" =~ ^(stage|publish)-(0|1|2|3|4|5|6|nft)$ ) ]] || fail 'closed failure injection rejected'
 [[ "$MODE" != install || -z "$PREFIX" || "$FIXTURE_MODE" == 1 ]] || fail 'prefixed install requires fixture mode'
 [[ "$MODE" != install || "$FIXTURE_MODE" == 1 || "${EUID:-$(id -u)}" -eq 0 ]] || fail 'install requires root'
 
@@ -32,6 +37,9 @@ fi
 command -v node >/dev/null || fail 'node required'
 command -v install >/dev/null || fail 'install required'
 command -v sha256sum >/dev/null || fail 'sha256sum required'
+command -v ln >/dev/null || fail 'ln required'
+command -v sync >/dev/null || fail 'sync required'
+[[ -z "$FIXTURE_FAIL_AT" || "$FIXTURE_MODE" == 1 ]] || fail 'failure injection requires fixture mode'
 
 readonly ARTIFACTS=(
   'ops/subscription-providers/subscription-supervisor.mjs|/usr/local/libexec/amazon-research/subscription-supervisor.mjs|0500'
@@ -127,29 +135,68 @@ if [[ "$MODE" == dry-run ]]; then
   exit 0
 fi
 
-declare -a CREATED=()
+declare -a CREATED_FILES=() CREATED_DIRS=() TEMP_FILES=()
 rollback() {
-  local path
-  for path in "${CREATED[@]}"; do rm -f -- "$path"; done
+  local path index
+  for path in "${TEMP_FILES[@]}"; do rm -f -- "$path"; done
+  for ((index=${#CREATED_FILES[@]}-1; index>=0; index--)); do rm -f -- "${CREATED_FILES[$index]}"; done
+  for ((index=${#CREATED_DIRS[@]}-1; index>=0; index--)); do rmdir -- "${CREATED_DIRS[$index]}" 2>/dev/null || true; done
 }
-trap 'rollback; rm -rf -- "$STAGE"' ERR
+ensure_parent() {
+  local target="$1" parent missing=() path index
+  parent="$(dirname -- "$target")"
+  path="$parent"
+  while [[ ! -e "$path" && ! -L "$path" ]]; do
+    missing+=("$path")
+    path="$(dirname -- "$path")"
+  done
+  [[ -d "$path" && ! -L "$path" && -w "$path" ]] || fail "uncreatable target parent: $parent"
+  for ((index=${#missing[@]}-1; index>=0; index--)); do
+    path="${missing[$index]}"
+    CREATED_DIRS+=("$path")
+    install -d -m 0755 -- "$path"
+  done
+  [[ -d "$parent" && ! -L "$parent" && -w "$parent" ]] || fail "unsafe final parent: $parent"
+}
+publish_absent() {
+  local source="$1" target="$2" mode="$3" ordinal="$4" parent temporary
+  ensure_parent "$target"
+  parent="$(dirname -- "$target")"
+  temporary="$(mktemp --tmpdir="$parent" .ara-subscription-install.XXXXXX)"
+  TEMP_FILES+=("$temporary")
+  [[ "$FIXTURE_FAIL_AT" != "stage-$ordinal" ]] || fail "injected staging failure $ordinal"
+  install -m "$mode" -- "$source" "$temporary"
+  sync -- "$temporary"
+  verify_installed "$source" "$temporary" "$mode" staged
+  [[ "$(stat -c %d -- "$temporary")" == "$(stat -c %d -- "$parent")" ]] || fail "cross-filesystem staging rejected: $target"
+  [[ "$FIXTURE_FAIL_AT" != "publish-$ordinal" ]] || fail "injected publication failure $ordinal"
+  CREATED_FILES+=("$target")
+  ln -- "$temporary" "$target"
+  rm -f -- "$temporary"
+  sync -- "$parent"
+  verify_installed "$source" "$target" "$mode"
+}
+transaction_exit() {
+  local status=$?
+  if (( status != 0 )); then rollback; fi
+  rm -rf -- "$STAGE"
+  exit "$status"
+}
+trap transaction_exit EXIT
 for index in "${!SOURCES[@]}"; do
   target="${TARGETS[$index]}"
   if [[ ! -e "$target" && ! -L "$target" ]]; then
-    install -d -m 0755 -- "$(dirname -- "$target")"
-    install -m "${MODES[$index]}" -- "$STAGE/$index" "$target"
-    CREATED+=("$target")
+    publish_absent "${SOURCES[$index]}" "$target" "${MODES[$index]}" "$index"
   fi
 done
 if [[ ! -e "$NFT_TARGET" && ! -L "$NFT_TARGET" ]]; then
-  install -d -m 0755 -- "$(dirname -- "$NFT_TARGET")"
-  install -m 0444 -- "$STAGE/policy.nft" "$NFT_TARGET"
-  CREATED+=("$NFT_TARGET")
+  publish_absent "$STAGE/policy.nft" "$NFT_TARGET" 0444 nft
 else
   verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
 fi
 for index in "${!SOURCES[@]}"; do verify_installed "${SOURCES[$index]}" "${TARGETS[$index]}" "${MODES[$index]}"; done
 verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
 [[ "$FIXTURE_MODE" == 1 ]] || systemctl daemon-reload
-trap - ERR
+trap - EXIT
+rm -rf -- "$STAGE"
 printf 'PASS mode=install artifacts=%d endpoint_authority=%s production_activation=false\n' "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")"

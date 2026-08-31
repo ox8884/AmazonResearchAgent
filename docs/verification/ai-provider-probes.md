@@ -28,15 +28,17 @@ Real subscription CLI profiles remain disabled until the same version, structure
 
 ## Subscription sandbox probe modes
 
-Task 14 exposes two closed local operations in `scripts/probe-subscription-provider.mjs`:
+Task 14 exposes only closed CLI operations:
 
 ```text
+node scripts/probe-subscription-provider.mjs --mode local-behavior --adapter codex
+node scripts/probe-subscription-provider.mjs --mode local-behavior --adapter grok
 node scripts/probe-subscription-provider.mjs --mode render-endpoint-policy --authority ops/subscription-providers/endpoint-bindings.json --environment local-fixture
 node --test scripts/probe-subscription-provider.test.mjs
 ```
 
-The checked-in endpoint authority is explicitly `fixtureOnly:true` and contains only RFC 5737/RFC 3849 documentation ranges. The parser validates its closed schema, canonical address families/prefixes, nonempty adapter-specific provider/auth sets, and review digest before deterministic rendering. Oracle mode rejects that fixture; it requires a separately reviewed root-owned `0444`, regular, no-symlink authority at the fixed host path.
+`local-behavior` creates its own private attempt directory, writes and atomically renames its request/result files, derives lifecycle events from those operations, applies the fixed GC decision rule to concrete states, runs only the fixed Node syntax command plan, removes the fixture root, verifies absence, and emits bounded `executed-local-v2` JSON. Callers choose only adapter; they cannot supply events, GC outcomes, runner results, paths, commands, booleans, or acceptance artifacts. The former caller-authored function and JSON route always return `ok:false`.
 
-Local acceptance is derived from concrete repository files, their SHA-256 digests, the rendered nonempty policy, fixed command exit codes, ordered lifecycle operations evaluated by the probe state machine, and concrete GC inputs. Caller-provided booleans and the former all-true JSON fixture cannot establish `ok:true`. Output records `provenance:derived-local-v1`, `localFixtureVerified`, `oracleHostVerified`, and `liveProviderVerified` separately. Local synthetic evidence always leaves Oracle and live-provider verification false.
+The checked-in endpoint authority remains `fixtureOnly:true` with RFC documentation ranges. Production schema version 2 is release/profile/reviewer/freshness/hostname-to-prefix/artifact-manifest bound, but the approved production binding map is intentionally empty. Oracle parsing therefore fails closed until an independently reviewed release publishes exact hostname-to-prefix values. Local behavior can set only `localFixtureVerified:true`; it always leaves `oracleHostVerified:false` and `liveProviderVerified:false`.
 
-Oracle host verification is documented in [`../deployment/subscription-providers.md`](../deployment/subscription-providers.md) but remains pending explicit approval. Live provider/auth acceptance belongs to Tasks 15–17 and is forbidden in Task 14. Neither local fixtures nor host installation activate an adapter or consume a subscription.
+Oracle host verification remains pending separate approval and must derive acceptance from fixed installed paths and installed nft policy/table state. Live provider/auth acceptance belongs to Tasks 15–17 and is forbidden here. Neither local fixtures nor host installation activate an adapter or consume a subscription.

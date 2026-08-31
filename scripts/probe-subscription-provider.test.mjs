@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   MAX_REPORT_BYTES,
   canonicalizeEndpointAuthority,
+  computeEndpointAuthorityDigest,
   renderEndpointPolicy,
   runDerivedLocalProbe,
   runLocalFixtureProbe
@@ -43,6 +43,48 @@ function reviewedFixtureAuthority() {
   const authority = fixtureAuthority();
   const first = canonicalizeEndpointAuthority(authority, { environment: 'local-fixture', verifyDigest: false });
   authority.review.bindingsSha256 = first.bindingsSha256;
+  return authority;
+}
+function productionAuthority(overrides = {}) {
+  const now = new Date('2026-08-31T12:00:00.000Z');
+  const authority = {
+    schemaVersion: 2,
+    fixtureOnly: false,
+    release: {
+      commit: 'ce6a68bb08ece2a2ea1a986662523d024eddf3e7',
+      profile: 'subscription-sandbox-v1'
+    },
+    review: {
+      identity: 'amazon-research-network-security',
+      version: 'task14-production-v1',
+      reviewedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      bindingsSha256: 'pending'
+    },
+    resolvers: [{ hostname: 'resolver.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['8.8.8.8'], ipv6: ['2001:4860:4860::8888'] }],
+    adapters: {
+      codex: {
+        provider: [{ hostname: 'api.codex.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['8.8.4.0/24'], ipv6: ['2606:4700:4700::/48'] }],
+        auth: [{ hostname: 'auth.codex.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['1.1.1.0/24'], ipv6: ['2606:4700:100::/48'] }]
+      },
+      grok: {
+        provider: [{ hostname: 'api.grok.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['9.9.9.0/24'], ipv6: ['2620:fe::/48'] }],
+        auth: [{ hostname: 'auth.grok.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['149.112.112.0/24'], ipv6: ['2620:fe:fe::/48'] }]
+      }
+    },
+    artifacts: Object.fromEntries([
+      '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
+      '/usr/local/libexec/amazon-research/manage-invocation.sh',
+      '/etc/systemd/system/amazon-research-codex@.service',
+      '/etc/systemd/system/amazon-research-grok@.service',
+      '/etc/systemd/system/amazon-research-subscription-gc.service',
+      '/etc/systemd/system/amazon-research-subscription-gc.timer',
+      '/etc/polkit-1/rules.d/50-amazon-research-subscription.rules',
+      '/etc/nftables.d/amazon-research-subscription.nft'
+    ].map((path) => [path, { sha256: 'a'.repeat(64), mode: path.includes('libexec') ? '0500' : '0444' }])),
+    ...overrides
+  };
+  authority.review.bindingsSha256 = computeEndpointAuthorityDigest(authority);
   return authority;
 }
 
@@ -96,6 +138,32 @@ describe('endpoint binding authority', () => {
     const b = canonicalizeEndpointAuthority(right, { environment: 'local-fixture' });
     assert.equal(a.bindingsSha256, b.bindingsSha256);
     assert.equal(renderEndpointPolicy(a).sha256, renderEndpointPolicy(b).sha256);
+  });
+});
+
+describe('production endpoint authority', () => {
+  for (const [name, mutate, expected] of [
+    ['IPv6 link-local fe80::/10', (a) => { a.resolvers[0].ipv6 = ['febf::1']; }, /range is not allowed/u],
+    ['IPv6 ULA fc00::/7', (a) => { a.resolvers[0].ipv6 = ['fdff::1']; }, /range is not allowed/u],
+    ['arbitrary prefix outside hostname review', (a) => { a.adapters.codex.provider[0].ipv4 = ['8.8.8.0/24']; }, /hostname prefix binding rejected/u],
+    ['stale resolution', (a) => { a.resolvers[0].resolvedAt = '2026-08-31T09:00:00.000Z'; }, /resolution is stale/u],
+    ['unapproved reviewer', (a) => { a.review.identity = 'self-authored'; }, /reviewer authority rejected/u],
+    ['release mismatch', (a) => { a.release.commit = 'f'.repeat(40); }, /release\/profile binding rejected/u]
+  ]) {
+    it(`rejects valid-digest ${name}`, () => {
+      const now = new Date('2026-08-31T12:00:00.000Z');
+      const authority = productionAuthority();
+      mutate(authority);
+      authority.review.bindingsSha256 = computeEndpointAuthorityDigest(authority);
+      assert.throws(() => canonicalizeEndpointAuthority(authority, { environment: 'oracle-fixture', now }), expected);
+    });
+  }
+  it('rejects an otherwise-valid test authority in the actual Oracle environment', () => {
+    const authority = productionAuthority();
+    assert.throws(
+      () => canonicalizeEndpointAuthority(authority, { environment: 'oracle', now: new Date('2026-08-31T12:00:00.000Z') }),
+      /No reviewed production hostname authority is published/u
+    );
   });
 });
 describe('installer full preflight', () => {
@@ -160,39 +228,78 @@ describe('installer full preflight', () => {
     assert.notEqual(child.status, 0);
     await assert.rejects(stat(join(installRoot, 'etc/systemd/system/amazon-research-codex@.service')), { code: 'ENOENT' });
   });
+
+  it('rolls back every created file and parent after a late atomic publication failure', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-rollback-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await writeFile(
+      join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'),
+      await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json'))
+    );
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+      '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.',
+      '--fail-at', 'publish-6'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /injected publication failure 6/u);
+    for (const relative of [
+      'usr/local/libexec/amazon-research/subscription-supervisor.mjs',
+      'usr/local/libexec/amazon-research/manage-invocation.sh',
+      'etc/systemd/system/amazon-research-codex@.service',
+      'etc/polkit-1/rules.d/50-amazon-research-subscription.rules'
+    ]) {
+      await assert.rejects(stat(join(installRoot, relative)), { code: 'ENOENT' }, `rollback residue: ${relative}`);
+    }
+    await assert.rejects(stat(join(installRoot, 'usr/local/libexec')), { code: 'ENOENT' });
+  });
+
+  it('verifies installed fixture bytes and rejects installed unit or nft drift', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-installed-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await writeFile(
+      join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'),
+      await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json'))
+    );
+    const installer = 'ops/subscription-providers/install-systemd-sandbox.sh';
+    const verifier = 'ops/subscription-providers/verify-runtime-profile.sh';
+    const fixtureArguments = [
+      '--fixture-root', `./${basename(root)}/target`,
+      '--repository-root', '.'
+    ];
+    const installed = spawnSync('bash', [installer, 'install', ...fixtureArguments], { cwd: sourceRoot, encoding: 'utf8' });
+    assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    const runFixtureVerify = () => spawnSync('bash', [
+      verifier, 'verify', 'codex',
+      '--fixture-root', `./${basename(root)}/target`,
+      '--repository-root', '.'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+    const verified = runFixtureVerify();
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+    assert.equal(JSON.parse(verified.stdout).oracleHostVerified, false);
+
+    const unit = join(installRoot, 'etc/systemd/system/amazon-research-codex@.service');
+    const unitBytes = await readFile(unit);
+    await chmod(unit, 0o600);
+    await writeFile(unit, Buffer.concat([unitBytes, Buffer.from('\n# drift\n')]));
+    const unitDrift = runFixtureVerify();
+    assert.notEqual(unitDrift.status, 0);
+    await writeFile(unit, unitBytes);
+
+    const policy = join(installRoot, 'etc/nftables.d/amazon-research-subscription.nft');
+    await chmod(policy, 0o600);
+    await writeFile(policy, 'table inet drift {}\n');
+    const policyDrift = runFixtureVerify();
+    assert.notEqual(policyDrift.status, 0);
+  });
 });
 const roots = [];
-const attemptId = '00000000-0000-4000-8000-000000000001';
-const operations = [
-  'attempt-authorized', 'start-no-block', 'directory-created', 'directory-verified',
-  'pre-start-waiting-no-request', 'request-tmp-written', 'request-renamed',
-  'pre-start-validated', 'main-started', 'sandbox-validated', 'ready',
-  'provider-fixture-started', 'result-tmp-written', 'result-renamed',
-  'result-read', 'explicit-stop', 'cgroup-empty', 'exec-stop-post', 'terminal'
-];
-const gcStates = [
-  { activeState: 'active', ageMinutes: 30, expected: 'refuse' },
-  { activeState: 'inactive', ageMinutes: 5, expected: 'refuse' },
-  { activeState: 'unknown', ageMinutes: 30, expected: 'refuse' },
-  { activeState: 'inactive', ageMinutes: 11, expected: 'remove' }
-];
-
-function runner(command, args) {
-  const child = spawnSync(command, args, { encoding: 'utf8' });
-  return Promise.resolve({ exitCode: child.status ?? 1 });
-}
-
-function derivedInput(overrides = {}) {
-  return {
-    adapter: 'codex',
-    attemptId,
-    repositoryRoot: fileURLToPath(new URL('..', import.meta.url)).replaceAll('\\', '/'),
-    operations: [...operations],
-    gcStates: structuredClone(gcStates),
-    runner,
-    ...overrides
-  };
-}
 function categories(result) {
   return result.checks.filter((check) => !check.ok).map((check) => check.category);
 }
@@ -202,16 +309,6 @@ afterEach(async () => {
 });
 
 describe('subscription provider derived local probe', () => {
-  it('derives acceptance from fixed files, commands, lifecycle operations, and GC states', async () => {
-    const result = await runDerivedLocalProbe(derivedInput());
-    assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.localFixtureVerified, true);
-    assert.equal(result.oracleHostVerified, false);
-    assert.equal(result.liveProviderVerified, false);
-    assert.equal(result.evidence.provenance, 'derived-local-v1');
-    assert.match(result.evidence.renderedPolicySha256, /^[0-9a-f]{64}$/u);
-    assert.deepEqual(result.evidence.lifecycleEvents, operations);
-  });
 
   it('rejects the former fabricated all-true fixture', () => {
     const result = runLocalFixtureProbe({ allClaims: true, ok: true, oracleHostVerified: true });
@@ -221,43 +318,6 @@ describe('subscription provider derived local probe', () => {
     assert.ok(categories(result).includes('self-attested-fixture-rejected'));
   });
 
-  for (const [name, mutate] of [
-    ['missing READY', (value) => value.filter((event) => event !== 'ready')],
-    ['duplicate READY', (value) => [...value.slice(0, 11), 'ready', ...value.slice(11)]],
-    ['reordered READY', (value) => { const copy = [...value]; [copy[10], copy[11]] = [copy[11], copy[10]]; return copy; }],
-    ['result before READY', (value) => { const copy = [...value]; const result = copy.splice(copy.indexOf('result-read'), 1)[0]; copy.splice(9, 0, result); return copy; }],
-    ['no explicit stop', (value) => value.filter((event) => event !== 'explicit-stop')],
-    ['ExecStopPost before cgroup empty', (value) => { const copy = [...value]; const a = copy.indexOf('cgroup-empty'); const b = copy.indexOf('exec-stop-post'); [copy[a], copy[b]] = [copy[b], copy[a]]; return copy; }]
-  ]) {
-    it(`fails for ${name}`, async () => {
-      const result = await runDerivedLocalProbe(derivedInput({ operations: mutate(operations) }));
-      assert.equal(result.ok, false);
-      assert.ok(categories(result).includes('lifecycle'));
-    });
-  }
-
-  for (const [name, index, expected] of [
-    ['active GC removal', 0, 'remove'],
-    ['recent GC removal', 1, 'remove'],
-    ['ambiguous GC removal', 2, 'remove'],
-    ['aged inactive GC refusal', 3, 'refuse']
-  ]) {
-    it(`fails for ${name}`, async () => {
-      const states = structuredClone(gcStates);
-      states[index].expected = expected;
-      const result = await runDerivedLocalProbe(derivedInput({ gcStates: states }));
-      assert.equal(result.ok, false);
-      assert.ok(categories(result).includes('gc'));
-    });
-  }
-
-  it('fails when a fixed command reports nonzero', async () => {
-    const result = await runDerivedLocalProbe(derivedInput({
-      runner: async () => ({ exitCode: 1 })
-    }));
-    assert.equal(result.ok, false);
-    assert.ok(categories(result).includes('fixed-command-plan'));
-  });
 
   it('emits bounded sanitized JSON and exits nonzero for self-attested input', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ara-task14-probe-'));
@@ -273,5 +333,23 @@ describe('subscription provider derived local probe', () => {
     const report = JSON.parse(child.stdout);
     assert.equal(report.ok, false);
     assert.equal(report.oracleHostVerified, false);
+  });
+
+  it('executes the fixed local behavioral probe through the CLI without caller outcomes', () => {
+    const child = spawnSync(process.execPath, [
+      fileURLToPath(new URL('./probe-subscription-provider.mjs', import.meta.url)),
+      '--mode', 'local-behavior', '--adapter', 'codex'
+    ], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    const report = JSON.parse(child.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(report.evidence.provenance, 'executed-local-v2');
+    assert.equal(report.oracleHostVerified, false);
+  });
+
+  it('does not export caller-authored derived acceptance', async () => {
+    const result = await runDerivedLocalProbe();
+    assert.equal(result.ok, false);
+    assert.ok(categories(result).includes('caller-authored-evidence-rejected'));
   });
 });
