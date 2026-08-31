@@ -54,6 +54,7 @@ readonly ARTIFACTS=(
   'ops/systemd/amazon-research-subscription-gc.timer|/etc/systemd/system/amazon-research-subscription-gc.timer|0444'
   'ops/polkit/50-amazon-research-subscription.rules|/etc/polkit-1/rules.d/50-amazon-research-subscription.rules|0444'
   'ops/subscription-providers/subscription-gc-decision.mjs|/usr/local/libexec/amazon-research/subscription-gc-decision.mjs|0500'
+  'scripts/subscription-install-lock.mjs|/usr/local/libexec/amazon-research/subscription-install-lock.mjs|0500'
 )
 
 verify_regular() {

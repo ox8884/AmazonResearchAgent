@@ -33,6 +33,7 @@ const REQUIRED_INSTALLED_PATHS = Object.freeze([
   '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
   '/usr/local/libexec/amazon-research/manage-invocation.sh',
   '/usr/local/libexec/amazon-research/subscription-gc-decision.mjs',
+  '/usr/local/libexec/amazon-research/subscription-install-lock.mjs',
   '/etc/systemd/system/amazon-research-codex@.service',
   '/etc/systemd/system/amazon-research-grok@.service',
   '/etc/systemd/system/amazon-research-subscription-gc.service',
@@ -52,6 +53,10 @@ function exactKeys(value, expected) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+export async function openNoFollow(noFollow, openPath, pathname) {
+  if (!Number.isInteger(noFollow)) throw new TypeError('Required O_NOFOLLOW primitive unavailable.');
+  return openPath(pathname, noFollow | constants.O_RDONLY);
 }
 
 function stable(value) {
@@ -352,8 +357,9 @@ export async function verifyNssIdentity(authority, adapter, lookup = async (user
   const lines = records[0].split('\n').filter((line) => line.length > 0);
   if (lines.length !== 1) throw new TypeError('NSS record count rejected.');
   const fields = lines[0].split(':');
-  if (fields.length !== 7 || fields[0] !== identity.username || !/^[0-9]+$/u.test(fields[2]) || Number(fields[2]) <= 0 || Number(fields[2]) > 0x7fffffff ||
-      Number(fields[2]) !== identity.uid || fields[6] !== '/usr/sbin/nologin') throw new TypeError('Reviewed NSS identity mismatch.');
+  if (fields.length !== 7 || fields[0] !== identity.username || !/^(?:[1-9][0-9]*)$/u.test(fields[2])) throw new TypeError('Reviewed NSS identity mismatch.');
+  const nssUid = BigInt(fields[2]);
+  if (nssUid > BigInt(0x7fffffff) || nssUid !== BigInt(identity.uid) || fields[6] !== '/usr/sbin/nologin') throw new TypeError('Reviewed NSS identity mismatch.');
   return Object.freeze({ username: identity.username, uid: identity.uid });
 }
 
@@ -431,11 +437,12 @@ export async function validateLocalEvidence(report, adapter, handoffRoot) {
     const before = await lstat(path, { bigint: true });
     if (!before.isFile() || before.isSymbolicLink()) throw new TypeError(`Local ${name} artifact type rejected.`);
     await lstat(temporary).then(() => { throw new TypeError(`Local ${name} atomic publication rejected.`); }, (error) => { if (error?.code !== 'ENOENT') throw error; });
-    const noFollow = Number.isInteger(constants.O_NOFOLLOW) ? constants.O_NOFOLLOW : 0;
-    const handle = await open(path, constants.O_RDONLY | noFollow);
+    const handle = await openNoFollow(constants.O_NOFOLLOW, open, path);
     try {
       const descriptor = await handle.stat({ bigint: true });
       if (!descriptor.isFile() || descriptor.dev !== before.dev || descriptor.ino !== before.ino) throw new TypeError(`Local ${name} artifact identity rejected.`);
+      const observedMode = Number(descriptor.mode & 0o777n);
+      if (observedMode !== 0o640) throw new TypeError(`Local ${name} artifact mode rejected.`);
       const bytes = await handle.readFile();
       const afterDescriptor = await handle.stat({ bigint: true });
       const afterPath = await lstat(path, { bigint: true });

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -16,7 +17,7 @@ import {
   validateLocalEvidence,
   verifyNssIdentity
 } from './probe-subscription-provider.mjs';
-import { verifyInstalledAuthority } from './probe-subscription-provider.mjs';
+import { verifyInstalledAuthority, openNoFollow } from './probe-subscription-provider.mjs';
 import { assertActiveNftMatches, assertAuthorityActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
 import { verifyInstalledArtifactsCore } from './installed-artifact-verifier.mjs';
 const nobleFixturePath = fileURLToPath(new URL('../tests/fixtures/nftables-noble-1.0.9-parser.json', import.meta.url));
@@ -96,6 +97,7 @@ function productionAuthority(overrides = {}) {
       '/etc/systemd/system/amazon-research-grok@.service',
       '/etc/systemd/system/amazon-research-subscription-gc.service',
       '/usr/local/libexec/amazon-research/subscription-gc-decision.mjs',
+      '/usr/local/libexec/amazon-research/subscription-install-lock.mjs',
       '/etc/systemd/system/amazon-research-subscription-gc.timer',
       '/etc/polkit-1/rules.d/50-amazon-research-subscription.rules',
       '/etc/nftables.d/amazon-research-subscription.nft'
@@ -214,6 +216,23 @@ describe('production endpoint authority', () => {
         await assert.rejects(verifyNssIdentity(authority, 'codex', async () => records[Math.min(index++, records.length - 1)]));
       });
     }
+
+    for (const [name, uidText] of [
+      ['leading-zero UID 031001', '031001'],
+      ['decimal above accepted UID range 2147483648', '2147483648'],
+      ['precision form that must not round into the reviewed UID', '31001.0'],
+      ['numeric overflow above reviewed range 2147483649', '2147483649']
+    ]) {
+      it(`rejects injected canonicality ${name}`, async () => {
+        await assert.rejects(
+          verifyNssIdentity(authority, 'codex', async () => `ara-codex:x:${uidText}:31001::/nonexistent:/usr/sbin/nologin\n`)
+        );
+      });
+    }
+
+    it('accepts the canonical positive decimal reviewed UID', async () => {
+      await assert.doesNotReject(verifyNssIdentity(authority, 'codex', async () => 'ara-codex:x:31001:31001::/nonexistent:/usr/sbin/nologin\n'));
+    });
 
     it('rejects fixture authority before NSS lookup', async () => {
       let called = false;
@@ -350,6 +369,24 @@ describe('installed artifact stable descriptor core', () => {
       assert.equal(fixture.closed(), name === 'missing O_NOFOLLOW' ? 0 : 1);
     });
   }
+});
+
+describe('openNoFollow fail-closed validator', () => {
+  it('rejects a non-integer O_NOFOLLOW before opening the target', async () => {
+    let opened = false;
+    await assert.rejects(
+      openNoFollow('missing', async () => { opened = true; return {}; }, '/unused'),
+      /O_NOFOLLOW primitive unavailable/u
+    );
+    assert.equal(opened, false);
+  });
+
+  it('opens with O_RDONLY | O_NOFOLLOW only for an integer primitive', async () => {
+    const flags = [];
+    const openedPath = await openNoFollow(0o200000, async (path, flag) => { flags.push(flag); return path; }, '/target');
+    assert.equal(openedPath, '/target');
+    assert.deepEqual(flags, [0o200000 | 0]);
+  });
 });
 
 describe('installer full preflight', () => {
@@ -581,6 +618,55 @@ describe('installer full preflight', () => {
   });
 
 });
+describe('subscription lock helper install authority', () => {
+  const lockPath = '/usr/local/libexec/amazon-research/subscription-install-lock.mjs';
+
+  it('proves the installer dry-run artifact count includes the lock helper', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'dry-run'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stdout, /PASS mode=dry-run artifacts=11 /u);
+  });
+
+  it('rejects a lock-helper digest or mode that does not match the reviewed manifest', async () => {
+    const authority = productionAuthority();
+    const lockEntry = authority.artifacts[lockPath];
+    assert.equal(lockEntry.mode, '0500');
+    assert.match(lockEntry.sha256, /^[0-9a-f]{64}$/u);
+    const goodBytes = await readFile(new URL('../scripts/subscription-install-lock.mjs', import.meta.url));
+    const tampered = Buffer.concat([goodBytes.subarray(0, goodBytes.length - 1), Buffer.from([goodBytes[goodBytes.length - 1] ^ 0xff])]);
+    const digestBase = { dev: 1n, ino: 2n, uid: 0n, gid: 0n, mode: 0o100500n, size: BigInt(tampered.length), mtimeNs: 10n, ctimeNs: 11n, isFile: () => true, isSymbolicLink: () => false };
+    const digestHandle = { stat: async () => digestBase, readFile: async () => tampered, close: async () => {} };
+    const digestPath = { ...digestBase, isFile: () => true, isSymbolicLink: () => false };
+    const digestFixture = { constants: { O_RDONLY: 0, O_NOFOLLOW: 1 }, open: async () => digestHandle, lstat: async () => digestPath };
+    await assert.rejects(verifyInstalledArtifactsCore(authority, [lockPath], digestFixture), /digest rejected/u);
+    const modeBase = { dev: 1n, ino: 2n, uid: 0n, gid: 0n, mode: 0o100444n, size: BigInt(goodBytes.length), mtimeNs: 10n, ctimeNs: 11n, isFile: () => true, isSymbolicLink: () => false };
+    const modeHandle = { stat: async () => modeBase, readFile: async () => goodBytes, close: async () => {} };
+    const modePath = { ...modeBase, isFile: () => true, isSymbolicLink: () => false };
+    const modeFixture = { constants: { O_RDONLY: 0, O_NOFOLLOW: 1 }, open: async () => modeHandle, lstat: async () => modePath };
+    const { createHash } = await import('node:crypto');
+    const wrongAuthority = { artifacts: { [lockPath]: { mode: '0500', sha256: createHash('sha256').update(goodBytes).digest('hex') } } };
+    await assert.rejects(verifyInstalledArtifactsCore(wrongAuthority, [lockPath], modeFixture), /mode rejected/u);
+  });
+
+  it('verifies the lock helper before any protected writer executes it', async () => {
+    const authority = productionAuthority();
+    assert.equal(authority.artifacts[lockPath].mode, '0500');
+    const goodBytes = await readFile(new URL('../scripts/subscription-install-lock.mjs', import.meta.url));
+    const { createHash } = await import('node:crypto');
+    authority.artifacts[lockPath].sha256 = createHash('sha256').update(goodBytes).digest('hex');
+    const orderBase = { dev: 1n, ino: 2n, uid: 0n, gid: 0n, mode: 0o100500n, size: BigInt(goodBytes.length), mtimeNs: 10n, ctimeNs: 11n, isFile: () => true, isSymbolicLink: () => false };
+    const orderHandle = { stat: async () => orderBase, readFile: async () => goodBytes, close: async () => {} };
+    const orderPath = { ...orderBase, isFile: () => true, isSymbolicLink: () => false };
+    const fs = { constants: { O_RDONLY: 0, O_NOFOLLOW: 1 }, open: async () => orderHandle, lstat: async () => orderPath };
+    const verified = await verifyInstalledArtifactsCore(authority, [lockPath], fs);
+    assert.equal(verified.length, 1);
+    assert.equal(verified[0].path, lockPath);
+    assert.equal(verified[0].mode, '0500');
+  });
+});
 const roots = [];
 function categories(result) {
   return result.checks.filter((check) => !check.ok).map((check) => check.category);
@@ -591,6 +677,8 @@ afterEach(async () => {
 });
 
 describe('subscription provider derived local probe', () => {
+  const hasOnoFollow = Number.isInteger(fsConstants.O_NOFOLLOW);
+  const e2e = hasOnoFollow ? it : it.skip;
 
   it('rejects the former fabricated all-true fixture', () => {
     const result = runLocalFixtureProbe({ allClaims: true, ok: true, oracleHostVerified: true });
@@ -617,7 +705,7 @@ describe('subscription provider derived local probe', () => {
     assert.equal(report.oracleHostVerified, false);
   });
 
-  it('executes the fixed local behavioral probe through the CLI without caller outcomes', () => {
+  e2e('executes the fixed local behavioral probe through the CLI without caller outcomes', () => {
     const child = spawnSync(process.execPath, [
       fileURLToPath(new URL('./probe-subscription-provider.mjs', import.meta.url)),
       '--mode', 'local-behavior', '--adapter', 'codex'
@@ -629,7 +717,7 @@ describe('subscription provider derived local probe', () => {
     assert.equal(report.oracleHostVerified, false);
   });
 
-  it('rejects hostile parent evidence with preserved lengths and booleans', async () => {
+  e2e('rejects hostile parent evidence with preserved lengths and booleans', async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const handoffRoot = await mkdtemp(join(tmpdir(), 'ara-task14-hostile-parent-'));
     const invocationRoot = join(handoffRoot, 'invocations');
@@ -659,6 +747,12 @@ describe('subscription provider derived local probe', () => {
     fabricated.request.observedMode = 0;
     fabricated.result.observedMode = 0;
     await assert.rejects(validateLocalEvidence(fabricated, 'codex', artifactRoot), /artifact evidence rejected/u);
+    const widened = structuredClone(baseline);
+    await chmod(join(artifactRoot, 'request.json'), 0o666);
+    await chmod(join(artifactRoot, 'result.json'), 0o666);
+    widened.request.observedMode = 0o666;
+    widened.result.observedMode = 0o666;
+    await assert.rejects(validateLocalEvidence(widened, 'codex', artifactRoot), /artifact mode rejected/u);
   });
 
   it('does not export caller-authored derived acceptance', async () => {
