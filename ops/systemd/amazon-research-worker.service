@@ -12,6 +12,21 @@ Restart=always
 RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=90
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=-/run/amazon-research/subscription/codex -/run/amazon-research/subscription/grok
+InaccessiblePaths=-/var/lib/amazon-research/subscription/codex -/var/lib/amazon-research/subscription/grok
 
 [Install]
 WantedBy=multi-user.target

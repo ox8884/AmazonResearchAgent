@@ -46,3 +46,9 @@ Restart policy: `Restart=always`, `RestartSec=5`, `KillSignal=SIGTERM`, `Timeout
 AI concurrency remains 2–3; browser concurrency 1–2.
 
 `systemd-analyze verify` for these units should be run on the Oracle host. This Windows implementation session does not mutate production.
+
+## Subscription provider sandbox checkpoint
+
+The exact install, disabled fixture acceptance, Phase-A/fence/migration-022/Phase-B rollout, and post-022 rollback procedure is [`subscription-providers.md`](subscription-providers.md). The local Task-14 commit does not authorize those host changes. Before running its Oracle commands, record the exact release SHA and digests and obtain explicit approval for users/groups/auth homes, systemd/polkit/nftables/cgroup changes.
+
+The worker remains unable to read either adapter auth home. It can write only the two fixed runtime IPC roots and can control only canonical UUID instances through the repository-owned polkit rule. Do not add sudo, generic unit control, arbitrary journal access, or credential paths to `amazon-research-worker.service`.
