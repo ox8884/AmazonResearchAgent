@@ -11,6 +11,7 @@ readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
 readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json"
 readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
 readonly FIXTURE_FAIL_AT="$([[ "${6:-}" == --fail-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_FAIL_AT:-}")"
+readonly FIXTURE_RACE_AT="$([[ "${6:-}" == --race-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_RACE_AT:-}")"
 
 fail() { printf 'install-systemd-sandbox: %s\n' "$1" >&2; exit 1; }
 root_path() { printf '%s%s' "$PREFIX" "$1"; }
@@ -19,6 +20,7 @@ sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 case "$MODE" in install|verify|dry-run) ;; *) fail 'usage: install-systemd-sandbox.sh install|verify|dry-run' ;; esac
 [[ $# -eq 1 || ( ( $# -eq 5 || $# -eq 7 ) && "$MODE" == install && "${2:-}" == --fixture-root && "${4:-}" == --repository-root && -n "$FIXTURE_ROOT_ARG" && -n "$FIXTURE_REPOSITORY_ARG" ) ]] || fail 'closed fixture arguments rejected'
 [[ -z "$FIXTURE_FAIL_AT" || ( $# -eq 7 && "${6:-}" == --fail-at && "$FIXTURE_FAIL_AT" =~ ^(stage|publish)-(0|1|2|3|4|5|6|nft)$ ) ]] || fail 'closed failure injection rejected'
+[[ -z "$FIXTURE_RACE_AT" || ( $# -eq 7 && "${6:-}" == --race-at && "$FIXTURE_RACE_AT" =~ ^(publish|rollback)-(0|1|2|3|4|5|6|nft)$ ) ]] || fail 'closed race injection rejected'
 [[ "$MODE" != install || -z "$PREFIX" || "$FIXTURE_MODE" == 1 ]] || fail 'prefixed install requires fixture mode'
 [[ "$MODE" != install || "$FIXTURE_MODE" == 1 || "${EUID:-$(id -u)}" -eq 0 ]] || fail 'install requires root'
 
@@ -39,7 +41,7 @@ command -v install >/dev/null || fail 'install required'
 command -v sha256sum >/dev/null || fail 'sha256sum required'
 command -v ln >/dev/null || fail 'ln required'
 command -v sync >/dev/null || fail 'sync required'
-[[ -z "$FIXTURE_FAIL_AT" || "$FIXTURE_MODE" == 1 ]] || fail 'failure injection requires fixture mode'
+[[ ( -z "$FIXTURE_FAIL_AT" && -z "$FIXTURE_RACE_AT" ) || "$FIXTURE_MODE" == 1 ]] || fail 'fixture injection requires fixture mode'
 
 readonly ARTIFACTS=(
   'ops/subscription-providers/subscription-supervisor.mjs|/usr/local/libexec/amazon-research/subscription-supervisor.mjs|0500'
@@ -49,6 +51,7 @@ readonly ARTIFACTS=(
   'ops/systemd/amazon-research-subscription-gc.service|/etc/systemd/system/amazon-research-subscription-gc.service|0444'
   'ops/systemd/amazon-research-subscription-gc.timer|/etc/systemd/system/amazon-research-subscription-gc.timer|0444'
   'ops/polkit/50-amazon-research-subscription.rules|/etc/polkit-1/rules.d/50-amazon-research-subscription.rules|0444'
+  'ops/subscription-providers/subscription-gc-decision.mjs|/usr/local/libexec/amazon-research/subscription-gc-decision.mjs|0500'
 )
 
 verify_regular() {
@@ -135,11 +138,17 @@ if [[ "$MODE" == dry-run ]]; then
   exit 0
 fi
 
-declare -a CREATED_FILES=() CREATED_DIRS=() TEMP_FILES=()
+declare -a CREATED_FILES=() CREATED_FILE_DEVS=() CREATED_FILE_INOS=() CREATED_DIRS=() TEMP_FILES=()
 rollback() {
-  local path index
+  local path index current
   for path in "${TEMP_FILES[@]}"; do rm -f -- "$path"; done
-  for ((index=${#CREATED_FILES[@]}-1; index>=0; index--)); do rm -f -- "${CREATED_FILES[$index]}"; done
+  for ((index=${#CREATED_FILES[@]}-1; index>=0; index--)); do
+    path="${CREATED_FILES[$index]}"
+    if [[ -f "$path" && ! -L "$path" ]]; then
+      current="$(stat -c '%d:%i' -- "$path")"
+      [[ "$current" == "${CREATED_FILE_DEVS[$index]}:${CREATED_FILE_INOS[$index]}" ]] && rm -f -- "$path"
+    fi
+  done
   for ((index=${#CREATED_DIRS[@]}-1; index>=0; index--)); do rmdir -- "${CREATED_DIRS[$index]}" 2>/dev/null || true; done
 }
 ensure_parent() {
@@ -159,7 +168,7 @@ ensure_parent() {
   [[ -d "$parent" && ! -L "$parent" && -w "$parent" ]] || fail "unsafe final parent: $parent"
 }
 publish_absent() {
-  local source="$1" target="$2" mode="$3" ordinal="$4" parent temporary
+  local source="$1" target="$2" mode="$3" ordinal="$4" parent temporary identity
   ensure_parent "$target"
   parent="$(dirname -- "$target")"
   temporary="$(mktemp --tmpdir="$parent" .ara-subscription-install.XXXXXX)"
@@ -170,10 +179,20 @@ publish_absent() {
   verify_installed "$source" "$temporary" "$mode" staged
   [[ "$(stat -c %d -- "$temporary")" == "$(stat -c %d -- "$parent")" ]] || fail "cross-filesystem staging rejected: $target"
   [[ "$FIXTURE_FAIL_AT" != "publish-$ordinal" ]] || fail "injected publication failure $ordinal"
-  CREATED_FILES+=("$target")
+  if [[ "$FIXTURE_RACE_AT" == "publish-$ordinal" ]]; then printf 'competitor\n' >"$target"; fi
   ln -- "$temporary" "$target"
+  identity="$(stat -c '%d:%i' -- "$temporary")"
+  [[ "$(stat -c '%d:%i' -- "$target")" == "$identity" ]] || fail "published inode identity rejected: $target"
+  CREATED_FILES+=("$target")
+  CREATED_FILE_DEVS+=("${identity%%:*}")
+  CREATED_FILE_INOS+=("${identity##*:}")
   rm -f -- "$temporary"
   sync -- "$parent"
+  if [[ "$FIXTURE_RACE_AT" == "rollback-$ordinal" ]]; then
+    rm -f -- "$target"
+    printf 'replacement\n' >"$target"
+    fail "injected rollback replacement $ordinal"
+  fi
   verify_installed "$source" "$target" "$mode"
 }
 transaction_exit() {

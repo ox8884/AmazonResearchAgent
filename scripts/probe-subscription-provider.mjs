@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { assertAuthorityActiveNftMatches } from './subscription-nft-semantics.mjs';
 
 const execFileAsync = promisify(execFile);
 export const MAX_REPORT_BYTES = 32 * 1024;
@@ -25,18 +25,12 @@ const APPROVED_RELEASE = Object.freeze({
 });
 // Intentionally empty until an independently reviewed production publication adds exact names and prefixes.
 const APPROVED_PRODUCTION_BINDINGS = Object.freeze({});
-const ORACLE_TEST_BINDINGS = Object.freeze({
-  'resolver.example.test': Object.freeze({ ipv4: Object.freeze(['8.8.8.8']), ipv6: Object.freeze(['2001:4860:4860::8888']) }),
-  'api.codex.example.test': Object.freeze({ ipv4: Object.freeze(['8.8.4.0/24']), ipv6: Object.freeze(['2606:4700:4700::/48']) }),
-  'auth.codex.example.test': Object.freeze({ ipv4: Object.freeze(['1.1.1.0/24']), ipv6: Object.freeze(['2606:4700:100::/48']) }),
-  'api.grok.example.test': Object.freeze({ ipv4: Object.freeze(['9.9.9.0/24']), ipv6: Object.freeze(['2620:fe::/48']) }),
-  'auth.grok.example.test': Object.freeze({ ipv4: Object.freeze(['149.112.112.0/24']), ipv6: Object.freeze(['2620:fe:fe::/48']) })
-});
 const FIXTURE_KEYS = ['adapters', 'fixtureOnly', 'resolvers', 'review', 'schemaVersion'];
 const PRODUCTION_KEYS = ['adapters', 'artifacts', 'fixtureOnly', 'release', 'resolvers', 'review', 'schemaVersion'];
 const REQUIRED_INSTALLED_PATHS = Object.freeze([
   '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
   '/usr/local/libexec/amazon-research/manage-invocation.sh',
+  '/usr/local/libexec/amazon-research/subscription-gc-decision.mjs',
   '/etc/systemd/system/amazon-research-codex@.service',
   '/etc/systemd/system/amazon-research-grok@.service',
   '/etc/systemd/system/amazon-research-subscription-gc.service',
@@ -266,16 +260,22 @@ function canonicalProduction(input, now, approvedBindings) {
   }, resolvers, adapters, artifacts };
 }
 
-export function canonicalizeEndpointAuthority(input, options = {}) {
-  const environment = options.environment ?? 'local-fixture';
-  if (!['local-fixture', 'oracle', 'oracle-fixture'].includes(environment)) throw new TypeError('Endpoint authority environment rejected.');
-  const approvedBindings = environment === 'oracle-fixture' ? ORACLE_TEST_BINDINGS : APPROVED_PRODUCTION_BINDINGS;
-  const canonical = environment === 'local-fixture'
-    ? canonicalFixture(input)
-    : canonicalProduction(input, (options.now ?? new Date()).getTime(), approvedBindings);
+export function canonicalizeEndpointAuthority(input, options) {
+  if (options !== undefined) throw new TypeError('production canonicalizer rejects options');
+  const canonical = canonicalProduction(input, Date.now(), APPROVED_PRODUCTION_BINDINGS);
   const canonicalInput = { ...canonical, review: { ...canonical.review, bindingsSha256: input.review?.bindingsSha256 } };
   const bindingsSha256 = computeEndpointAuthorityDigest(canonicalInput);
-  if (options.verifyDigest !== false && input.review?.bindingsSha256 !== bindingsSha256) {
+  if (input.review?.bindingsSha256 !== bindingsSha256) {
+    throw new TypeError('Endpoint authority review digest rejected.');
+  }
+  return Object.freeze({ ...canonical, bindingsSha256 });
+}
+
+function canonicalizeLocalFixtureAuthority(input, verifyDigest = true) {
+  const canonical = canonicalFixture(input);
+  const canonicalInput = { ...canonical, review: { ...canonical.review, bindingsSha256: input.review?.bindingsSha256 } };
+  const bindingsSha256 = computeEndpointAuthorityDigest(canonicalInput);
+  if (verifyDigest && input.review?.bindingsSha256 !== bindingsSha256) {
     throw new TypeError('Endpoint authority review digest rejected.');
   }
   return Object.freeze({ ...canonical, bindingsSha256 });
@@ -341,35 +341,31 @@ export function runLocalFixtureProbe() {
   });
 }
 
-async function atomicJson(directory, temporaryName, finalName, value) {
-  const temporary = join(directory, temporaryName);
-  const final = join(directory, finalName);
-  const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o640);
-  try { await handle.writeFile(JSON.stringify(value)); await handle.sync(); } finally { await handle.close(); }
-  await rename(temporary, final);
-}
+export async function verifyInstalledAuthority(authority, options) {
 
-function gcDecision(activeState, ageMinutes) {
-  return ['inactive', 'failed'].includes(activeState) && ageMinutes > 10 ? 'remove' : 'refuse';
-}
-
-export async function verifyInstalledAuthority(authority, options = {}) {
+  if (options !== undefined) throw new TypeError('production installed verifier rejects options');
   if (authority.fixtureOnly || !object(authority.artifacts)) throw new TypeError('Production installed manifest required.');
-  const installedRoot = options.installedRoot ?? '/';
-  const expectedUid = options.expectedUid ?? 0;
   const verified = [];
   for (const path of REQUIRED_INSTALLED_PATHS) {
-    const resolved = join(installedRoot, path.replace(/^\/+/, ''));
-    const info = await lstat(resolved);
-    if (!info.isFile() || info.isSymbolicLink() || info.uid !== expectedUid || info.gid !== 0 && options.expectedUid === undefined) {
-      throw new TypeError('Installed artifact type or owner rejected.');
+    const before = await lstat(path);
+    if (!before.isFile() || before.isSymbolicLink()) throw new TypeError('Installed artifact type rejected.');
+    const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.uid !== 0 || info.gid !== 0) {
+        throw new TypeError('Installed artifact type, identity, or owner rejected.');
+      }
+      const expected = authority.artifacts[path];
+      const mode = `0${(info.mode & 0o777).toString(8)}`;
+      if (mode !== expected.mode) throw new TypeError('Installed artifact mode rejected.');
+      const bytes = await handle.readFile();
+      if (sha256(bytes) !== expected.sha256) throw new TypeError('Installed artifact digest rejected.');
+      const after = await lstat(path);
+      if (after.dev !== info.dev || after.ino !== info.ino) throw new TypeError('Installed artifact changed during verification.');
+      verified.push({ path, sha256: expected.sha256, mode });
+    } finally {
+      await handle.close();
     }
-    const expected = authority.artifacts[path];
-    const mode = `0${(info.mode & 0o777).toString(8)}`;
-    if (mode !== expected.mode) throw new TypeError('Installed artifact mode rejected.');
-    const bytes = await readFile(resolved);
-    if (sha256(bytes) !== expected.sha256) throw new TypeError('Installed artifact digest rejected.');
-    verified.push({ path, sha256: expected.sha256, mode });
   }
   return Object.freeze(verified);
 }
@@ -377,58 +373,23 @@ export async function verifyInstalledAuthority(authority, options = {}) {
 async function runExecutedLocalProbe(adapter) {
   if (!ADAPTERS.includes(adapter)) throw new TypeError('Adapter rejected.');
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-  const root = await mkdtemp(join(tmpdir(), 'ara-task14-behavior-'));
-  const attemptId = randomUUID();
-  const invocation = join(root, adapter, attemptId);
-  const events = [];
-  try {
-    events.push('attempt-authorized', 'start-no-block');
-    await mkdir(invocation, { recursive: true, mode: 0o770 });
-    events.push('directory-created');
-    const directoryInfo = await stat(invocation);
-    if (!directoryInfo.isDirectory()) throw new TypeError('Fixture directory rejected.');
-    events.push('directory-verified', 'pre-start-waiting-no-request');
-    const request = { version: 1, adapter, attemptId, profileId: `${adapter}-subscription-v1`, modelId: adapter === 'codex' ? 'gpt-5.6' : 'fixture-grok', role: 'niche_normalization', locale: 'en', prompt: 'local disposable fixture', inputHash: '0'.repeat(64) };
-    await writeFile(join(invocation, 'request.tmp'), JSON.stringify(request), { flag: 'wx', mode: 0o640 });
-    events.push('request-tmp-written');
-    await rename(join(invocation, 'request.tmp'), join(invocation, 'request.json'));
-    events.push('request-renamed', 'pre-start-validated', 'main-started', 'sandbox-validated');
-    await writeFile(join(invocation, 'READY'), '1', { flag: 'wx' });
-    events.push('ready', 'provider-fixture-started');
-    await atomicJson(invocation, 'result.tmp', 'result.json', { version: 1, adapter, attemptId, outcome: 'success', rawOutput: '{}', clientExit: { code: 0, signal: null } });
-    events.push('result-tmp-written', 'result-renamed');
-    JSON.parse(await readFile(join(invocation, 'result.json'), 'utf8'));
-    events.push('result-read', 'explicit-stop', 'cgroup-empty', 'exec-stop-post', 'terminal');
-    const commandPlan = [
-      [process.execPath, ['--check', join(repositoryRoot, 'ops/subscription-providers/subscription-supervisor.mjs')]],
-      [process.execPath, ['--check', join(repositoryRoot, 'scripts/probe-subscription-provider.mjs')]]
-    ];
-    const commandResults = [];
-    for (const [command, args] of commandPlan) {
-      try { await execFileAsync(command, args, { windowsHide: true, timeout: 5000, maxBuffer: 4096 }); commandResults.push({ command: 'node', exitCode: 0 }); }
-      catch { commandResults.push({ command: 'node', exitCode: 1 }); }
-    }
-    const gc = [
-      ['active', 30, 'refuse'], ['inactive', 5, 'refuse'], ['unknown', 30, 'refuse'], ['inactive', 11, 'remove']
-    ].map(([activeState, ageMinutes, expected]) => ({ activeState, ageMinutes, decision: gcDecision(activeState, ageMinutes), expected }));
-    const cleanupRoot = root;
-    await rm(root, { recursive: true });
-    let leaked = true;
-    try { await lstat(cleanupRoot); } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') leaked = false; else throw error; }
-    const checks = [
-      check('fixed-lifecycle', events.length === 19 && events[10] === 'ready' && events[14] === 'result-read'),
-      check('atomic-publication', true),
-      check('repository-gc-decision', gc.every((entry) => entry.decision === entry.expected)),
-      check('fixed-command-plan', commandResults.every((entry) => entry.exitCode === 0)),
-      check('fixture-cleanup', !leaked)
-    ];
-    const ok = checks.every((entry) => entry.ok);
-    return Object.freeze({ schemaVersion: 3, ok, mode: 'local-behavior', adapter, checks, evidence: {
-      provenance: 'executed-local-v2', attemptId, lifecycleEvents: events, gc, commandResults, fixtureLeak: leaked
-    }, localFixtureVerified: ok, oracleHostVerified: false, liveProviderVerified: false });
-  } finally {
-    await rm(root, { recursive: true, force: true });
+  const tsxCli = resolve(repositoryRoot, 'apps/worker/node_modules/tsx/dist/cli.mjs');
+  const harness = resolve(repositoryRoot, 'apps/worker/src/commands/subscription-local-evidence.ts');
+  const { stdout, stderr } = await execFileAsync(process.execPath, [tsxCli, harness, adapter], {
+    cwd: repositoryRoot, windowsHide: true, timeout: 10_000, maxBuffer: MAX_REPORT_BYTES
+  });
+  if (stderr.length !== 0) throw new TypeError('Local evidence harness emitted stderr.');
+  const report = JSON.parse(stdout);
+  if (!exactKeys(report, ['schemaVersion', 'ok', 'adapter', 'provenance', 'events', 'gc', 'localFixtureVerified', 'oracleHostVerified', 'liveProviderVerified']) ||
+      report.schemaVersion !== 1 || report.ok !== true || report.adapter !== adapter || report.provenance !== 'task5-owner-executed-v1' ||
+      !Array.isArray(report.events) || report.events.length !== 14 || !Array.isArray(report.gc) || report.gc.length !== 4 ||
+      report.localFixtureVerified !== true || report.oracleHostVerified !== false || report.liveProviderVerified !== false) {
+    throw new TypeError('Local evidence harness report rejected.');
   }
+  return Object.freeze({ schemaVersion: 3, ok: true, mode: 'local-behavior', adapter, checks: [
+    check('task5-owner-lifecycle', true), check('task5-ipc-atomicity', true),
+    check('task5-gc-owner', true), check('fixture-cleanup', true)
+  ], evidence: report, localFixtureVerified: true, oracleHostVerified: false, liveProviderVerified: false });
 }
 
 async function readFixture(path) {
@@ -442,6 +403,7 @@ function parseArguments(argv) {
   if (argv.length === 4 && argv[0] === '--mode' && argv[1] === 'local-fixture' && argv[2] === '--fixture') return { mode: 'local-fixture', path: argv[3] };
   if (argv.length === 4 && argv[0] === '--mode' && argv[1] === 'local-behavior' && argv[2] === '--adapter' && ADAPTERS.includes(argv[3])) return { mode: 'local-behavior', adapter: argv[3] };
   if (argv.length === 4 && argv[0] === '--mode' && argv[1] === 'verify-installed' && argv[2] === '--authority') return { mode: 'verify-installed', path: argv[3] };
+  if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'verify-active-nft' && argv[2] === '--authority' && argv[4] === '--active-json') return { mode: 'verify-active-nft', path: argv[3], activePath: argv[5] };
   if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'render-endpoint-policy' && argv[2] === '--authority' && argv[4] === '--environment' && ['local-fixture', 'oracle'].includes(argv[5])) return { mode: 'render-endpoint-policy', path: argv[3], environment: argv[5] };
   throw new TypeError('Closed probe arguments rejected.');
 }
@@ -455,14 +417,23 @@ function boundedJson(report) {
 async function cli() {
   const args = parseArguments(process.argv.slice(2));
   if (args.mode === 'render-endpoint-policy') {
-    const authority = canonicalizeEndpointAuthority(await readFixture(args.path), { environment: args.environment });
+    const input = await readFixture(args.path);
+    const authority = args.environment === 'oracle'
+      ? canonicalizeEndpointAuthority(input)
+      : canonicalizeLocalFixtureAuthority(input);
     process.stdout.write(renderEndpointPolicy(authority).text);
     return;
   }
   if (args.mode === 'verify-installed') {
-    const authority = canonicalizeEndpointAuthority(await readFixture(args.path), { environment: 'oracle' });
+    const authority = canonicalizeEndpointAuthority(await readFixture(args.path));
     const verified = await verifyInstalledAuthority(authority);
     process.stdout.write(boundedJson({ schemaVersion: 1, ok: true, verifiedCount: verified.length }));
+    return;
+  }
+  if (args.mode === 'verify-active-nft') {
+    const authority = canonicalizeEndpointAuthority(await readFixture(args.path));
+    assertAuthorityActiveNftMatches(authority, await readFixture(args.activePath));
+    process.stdout.write(boundedJson({ schemaVersion: 1, ok: true, activeNftVerified: true }));
     return;
   }
   const report = args.mode === 'local-behavior' ? await runExecutedLocalProbe(args.adapter) : runLocalFixtureProbe(await readFixture(args.path));

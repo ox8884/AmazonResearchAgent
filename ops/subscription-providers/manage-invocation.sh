@@ -6,6 +6,7 @@ readonly ADAPTER="${2:-}"
 readonly INSTANCE="${3:-}"
 readonly UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
 readonly BASE='/run/amazon-research/subscription'
+readonly GC_DECISION='/usr/local/libexec/amazon-research/subscription-gc-decision.mjs'
 
 case "$ADAPTER" in
   codex)
@@ -70,16 +71,17 @@ cleanup() {
 }
 
 gc() {
-  local path instance unit active
+  local path instance unit active age decision
   shopt -s nullglob
   for path in "$ROOT"/*; do
     [[ -d "$path" && ! -L "$path" ]] || continue
     instance="${path##*/}"
     [[ "$instance" =~ $UUID_RE ]] || continue
     unit="amazon-research-${ADAPTER}@${instance}.service"
-    active="$(systemctl show "$unit" --property=ActiveState --value 2>/dev/null || true)"
-    [[ "$active" == inactive || "$active" == failed || -z "$active" ]] || continue
-    find "$path" -maxdepth 0 -mmin +10 -print -quit | grep -q . || continue
+    active="$(systemctl show "$unit" --property=ActiveState --value 2>/dev/null || printf unknown)"
+    age="$(( ($(date +%s) - $(stat -c %Y -- "$path")) / 60 ))"
+    decision="$(/usr/bin/node "$GC_DECISION" "$active" "$age")"
+    [[ "$decision" == remove ]] || continue
     rm -rf --one-file-system -- "$path"
     rm -rf --one-file-system -- "$APPROVED_ROOT/$instance"
   done

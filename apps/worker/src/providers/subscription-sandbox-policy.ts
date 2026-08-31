@@ -11,6 +11,7 @@ import {
 
 const COMMON_ARTIFACTS = [
   'ops/subscription-providers/manage-invocation.sh',
+  'ops/subscription-providers/subscription-gc-decision.mjs',
   'ops/subscription-providers/subscription-supervisor.mjs',
   'ops/systemd/amazon-research-subscription-gc.service',
   'ops/systemd/amazon-research-subscription-gc.timer',

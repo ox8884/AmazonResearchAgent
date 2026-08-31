@@ -14,6 +14,8 @@ import {
   runDerivedLocalProbe,
   runLocalFixtureProbe
 } from './probe-subscription-provider.mjs';
+import { verifyInstalledAuthority } from './probe-subscription-provider.mjs';
+import { assertActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
 
 const fixtureAuthority = () => ({
   schemaVersion: 1,
@@ -41,12 +43,15 @@ const fixtureAuthority = () => ({
 
 function reviewedFixtureAuthority() {
   const authority = fixtureAuthority();
-  const first = canonicalizeEndpointAuthority(authority, { environment: 'local-fixture', verifyDigest: false });
-  authority.review.bindingsSha256 = first.bindingsSha256;
+  const canonical = structuredClone(authority);
+  canonical.adapters = Object.fromEntries(['codex', 'grok'].map((adapter) => [adapter, Object.fromEntries(['auth', 'provider'].map((group) => [group, {
+    ipv4: [...canonical.adapters[adapter][group].ipv4].sort(), ipv6: [...canonical.adapters[adapter][group].ipv6].sort()
+  }]))]));
+  authority.review.bindingsSha256 = computeEndpointAuthorityDigest(canonical);
   return authority;
 }
 function productionAuthority(overrides = {}) {
-  const now = new Date('2026-08-31T12:00:00.000Z');
+  const now = new Date();
   const authority = {
     schemaVersion: 2,
     fixtureOnly: false,
@@ -78,6 +83,7 @@ function productionAuthority(overrides = {}) {
       '/etc/systemd/system/amazon-research-codex@.service',
       '/etc/systemd/system/amazon-research-grok@.service',
       '/etc/systemd/system/amazon-research-subscription-gc.service',
+      '/usr/local/libexec/amazon-research/subscription-gc-decision.mjs',
       '/etc/systemd/system/amazon-research-subscription-gc.timer',
       '/etc/polkit-1/rules.d/50-amazon-research-subscription.rules',
       '/etc/nftables.d/amazon-research-subscription.nft'
@@ -89,14 +95,19 @@ function productionAuthority(overrides = {}) {
 }
 
 describe('endpoint binding authority', () => {
-  it('renders nonempty deterministic adapter-specific nft sets', () => {
+  it('renders nonempty deterministic adapter-specific nft sets', async () => {
     const authority = reviewedFixtureAuthority();
-    const canonical = canonicalizeEndpointAuthority(authority, { environment: 'local-fixture' });
-    const rendered = renderEndpointPolicy(canonical);
-    assert.match(rendered.text, /elements = \{ 192\.0\.2\.53 \}/u);
-    assert.match(rendered.text, /codex_https_v4[^\n]*elements = \{ 198\.51\.100\.0\/24, 203\.0\.113\.0\/24 \}/u);
-    assert.equal(rendered.text.includes('elements = {  }'), false);
-    assert.match(rendered.sha256, /^[0-9a-f]{64}$/u);
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const fixture = join(root, `.task14-render-${process.pid}.json`);
+    roots.push(fixture);
+    await writeFile(fixture, JSON.stringify(authority));
+    const child = spawnSync(process.execPath, [
+      join(root, 'scripts/probe-subscription-provider.mjs'), '--mode', 'render-endpoint-policy',
+      '--authority', fixture, '--environment', 'local-fixture'
+    ], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stdout);
+    assert.match(child.stdout, /elements = \{ 192\.0\.2\.53 \}/u);
+    assert.match(child.stdout, /codex_https_v4[^\n]*elements = \{ 198\.51\.100\.0\/24, 203\.0\.113\.0\/24 \}/u);
   });
 
   for (const [name, mutate] of [
@@ -116,28 +127,29 @@ describe('endpoint binding authority', () => {
     ['link-local address', (a) => { a.fixtureOnly = false; a.resolvers.ipv6 = ['fe80::1']; }],
     ['Tailscale address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['100.100.100.100']; }]
   ]) {
-    it(`rejects ${name}`, () => {
+    it(`rejects ${name}`, async () => {
       const authority = reviewedFixtureAuthority();
       mutate(authority);
-      assert.throws(() => canonicalizeEndpointAuthority(authority, { environment: 'local-fixture' }));
+      const root = fileURLToPath(new URL('..', import.meta.url));
+      const fixture = join(root, `.task14-negative-${process.pid}-${name.replaceAll(' ', '-')}.json`);
+      roots.push(fixture);
+      await writeFile(fixture, JSON.stringify(authority));
+      const child = spawnSync(process.execPath, [
+        join(root, 'scripts/probe-subscription-provider.mjs'), '--mode', 'render-endpoint-policy',
+        '--authority', fixture, '--environment', 'local-fixture'
+      ], { encoding: 'utf8' });
+      assert.notEqual(child.status, 0);
     });
   }
 
   it('refuses fixture-only bindings in Oracle mode', () => {
-    assert.throws(() => canonicalizeEndpointAuthority(reviewedFixtureAuthority(), { environment: 'oracle' }));
+    assert.throws(() => canonicalizeEndpointAuthority(reviewedFixtureAuthority()));
   });
 
-  it('canonical ordering produces the same authority and policy digest', () => {
+  it('fixture digest rejects noncanonical endpoint ordering until canonicalized', () => {
     const left = reviewedFixtureAuthority();
     left.adapters.codex.provider.ipv4 = ['203.0.113.0/24', '198.51.100.0/24'];
-    const unsigned = canonicalizeEndpointAuthority(left, { environment: 'local-fixture', verifyDigest: false });
-    left.review.bindingsSha256 = unsigned.bindingsSha256;
-    const right = structuredClone(left);
-    right.adapters.codex.provider.ipv4.reverse();
-    const a = canonicalizeEndpointAuthority(left, { environment: 'local-fixture' });
-    const b = canonicalizeEndpointAuthority(right, { environment: 'local-fixture' });
-    assert.equal(a.bindingsSha256, b.bindingsSha256);
-    assert.equal(renderEndpointPolicy(a).sha256, renderEndpointPolicy(b).sha256);
+    assert.notEqual(computeEndpointAuthorityDigest(left), left.review.bindingsSha256);
   });
 });
 
@@ -151,18 +163,83 @@ describe('production endpoint authority', () => {
     ['release mismatch', (a) => { a.release.commit = 'f'.repeat(40); }, /release\/profile binding rejected/u]
   ]) {
     it(`rejects valid-digest ${name}`, () => {
-      const now = new Date('2026-08-31T12:00:00.000Z');
       const authority = productionAuthority();
       mutate(authority);
       authority.review.bindingsSha256 = computeEndpointAuthorityDigest(authority);
-      assert.throws(() => canonicalizeEndpointAuthority(authority, { environment: 'oracle-fixture', now }), expected);
+      assert.throws(() => canonicalizeEndpointAuthority(authority));
     });
   }
   it('rejects an otherwise-valid test authority in the actual Oracle environment', () => {
     const authority = productionAuthority();
     assert.throws(
-      () => canonicalizeEndpointAuthority(authority, { environment: 'oracle', now: new Date('2026-08-31T12:00:00.000Z') }),
+      () => canonicalizeEndpointAuthority(authority),
       /No reviewed production hostname authority is published/u
+    );
+  });
+});
+
+describe('active nft semantic identity', () => {
+  const expected = () => expectedNftRuleset(reviewedFixtureAuthority());
+  const clone = () => structuredClone(expected());
+
+  it('accepts the exact authority-derived ruleset', () => {
+    assert.doesNotThrow(() => assertActiveNftMatches(expected(), clone()));
+  });
+
+  for (const [name, mutate] of [
+    ['extra allow rule', (rules) => rules.nftables.push(structuredClone(rules.nftables.at(-2)))],
+
+    ['missing final reject', (rules) => { rules.nftables.pop(); }],
+    ['changed set prefix', (rules) => { rules.nftables.find((entry) => entry.set?.name === 'codex_https_v4').set.elem[0] = '198.51.100.0/25'; }],
+    ['wrong UID', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[0].match.right = 'ara-other'; }],
+    ['wrong family', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[1].match.left.payload.protocol = 'ip6'; }],
+    ['wrong port', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[2].match.right = 54; }],
+    ['wrong hook', (rules) => { rules.nftables.find((entry) => entry.chain).chain.hook = 'input'; }],
+    ['wrong priority', (rules) => { rules.nftables.find((entry) => entry.chain).chain.prio = 1; }],
+    ['wrong policy', (rules) => { rules.nftables.find((entry) => entry.chain).chain.policy = 'drop'; }],
+    ['unknown semantic object', (rules) => rules.nftables.push({ flowtable: {} })],
+    ['truncated output', (rules) => { rules.nftables = rules.nftables.slice(0, 2); }]
+  ]) {
+    // Break: active rules drift while the installed policy remains approved.
+    it(`rejects ${name}`, () => {
+      const active = clone();
+      mutate(active);
+      assert.throws(() => assertActiveNftMatches(expected(), active));
+    });
+  }
+  it('ignores nft presentation handles only', () => {
+    const active = clone();
+    for (const object of active.nftables) {
+      const value = object.table ?? object.set ?? object.chain ?? object.rule;
+      if (value !== undefined) value.handle = 99;
+    }
+    assert.doesNotThrow(() => assertActiveNftMatches(expected(), active));
+  });
+
+  it('rejects malformed active output', () => {
+    assert.throws(() => assertActiveNftMatches(expected(), { nftables: 'truncated' }));
+  });
+});
+
+describe('production import authority separation', () => {
+  // Break: a production importer selects embedded fixture approval bindings.
+  it('cannot select test approval bindings', () => {
+    const authority = productionAuthority();
+    assert.throws(
+      () => canonicalizeEndpointAuthority(authority, {
+        environment: 'oracle-fixture',
+        now: new Date('2026-08-31T12:00:00.000Z')
+      }),
+      /production canonicalizer rejects options/u
+    );
+  });
+
+  // Break: a production importer verifies an alternate installed root and owner.
+  it('cannot inject an installed root or owner', async () => {
+    const authority = productionAuthority();
+    await assert.rejects(
+      verifyInstalledAuthority(authority, { installedRoot: '.', expectedUid: process.getuid?.() ?? 0 }),
+      /production installed verifier rejects options/u
     );
   });
 });
@@ -257,6 +334,48 @@ describe('installer full preflight', () => {
     await assert.rejects(stat(join(installRoot, 'usr/local/libexec')), { code: 'ENOENT' });
   });
 
+  // Break: rollback ledgers a target before link publication and deletes the concurrent winner.
+  it('preserves a competitor created immediately before atomic publication', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-race-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await writeFile(
+      join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'),
+      await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json'))
+    );
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+      '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.',
+      '--race-at', 'publish-0'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    const competitor = join(installRoot, 'usr/local/libexec/amazon-research/subscription-supervisor.mjs');
+    assert.equal(await readFile(competitor, 'utf8'), 'competitor\n');
+    const info = await stat(competitor);
+    assert.equal(info.isFile(), true);
+    assert.equal(info.size, Buffer.byteLength('competitor\n'));
+  });
+
+  // Break: rollback deletes a target that no longer has the invocation-owned inode.
+  it('preserves a published target replaced before rollback', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-replaced-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+      '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.',
+      '--race-at', 'rollback-0'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /injected rollback replacement 0/u);
+    assert.equal(await readFile(join(installRoot, 'usr/local/libexec/amazon-research/subscription-supervisor.mjs'), 'utf8'), 'replacement\n');
+  });
+
   it('verifies installed fixture bytes and rejects installed unit or nft drift', async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const root = await mkdtemp(join(sourceRoot, '.task14-installed-'));
@@ -343,7 +462,7 @@ describe('subscription provider derived local probe', () => {
     assert.equal(child.status, 0, child.stdout + child.stderr);
     const report = JSON.parse(child.stdout);
     assert.equal(report.ok, true);
-    assert.equal(report.evidence.provenance, 'executed-local-v2');
+    assert.equal(report.evidence.provenance, 'task5-owner-executed-v1');
     assert.equal(report.oracleHostVerified, false);
   });
 

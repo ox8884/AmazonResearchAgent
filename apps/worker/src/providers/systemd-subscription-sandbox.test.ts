@@ -13,6 +13,7 @@ import type {
 import { SystemdSubscriptionSandbox } from './systemd-subscription-sandbox';
 import { subscriptionSystemctlArguments } from './systemd-subscription-controller';
 import { loadSubscriptionSandboxArtifacts } from './subscription-sandbox-policy';
+import { runLocalSubscriptionEvidence, type LocalEvidenceScenario } from '../commands/subscription-local-evidence';
 
 const roots: string[] = [];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -365,6 +366,39 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   });
 });
 
+describe('Task-14 local evidence executes Task-5 owners', () => {
+  it('derives positive evidence from the real sandbox lifecycle and IPC helpers', async () => {
+    const report = await runLocalSubscriptionEvidence('codex');
+    expect(report.ok).toBe(true);
+    expect(report.provenance).toBe('task5-owner-executed-v1');
+    expect(report.events).toEqual(expect.arrayContaining([
+      'request-observed', 'ready-observed', 'result-atomically-published',
+      'explicit-stop', 'terminal-observed', 'exec-stop-post-observed', 'cgroup-observed'
+    ]));
+    expect(report.gc).toEqual([
+      { activeState: 'active', ageMinutes: 30, decision: 'retain' },
+      { activeState: 'inactive', ageMinutes: 5, decision: 'retain' },
+      { activeState: 'unknown', ageMinutes: 30, decision: 'retain' },
+      { activeState: 'inactive', ageMinutes: 11, decision: 'remove' }
+    ]);
+    expect(report.oracleHostVerified).toBe(false);
+    expect(report.liveProviderVerified).toBe(false);
+  });
+
+  it.each([
+    'missing-ready', 'status-before-ready', 'result-before-ready', 'start-failure',
+    'non-atomic-result', 'stop-failure', 'cgroup-not-empty', 'cleanup-residue'
+  ] satisfies readonly LocalEvidenceScenario[])('rejects hostile %s evidence', async (scenario) => {
+    await expect(runLocalSubscriptionEvidence('codex', scenario)).rejects.toBeDefined();
+  });
+
+  it('does not accept changed result evidence', async () => {
+    const report = await runLocalSubscriptionEvidence('codex', 'wrong-result-digest');
+    expect(report.ok).toBe(false);
+    expect(report.localFixtureVerified).toBe(false);
+  });
+});
+
 describe('subscription supervisor request boundary', () => {
   type SupervisorFixture = {
     readonly root: string;
@@ -602,7 +636,7 @@ describe('subscription sandbox host policy', () => {
     expect(helper).toContain("install -d -o amazon-research -g \"$GROUP\" -m 2770");
     expect(helper).toContain('while (( elapsed < 50 ))');
     expect(helper).toContain('systemctl show "$unit" --property=ActiveState --value');
-    expect(helper).toContain('[[ "$active" == inactive || "$active" == failed || -z "$active" ]]');
+    expect(helper).toContain('decision="$(/usr/bin/node "$GC_DECISION" "$active" "$age")"');
     expect(gc).toContain('manage-invocation.sh gc codex');
     expect(gc).toContain('manage-invocation.sh gc grok');
   });

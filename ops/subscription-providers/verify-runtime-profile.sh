@@ -12,6 +12,7 @@ readonly FIXTURE_MODE="$([[ -n "$FIXTURE_ROOT_ARG" ]] && printf 1 || printf '%s'
 readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
 fail() { printf 'verify-runtime-profile: %s\n' "$1" >&2; exit 1; }
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
+readonly ACTIVE_NFT_JSON="$(mktemp)"
 
 case "$MODE" in verify|dry-run) ;; *) fail 'usage: verify-runtime-profile.sh verify|dry-run codex|grok' ;; esac
 case "$ADAPTER" in codex|grok) ;; *) fail 'adapter must be codex or grok' ;; esac
@@ -22,6 +23,7 @@ readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$REPOSITORY_ROOT/
 readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
 readonly SOURCE_COMMON=(
   "$REPOSITORY_ROOT/ops/subscription-providers/manage-invocation.sh"
+  "$REPOSITORY_ROOT/ops/subscription-providers/subscription-gc-decision.mjs"
   "$REPOSITORY_ROOT/ops/subscription-providers/subscription-supervisor.mjs"
   "$REPOSITORY_ROOT/ops/systemd/amazon-research-subscription-gc.service"
   "$REPOSITORY_ROOT/ops/systemd/amazon-research-subscription-gc.timer"
@@ -30,6 +32,7 @@ readonly SOURCE_COMMON=(
 readonly INSTALLED_UNIT="${PREFIX}/etc/systemd/system/amazon-research-${ADAPTER}@.service"
 readonly INSTALLED_COMMON=(
   "${PREFIX}/usr/local/libexec/amazon-research/manage-invocation.sh"
+  "${PREFIX}/usr/local/libexec/amazon-research/subscription-gc-decision.mjs"
   "${PREFIX}/usr/local/libexec/amazon-research/subscription-supervisor.mjs"
   "${PREFIX}/etc/systemd/system/amazon-research-subscription-gc.service"
   "${PREFIX}/etc/systemd/system/amazon-research-subscription-gc.timer"
@@ -60,7 +63,7 @@ grep -Fqx -- "ExecStart=/usr/bin/node /usr/local/libexec/amazon-research/subscri
 grep -Fqx -- "ExecStopPost=+/usr/local/libexec/amazon-research/manage-invocation.sh cleanup $ADAPTER %i" <<<"$unit_text" || fail 'ExecStopPost drift'
 
 readonly RENDERED_POLICY="$(mktemp)"
-trap 'rm -f -- "$RENDERED_POLICY"' EXIT
+trap 'rm -f -- "$RENDERED_POLICY" "$ACTIVE_NFT_JSON"' EXIT
 node "$PROBE" --mode render-endpoint-policy --authority "$AUTHORITY" --environment "$ENVIRONMENT" >"$RENDERED_POLICY"
 readonly POLICY="$([[ "$MODE" == dry-run ]] && printf '%s' "$RENDERED_POLICY" || printf '%s' "$INSTALLED_POLICY")"
 grep -Eq 'elements = \{[^}]+\}' "$RENDERED_POLICY" || fail 'rendered policy is empty'
@@ -90,7 +93,8 @@ if [[ "$MODE" == verify ]]; then
     node "$PROBE" --mode verify-installed --authority "$AUTHORITY" >/dev/null
     systemd-analyze verify "$INSTALLED_UNIT" >/dev/null
     nft --check --file "$INSTALLED_POLICY"
-    nft --numeric list table inet amazon_research_subscription >/dev/null
+    /usr/sbin/nft --json list table inet amazon_research_subscription >"$ACTIVE_NFT_JSON"
+    node "$PROBE" --mode verify-active-nft --authority "$AUTHORITY" --active-json "$ACTIVE_NFT_JSON" >/dev/null
     pkaction --action-id org.freedesktop.systemd1.manage-units >/dev/null
     [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] || fail 'unified cgroup v2 required'
     readonly USER="ara-$ADAPTER"
