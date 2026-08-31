@@ -3,6 +3,13 @@ import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  assertDatabaseIdentifier,
+  assertRunId,
+  createDatabase,
+  dropDatabase as dropHarnessDatabase,
+  withGlobalDdlLock,
+} from '../../../test-harness/harness-boundaries.mjs';
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -10,13 +17,18 @@ const databaseUrl =
 const admin = postgres(databaseUrl, { max: 1 });
 const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migrations');
 const migration019 = '202608290019_subscription_ai_provider_schema.sql';
-const harnessRunId = process.env.ARA_TEST_RUN_ID;
-const deferDatabaseCleanup = Boolean(harnessRunId);
-const templateDatabase = `${harnessRunId ?? 'subscription_schema'}_template_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
-const databaseDropLock = 202608300830;
+const harnessRunId = process.env.ARA_TEST_RUN_ID === undefined
+  ? undefined
+  : assertRunId(process.env.ARA_TEST_RUN_ID);
+const deferDatabaseCleanup = harnessRunId !== undefined;
+const templateDatabase = assertDatabaseIdentifier(
+  `${harnessRunId ?? 'subscription_schema'}_template_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
+);
 const caseDatabases = Array.from(
   { length: 12 },
-  (_, index) => `${harnessRunId ?? 'subscription_schema'}_case_${index}_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
+  (_, index) => assertDatabaseIdentifier(
+    `${harnessRunId ?? 'subscription_schema'}_case_${index}_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
+  ),
 );
 let nextCaseDatabase = 0;
 async function migrationFilesBefore019(): Promise<readonly string[]> {
@@ -26,39 +38,36 @@ async function migrationFilesBefore019(): Promise<readonly string[]> {
 }
 
 beforeAll(async () => {
-  await admin.unsafe(`create database ${templateDatabase}`);
-  const templateUrl = new URL(databaseUrl);
-  templateUrl.pathname = `/${templateDatabase}`;
-  const template = postgres(templateUrl.toString(), { max: 1 });
-  try {
-    await template.unsafe('create schema extensions');
-    await template.unsafe(`
-      create schema storage;
-      create table storage.buckets (
-        id text primary key,
-        name text not null,
-        public boolean not null default false,
-        file_size_limit bigint,
-        allowed_mime_types text[]
-      );
-    `);
-    for (const file of await migrationFilesBefore019()) {
-      await template.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
+  await withGlobalDdlLock(admin, async () => {
+    await createDatabase(admin, templateDatabase);
+    const templateUrl = new URL(databaseUrl);
+    templateUrl.pathname = `/${templateDatabase}`;
+    const template = postgres(templateUrl.toString(), { max: 1 });
+    try {
+      await template.unsafe('create schema extensions');
+      await template.unsafe(`
+        create schema storage;
+        create table storage.buckets (
+          id text primary key,
+          name text not null,
+          public boolean not null default false,
+          file_size_limit bigint,
+          allowed_mime_types text[]
+        );
+      `);
+      for (const file of await migrationFilesBefore019()) {
+        await template.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
+      }
+    } finally {
+      await template.end();
     }
-  } finally {
-    await template.end();
-  }
-  for (const caseDatabase of caseDatabases) {
-    await admin.unsafe(`create database ${caseDatabase} template ${templateDatabase}`);
-  }
-}, 60_000);
+    for (const caseDatabase of caseDatabases) {
+      await createDatabase(admin, caseDatabase, templateDatabase);
+    }
+  });
+});
 async function dropDatabase(name: string): Promise<void> {
-  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
-  try {
-    await admin.unsafe(`drop database if exists ${name} with (force)`);
-  } finally {
-    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
-  }
+  await withGlobalDdlLock(admin, async () => dropHarnessDatabase(admin, name));
 }
 
 async function withDatabase(

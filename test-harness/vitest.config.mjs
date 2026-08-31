@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { defineConfig } from 'vitest/config';
+import { INTEGRATION_TEST_GLOBS, isIntegrationTestPath } from './harness-boundaries.mjs';
 
 const root = process.cwd();
 const harnessDirectory = import.meta.dirname;
-const integrationPattern = /\.(?:integration|acceptance)\.test\.tsx?$/u;
 
 function collectIntegrationFiles(directory) {
   const files = [];
@@ -13,7 +13,7 @@ function collectIntegrationFiles(directory) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...collectIntegrationFiles(path));
-    } else if (integrationPattern.test(entry.name)) {
+    } else if (isIntegrationTestPath(entry.name)) {
       files.push(path);
     }
   }
@@ -44,7 +44,7 @@ export default defineConfig({
           name: 'unit',
           root,
           include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-          exclude: ['**/*.integration.test.ts', '**/*.integration.test.tsx', '**/*.acceptance.test.ts'],
+          exclude: INTEGRATION_TEST_GLOBS,
         },
       },
       ...integrationProjects,

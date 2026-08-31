@@ -3,15 +3,25 @@ import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  assertDatabaseIdentifier,
+  assertRunId,
+  createDatabase,
+  dropDatabase as dropHarnessDatabase,
+  withGlobalDdlLock,
+} from '../../../test-harness/harness-boundaries.mjs';
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const admin = postgres(databaseUrl, { max: 1 });
-const harnessRunId = process.env.ARA_TEST_RUN_ID;
-const deferDatabaseCleanup = Boolean(harnessRunId);
-const databaseDropLock = 202608300830;
-const databaseName = `${harnessRunId ?? 'provider_attempts'}_provider_attempts_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+const harnessRunId = process.env.ARA_TEST_RUN_ID === undefined
+  ? undefined
+  : assertRunId(process.env.ARA_TEST_RUN_ID);
+const deferDatabaseCleanup = harnessRunId !== undefined;
+const databaseName = assertDatabaseIdentifier(
+  `${harnessRunId ?? 'provider_attempts'}_provider_attempts_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
+);
 const testUrl = new URL(databaseUrl);
 testUrl.pathname = `/${databaseName}`;
 const sql = postgres(testUrl.toString(), { max: 8 });
@@ -308,34 +318,31 @@ async function applyRuntimeFailure(
 }
 
 beforeAll(async () => {
-  await admin.unsafe(`create database ${databaseName}`);
-  await sql.unsafe('create schema extensions');
-  await sql.unsafe(`
-    create schema storage;
-    create table storage.buckets (
-      id text primary key,
-      name text not null,
-      public boolean not null default false,
-      file_size_limit bigint,
-      allowed_mime_types text[]
-    );
-  `);
-  await sql.unsafe(`alter default privileges in schema public grant all on tables to service_role`);
-  const files = (await readdir(migrationsDirectory))
-    .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
-    .sort();
-  for (const file of files) {
-    await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
-  }
-  await sql.unsafe('drop index ai_providers_subscription_adapter_unique');
+  await withGlobalDdlLock(admin, async () => {
+    await createDatabase(admin, databaseName);
+    await sql.unsafe('create schema extensions');
+    await sql.unsafe(`
+      create schema storage;
+      create table storage.buckets (
+        id text primary key,
+        name text not null,
+        public boolean not null default false,
+        file_size_limit bigint,
+        allowed_mime_types text[]
+      );
+    `);
+    await sql.unsafe('alter default privileges in schema public grant all on tables to service_role');
+    const files = (await readdir(migrationsDirectory))
+      .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
+      .sort();
+    for (const file of files) {
+      await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
+    }
+    await sql.unsafe('drop index ai_providers_subscription_adapter_unique');
+  });
 }, 60_000);
 async function dropDatabase(name: string): Promise<void> {
-  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
-  try {
-    await admin.unsafe(`drop database if exists ${name} with (force)`);
-  } finally {
-    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
-  }
+  await withGlobalDdlLock(admin, async () => dropHarnessDatabase(admin, name));
 }
 
 afterAll(async () => {

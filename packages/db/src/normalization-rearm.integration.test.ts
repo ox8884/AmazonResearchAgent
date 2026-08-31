@@ -3,50 +3,67 @@ import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, describe, expect, it } from 'vitest';
+import {
+  assertDatabaseIdentifier,
+  assertRunId,
+  createDatabase,
+  dropDatabase as dropHarnessDatabase,
+  withGlobalDdlLock,
+} from '../../../test-harness/harness-boundaries.mjs';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const harnessRunId = process.env.ARA_TEST_RUN_ID;
-const deferDatabaseCleanup = Boolean(harnessRunId);
-const databaseDropLock = 202608300830;
+const harnessRunId = process.env.ARA_TEST_RUN_ID === undefined
+  ? undefined
+  : assertRunId(process.env.ARA_TEST_RUN_ID);
+const deferDatabaseCleanup = harnessRunId !== undefined;
 const admin = postgres(databaseUrl, { max: 1 });
 const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migrations');
 const databases: string[] = [];
 
 async function provisionThrough021() {
-  const name = `${harnessRunId ?? 'normalization_rearm'}_normalization_rearm_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
-  databases.push(name);
-  await admin.unsafe(`create database ${name}`);
-  const url = new URL(databaseUrl);
-  url.pathname = `/${name}`;
-  const sql = postgres(url.toString(), { max: 4 });
-  await sql.unsafe('create schema extensions');
-  await sql.unsafe(`
-    create schema storage;
-    create table storage.buckets (
-      id text primary key,
-      name text not null,
-      public boolean not null default false,
-      file_size_limit bigint,
-      allowed_mime_types text[]
+  return withGlobalDdlLock(admin, async () => {
+    const name = assertDatabaseIdentifier(
+      `${harnessRunId ?? 'normalization_rearm'}_normalization_rearm_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
     );
-  `);
-  await sql.unsafe(`
-    do $$ begin
-      if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
-      if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
-      if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
-    end $$;
-    grant service_role, anon, authenticated to current_user;
-    alter default privileges in schema public grant all on tables to service_role;
-  `);
-  const files = (await readdir(migrationsDirectory))
-    .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
-    .sort();
-  for (const file of files) {
-    await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
-  }
-  return sql;
+    databases.push(name);
+    await createDatabase(admin, name);
+    const url = new URL(databaseUrl);
+    url.pathname = `/${name}`;
+    const sql = postgres(url.toString(), { max: 4 });
+    try {
+      await sql.unsafe('create schema extensions');
+      await sql.unsafe(`
+        create schema storage;
+        create table storage.buckets (
+          id text primary key,
+          name text not null,
+          public boolean not null default false,
+          file_size_limit bigint,
+          allowed_mime_types text[]
+        );
+      `);
+      await sql.unsafe(`
+        do $$ begin
+          if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+          if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+          if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+        end $$;
+        grant service_role, anon, authenticated to current_user;
+        alter default privileges in schema public grant all on tables to service_role;
+      `);
+      const files = (await readdir(migrationsDirectory))
+        .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
+        .sort();
+      for (const file of files) {
+        await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
+      }
+      return sql;
+    } catch (error) {
+      await sql.end();
+      throw error;
+    }
+  });
 }
 
 async function apply022(sql: ReturnType<typeof postgres>): Promise<void> {
@@ -190,12 +207,7 @@ async function seedReadyProvider(sql: ReturnType<typeof postgres>): Promise<{
   return { providerId, modelId };
 }
 async function dropDatabase(name: string): Promise<void> {
-  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
-  try {
-    await admin.unsafe(`drop database if exists ${name} with (force)`);
-  } finally {
-    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
-  }
+  await withGlobalDdlLock(admin, async () => dropHarnessDatabase(admin, name));
 }
 
 afterAll(async () => {

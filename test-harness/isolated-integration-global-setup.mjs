@@ -3,6 +3,15 @@ import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import postgres from 'postgres';
+import {
+  assertDatabaseIdentifier,
+  assertRunId,
+  assertRunOwnedDatabase,
+  createDatabase,
+  createIdempotentTeardown,
+  removeDockerContainer,
+  withGlobalDdlLock,
+} from './harness-boundaries.mjs';
 
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -13,7 +22,6 @@ const network = 'supabase_network_amazon_research_agent';
 const databaseHost = 'supabase_db_amazon_research_agent';
 const postgrestImage = 'public.ecr.aws/supabase/postgrest:v16.1';
 const jwtSecret = 'super-secret-jwt-token-with-at-least-32-characters-long';
-const provisioningLock = 202608300831;
 
 function serviceRoleToken() {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -27,14 +35,6 @@ function serviceRoleToken() {
   return `${unsigned}.${signature}`;
 }
 
-async function withProvisioningLock(admin, action) {
-  await admin.unsafe(`select pg_advisory_lock(${provisioningLock})`);
-  try {
-    return await action();
-  } finally {
-    await admin.unsafe(`select pg_advisory_unlock(${provisioningLock})`);
-  }
-}
 
 function required(value, name) {
   if (!value) throw new Error(`Isolated integration harness requires ${name}.`);
@@ -104,6 +104,13 @@ async function waitForPostgrest(url, key, containerName) {
 export async function setup(project) {
   const adminUrl = required(databaseUrl, 'TEST_DATABASE_URL');
   const key = required(serviceRoleKey, 'SUPABASE_SERVICE_ROLE_KEY');
+  const currentRun = assertRunId(required(runId, 'ARA_TEST_RUN_ID'));
+  const validatedTemplate = templateDatabase === undefined
+    ? undefined
+    : assertRunOwnedDatabase(templateDatabase, currentRun);
+  const validatedShared = process.env.ARA_TEST_SHARED_DATABASE
+    ? assertRunOwnedDatabase(process.env.ARA_TEST_SHARED_DATABASE, currentRun)
+    : undefined;
   const selfManaged = /(?:subscription-provider-schema|provider-attempts|provider-runtime|normalization-rearm)\.integration\.test\.ts$/u.test(
     project.name,
   );
@@ -113,19 +120,20 @@ export async function setup(project) {
     project.provide('isolatedDatabaseUrl', adminUrl);
     return async () => undefined;
   }
-  const sharedDatabase = process.env.ARA_TEST_SHARED_DATABASE;
-  if (sharedDatabase) {
+  if (validatedShared) {
     const sharedUrl = new URL(adminUrl);
-    sharedUrl.pathname = `/${sharedDatabase}`;
+    sharedUrl.pathname = `/${validatedShared}`;
     project.provide('isolatedSupabaseUrl', process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321');
     project.provide('isolatedServiceRoleKey', key);
     project.provide('isolatedDatabaseUrl', sharedUrl.toString());
     return async () => undefined;
   }
-  const template = required(templateDatabase, 'ARA_TEST_DATABASE_TEMPLATE');
-  const currentRun = required(runId, 'ARA_TEST_RUN_ID');
+  const template = validatedTemplate;
+  if (template === undefined) {
+    throw new Error('Isolated integration harness requires ARA_TEST_DATABASE_TEMPLATE.');
+  }
   const suffix = createHash('sha256').update(project.name).digest('hex').slice(0, 12);
-  const databaseName = `${currentRun}_${suffix}`;
+  const databaseName = assertDatabaseIdentifier(`${currentRun}_${suffix}`);
   const containerName = `${databaseName}_pgrst`;
   const admin = postgres(adminUrl, { max: 1 });
   const isolatedUrl = new URL(adminUrl);
@@ -133,11 +141,25 @@ export async function setup(project) {
   const ephemeralKey = serviceRoleToken();
   let proxy;
   let supabaseUrl = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
+  const closeProxy = async () => {
+    if (!proxy) return;
+    await new Promise((resolveClose, reject) => {
+      proxy.server.close((error) => error ? reject(error) : resolveClose());
+    });
+  };
+  const teardown = createIdempotentTeardown([
+    ['proxy', closeProxy],
+    ['docker', async () => {
+      if (needsRest) removeDockerContainer(containerName);
+    }],
+    ['admin', async () => admin.end()],
+  ]);
 
   try {
-    await withProvisioningLock(admin, async () => {
-      await admin.unsafe(`create database ${databaseName} template ${template}`);
-      if (!needsRest) return;
+    await withGlobalDdlLock(admin, async () => {
+      await createDatabase(admin, databaseName, template);
+    });
+    if (needsRest) {
       docker([
         'run', '-d', '--rm', '--name', containerName,
         '--network', network,
@@ -155,25 +177,14 @@ export async function setup(project) {
       proxy = await startProxy(targetPort);
       await waitForPostgrest(`http://127.0.0.1:${targetPort}`, ephemeralKey, containerName);
       supabaseUrl = proxy.url;
-    });
+    }
 
     project.provide('isolatedSupabaseUrl', supabaseUrl);
     project.provide('isolatedServiceRoleKey', needsRest ? ephemeralKey : key);
     project.provide('isolatedDatabaseUrl', isolatedUrl.toString());
   } catch (error) {
-    proxy?.server.close();
-    if (needsRest) spawnSync('docker', ['rm', '-f', containerName], { encoding: 'utf8' });
-    await admin.end();
-    throw error;
+    await teardown(error);
   }
 
-  return async () => {
-    if (proxy) {
-      await new Promise((resolveClose, reject) => {
-        proxy.server.close((error) => error ? reject(error) : resolveClose());
-      });
-    }
-    if (needsRest) spawnSync('docker', ['rm', '-f', containerName], { encoding: 'utf8' });
-    await admin.end();
-  };
+  return teardown;
 }
