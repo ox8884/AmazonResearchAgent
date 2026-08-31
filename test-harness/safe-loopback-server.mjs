@@ -58,15 +58,27 @@ export async function listenOnFetchSafeLoopback(server, options = {}) {
     throw new RangeError('Safe loopback maxAttempts must be a positive integer.');
   }
   const candidates = options.candidates ?? defaultCandidates(maxAttempts);
-  const iterator = candidates[Symbol.iterator]();
+  let iterator;
+  let nextMethod;
   let attempts = 0;
   let completed = false;
   let result;
   let primaryError;
 
   try {
+    iterator = candidates[Symbol.iterator]();
+    if (iterator === null || (typeof iterator !== 'object' && typeof iterator !== 'function')) {
+      throw new TypeError('Safe loopback candidates iterator must be an object.');
+    }
+    nextMethod = iterator.next;
+    if (typeof nextMethod !== 'function') {
+      throw new TypeError('Safe loopback candidates iterator next must be callable.');
+    }
     while (attempts < maxAttempts) {
-      const next = iterator.next();
+      const next = nextMethod.call(iterator);
+      if (next === null || (typeof next !== 'object' && typeof next !== 'function')) {
+        throw new TypeError('Safe loopback candidates iterator result must be an object.');
+      }
       if (next.done) {
         completed = true;
         break;
@@ -111,9 +123,21 @@ export async function listenOnFetchSafeLoopback(server, options = {}) {
   }
 
   let finalizationError;
-  if (!completed && typeof iterator.return === 'function') {
+  if (!completed && iterator !== undefined
+    && iterator !== null
+    && (typeof iterator === 'object' || typeof iterator === 'function')) {
     try {
-      iterator.return();
+      const returnMethod = iterator.return;
+      if (returnMethod !== undefined) {
+        if (typeof returnMethod !== 'function') {
+          throw new TypeError('Safe loopback candidates iterator return must be callable.');
+        }
+        const returnResult = returnMethod.call(iterator);
+        if (returnResult === null
+          || (typeof returnResult !== 'object' && typeof returnResult !== 'function')) {
+          throw new TypeError('Safe loopback candidates iterator return result must be an object.');
+        }
+      }
     } catch (error) {
       finalizationError = error;
     }

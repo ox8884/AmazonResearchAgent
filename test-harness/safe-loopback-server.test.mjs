@@ -287,6 +287,186 @@ test('preserves iterator failures and reports finalization failures deterministi
   });
 });
 
+test('rejects malformed synchronous iterators without obscuring protocol failures', async (t) => {
+  const malformedAcquisitionCases = [
+    ['null iterator', null],
+    ['primitive iterator', 1],
+  ];
+  for (const [name, returned] of malformedAcquisitionCases) {
+    await t.test(name, async () => {
+      const server = new ScriptedServer([]);
+      await assert.rejects(
+        listenOnFetchSafeLoopback(server, {
+          candidates: { [Symbol.iterator]: () => returned },
+        }),
+        (error) => error instanceof TypeError && /iterator/u.test(error.message),
+      );
+      assert.equal(server.calls.length, 0);
+    });
+  }
+
+  const malformedNextCases = [
+    ['missing next', undefined],
+    ['non-callable next', 1],
+  ];
+  for (const [name, next] of malformedNextCases) {
+    await t.test(name, async () => {
+      const server = new ScriptedServer([]);
+      await assert.rejects(
+        listenOnFetchSafeLoopback(server, {
+          candidates: { [Symbol.iterator]: () => ({ next }) },
+        }),
+        (error) => error instanceof TypeError && /next/u.test(error.message),
+      );
+      assert.equal(server.calls.length, 0);
+    });
+  }
+
+  await t.test('throwing next getter preserves its identity', async () => {
+    const nextGetterError = new Error('next getter failed');
+    const iterator = {
+      get next() {
+        throw nextGetterError;
+      },
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer([]), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => error === nextGetterError,
+    );
+  });
+
+  for (const [name, nextResult] of [['null next result', null], ['primitive next result', 1]]) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        listenOnFetchSafeLoopback(new ScriptedServer([]), {
+          candidates: { [Symbol.iterator]: () => ({ next: () => nextResult }) },
+        }),
+        (error) => error instanceof TypeError && /result/u.test(error.message),
+      );
+    });
+  }
+});
+
+test('preserves iterator acquisition failures before server mutation', async (t) => {
+  for (const source of ['getter', 'call']) {
+    await t.test(source, async () => {
+      const acquisitionError = new Error(`iterator ${source} failed`);
+      const candidates = source === 'getter'
+        ? Object.defineProperty({}, Symbol.iterator, {
+          get() {
+            throw acquisitionError;
+          },
+        })
+        : { [Symbol.iterator]() { throw acquisitionError; } };
+      const server = new ScriptedServer([]);
+      await assert.rejects(
+        listenOnFetchSafeLoopback(server, { candidates }),
+        (error) => error === acquisitionError,
+      );
+      assert.equal(server.calls.length, 0);
+    });
+  }
+});
+
+test('guards iterator return lookup and preserves both causal failures', async (t) => {
+  await t.test('next failure plus throwing return getter', async () => {
+    const primaryError = new Error('next failed first');
+    const finalizationError = new Error('return getter failed second');
+    const iterator = {
+      next() {
+        throw primaryError;
+      },
+      get return() {
+        throw finalizationError;
+      },
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer([]), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [primaryError, finalizationError]);
+        return true;
+      },
+    );
+  });
+
+  await t.test('candidate failure plus throwing return getter', async () => {
+    const finalizationError = new Error('return getter failed');
+    const iterator = {
+      next: () => ({ done: false, value: -1 }),
+      get return() {
+        throw finalizationError;
+      },
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer([]), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.ok(error.errors[0] instanceof RangeError);
+        assert.equal(error.errors[1], finalizationError);
+        return true;
+      },
+    );
+  });
+
+  await t.test('throwing return getter after success preserves identity', async () => {
+    const finalizationError = new Error('return getter failed');
+    const iterator = {
+      next: () => ({ done: false, value: 18093 }),
+      get return() {
+        throw finalizationError;
+      },
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer(['success']), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => error === finalizationError,
+    );
+  });
+
+  await t.test('non-callable return fails clearly after success', async () => {
+    const iterator = {
+      next: () => ({ done: false, value: 18094 }),
+      return: 1,
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer(['success']), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => error instanceof TypeError && /return/u.test(error.message),
+    );
+  });
+
+  await t.test('primary failure and non-callable return are aggregated', async () => {
+    const primaryError = new Error('next failed first');
+    const iterator = {
+      next() {
+        throw primaryError;
+      },
+      return: 1,
+    };
+    await assert.rejects(
+      listenOnFetchSafeLoopback(new ScriptedServer([]), {
+        candidates: { [Symbol.iterator]: () => iterator },
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors[0], primaryError);
+        assert.ok(error.errors[1] instanceof TypeError);
+        assert.match(error.errors[1].message, /return/u);
+        return true;
+      },
+    );
+  });
+});
+
 test('concurrent allocations keep distinct active listeners and return Fetch-accepted URLs', async () => {
   const first = createServer((_request, response) => response.end('first'));
   const second = createServer((_request, response) => response.end('second'));
