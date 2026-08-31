@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "fixtureOnly": true,
+  "review": {
+    "identity": "task14-local-fixture",
+    "version": "1",
+    "bindingsSha256": "4a6bf65817e9ec1d83a0df09c33cbaa57c06789f47cfa06b71403dce7d668d30"
+  },
+  "resolvers": {
+    "ipv4": ["192.0.2.53"],
+    "ipv6": ["2001:db8::53"]
+  },
+  "adapters": {
+    "codex": {
+      "provider": {
+        "ipv4": ["198.51.100.0/24"],
+        "ipv6": ["2001:db8:1::/48"]
+      },
+      "auth": {
+        "ipv4": ["203.0.113.0/24"],
+        "ipv6": ["2001:db8:2::/48"]
+      }
+    },
+    "grok": {
+      "provider": {
+        "ipv4": ["198.51.100.0/24"],
+        "ipv6": ["2001:db8:3::/48"]
+      },
+      "auth": {
+        "ipv4": ["203.0.113.0/24"],
+        "ipv6": ["2001:db8:4::/48"]
+      }
+    }
+  }
+}

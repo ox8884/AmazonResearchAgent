@@ -4,13 +4,18 @@ set -euo pipefail
 readonly MODE="${1:-}"
 readonly REPOSITORY_ROOT="${ARA_REPOSITORY_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 readonly PREFIX="${ARA_INSTALL_ROOT:-}"
+readonly FIXTURE_MODE="${ARA_FIXTURE_MODE:-0}"
+readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
+readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json"
+readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
 
 fail() { printf 'install-systemd-sandbox: %s\n' "$1" >&2; exit 1; }
 root_path() { printf '%s%s' "$PREFIX" "$1"; }
-require_root() { [[ "$MODE" != install || "${EUID:-$(id -u)}" -eq 0 ]] || fail 'install requires root'; }
+sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 
 case "$MODE" in install|verify|dry-run) ;; *) fail 'usage: install-systemd-sandbox.sh install|verify|dry-run' ;; esac
-require_root
+[[ "$MODE" != install || -z "$PREFIX" || "$FIXTURE_MODE" == 1 ]] || fail 'prefixed install requires fixture mode'
+[[ "$MODE" != install || "$FIXTURE_MODE" == 1 || "${EUID:-$(id -u)}" -eq 0 ]] || fail 'install requires root'
 
 if [[ -z "$PREFIX" && "$MODE" != dry-run ]]; then
   [[ "$(uname -s)" == Linux ]] || fail 'host verification requires Linux'
@@ -23,9 +28,10 @@ if [[ -z "$PREFIX" && "$MODE" != dry-run ]]; then
   [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] || fail 'unified cgroup v2 required'
   command -v nft >/dev/null || fail 'nftables required'
   command -v pkaction >/dev/null || fail 'polkit required'
-else
-  [[ "$MODE" != install ]] || fail 'prefixed fixtures are verify/dry-run only'
 fi
+command -v node >/dev/null || fail 'node required'
+command -v install >/dev/null || fail 'install required'
+command -v sha256sum >/dev/null || fail 'sha256sum required'
 
 readonly ARTIFACTS=(
   'ops/subscription-providers/subscription-supervisor.mjs|/usr/local/libexec/amazon-research/subscription-supervisor.mjs|0500'
@@ -35,55 +41,115 @@ readonly ARTIFACTS=(
   'ops/systemd/amazon-research-subscription-gc.service|/etc/systemd/system/amazon-research-subscription-gc.service|0444'
   'ops/systemd/amazon-research-subscription-gc.timer|/etc/systemd/system/amazon-research-subscription-gc.timer|0444'
   'ops/polkit/50-amazon-research-subscription.rules|/etc/polkit-1/rules.d/50-amazon-research-subscription.rules|0444'
-  'ops/nftables/amazon-research-subscription.nft|/etc/nftables.d/amazon-research-subscription.nft|0444'
 )
 
-verify_source() {
-  local source="$1"
-  [[ -f "$source" && ! -L "$source" ]] || fail "invalid source artifact: $source"
+verify_regular() {
+  local path="$1"
+  [[ -f "$path" && ! -L "$path" ]] || fail "invalid regular file: $path"
+}
+
+verify_target_parent() {
+  local target="$1" parent
+  parent="$(dirname -- "$target")"
+  if [[ -e "$parent" || -L "$parent" ]]; then
+    [[ -d "$parent" && ! -L "$parent" ]] || fail "unsafe target parent: $parent"
+  fi
 }
 
 verify_installed() {
-  local source="$1" target="$2" mode="$3" expected actual owner
-  [[ -f "$target" && ! -L "$target" ]] || fail "missing regular installed artifact: $target"
-  expected="$(sha256sum -- "$source" | cut -d' ' -f1)"
-  actual="$(sha256sum -- "$target" | cut -d' ' -f1)"
-  [[ "$actual" == "$expected" ]] || fail "digest drift: $target"
-  owner="$(stat -c '%u:%g:%a' -- "$target")"
-  [[ "$owner" == "0:0:${mode#0}" ]] || fail "owner or mode drift: $target"
-}
-
-install_one() {
-  local source="$1" target="$2" mode="$3" directory
-  directory="$(dirname -- "$target")"
-  install -d -o root -g root -m 0755 -- "$directory"
-  if [[ -e "$target" || -L "$target" ]]; then
-    verify_installed "$source" "$target" "$mode"
-    return
+  local source="$1" target="$2" mode="$3" metadata="${4:-installed}" owner
+  verify_regular "$target"
+  [[ "$(sha "$target")" == "$(sha "$source")" ]] || fail "digest drift: $target"
+  if [[ "$metadata" == installed && "$FIXTURE_MODE" != 1 ]]; then
+    owner="$(stat -c '%u:%g:%a' -- "$target")"
+    [[ "$owner" == "0:0:${mode#0}" ]] || fail "owner or mode drift: $target"
   fi
-  install -o root -g root -m "$mode" -- "$source" "$target"
-  verify_installed "$source" "$target" "$mode"
 }
 
+readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$FIXTURE_AUTHORITY" || printf '%s' "$HOST_AUTHORITY")"
+readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
+verify_regular "$PROBE"
+verify_regular "$AUTHORITY"
+if [[ "$ENVIRONMENT" == oracle ]]; then
+  [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
+  [[ "$(realpath -- "$AUTHORITY")" == '/etc/amazon-research/subscription/endpoint-bindings.json' ]] || fail 'endpoint authority fixed path rejected'
+fi
+
+declare -a SOURCES=() TARGETS=() MODES=()
 for spec in "${ARTIFACTS[@]}"; do
   IFS='|' read -r source_relative target_absolute mode <<<"$spec"
   source="$REPOSITORY_ROOT/$source_relative"
   target="$(root_path "$target_absolute")"
-  verify_source "$source"
-  case "$MODE" in
-    install) install_one "$source" "$target" "$mode" ;;
-    verify) verify_installed "$source" "$target" "$mode" ;;
-    dry-run) printf 'VERIFY %s -> %s sha256=%s mode=%s\n' "$source_relative" "$target_absolute" "$(sha256sum -- "$source" | cut -d' ' -f1)" "$mode" ;;
-  esac
+  verify_regular "$source"
+  verify_target_parent "$target"
+  if [[ -e "$target" || -L "$target" ]]; then verify_installed "$source" "$target" "$mode"; fi
+  SOURCES+=("$source") TARGETS+=("$target") MODES+=("$mode")
 done
+readonly NFT_TARGET="$(root_path /etc/nftables.d/amazon-research-subscription.nft)"
+verify_target_parent "$NFT_TARGET"
 
-if [[ "$MODE" == install ]]; then
-  systemd-analyze verify \
-    /etc/systemd/system/amazon-research-codex@.service \
-    /etc/systemd/system/amazon-research-grok@.service \
-    /etc/systemd/system/amazon-research-subscription-gc.service \
-    /etc/systemd/system/amazon-research-subscription-gc.timer
-  nft --check --file /etc/nftables.d/amazon-research-subscription.nft
-  systemctl daemon-reload
+if [[ "$MODE" == verify ]]; then
+  for index in "${!SOURCES[@]}"; do verify_installed "${SOURCES[$index]}" "${TARGETS[$index]}" "${MODES[$index]}"; done
+  temporary="$(mktemp)"
+  trap 'rm -f -- "$temporary"' EXIT
+  node "$PROBE" --mode render-endpoint-policy --authority "$AUTHORITY" --environment "$ENVIRONMENT" >"$temporary"
+  verify_installed "$temporary" "$NFT_TARGET" 0444
+  [[ "$FIXTURE_MODE" == 1 ]] || nft --check --file "$NFT_TARGET"
+  printf 'PASS mode=verify artifacts=%d endpoint_authority=%s production_activation=false\n' "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")"
+  exit 0
 fi
-printf 'PASS mode=%s artifacts=%d production_activation=false\n' "$MODE" "${#ARTIFACTS[@]}"
+
+readonly STAGE="$(mktemp -d)"
+trap 'rm -rf -- "$STAGE"' EXIT
+chmod 0700 "$STAGE"
+for index in "${!SOURCES[@]}"; do
+  install -m "${MODES[$index]}" -- "${SOURCES[$index]}" "$STAGE/$index"
+  verify_installed "${SOURCES[$index]}" "$STAGE/$index" "${MODES[$index]}" staged
+done
+grep -Fqx '[Service]' "$STAGE/2" || fail 'malformed Codex unit'
+grep -Fqx 'Type=notify' "$STAGE/2" || fail 'malformed Codex unit'
+grep -Fqx '[Service]' "$STAGE/3" || fail 'malformed Grok unit'
+grep -Fqx 'Type=notify' "$STAGE/3" || fail 'malformed Grok unit'
+grep -Fqx '[Service]' "$STAGE/4" || fail 'malformed GC service'
+grep -Fqx '[Timer]' "$STAGE/5" || fail 'malformed GC timer'
+grep -Eq '^On(UnitActive|Calendar)Sec=.+' "$STAGE/5" || fail 'malformed GC timer'
+grep -Fq 'polkit.addRule' "$STAGE/6" || fail 'malformed polkit rule'
+node "$PROBE" --mode render-endpoint-policy --authority "$AUTHORITY" --environment "$ENVIRONMENT" >"$STAGE/policy.nft"
+grep -Eq 'elements = \{[^}]+\}' "$STAGE/policy.nft" || fail 'rendered policy is empty'
+if [[ "$FIXTURE_MODE" != 1 && "$MODE" == install ]]; then
+  systemd-analyze verify "$STAGE/2" "$STAGE/3" "$STAGE/4" "$STAGE/5"
+  nft --check --file "$STAGE/policy.nft"
+fi
+
+if [[ "$MODE" == dry-run ]]; then
+  printf 'PASS mode=dry-run artifacts=%d authority_sha256=%s rendered_policy_sha256=%s fixture_only=true production_activation=false\n' \
+    "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")" "$(sha "$STAGE/policy.nft")"
+  exit 0
+fi
+
+declare -a CREATED=()
+rollback() {
+  local path
+  for path in "${CREATED[@]}"; do rm -f -- "$path"; done
+}
+trap 'rollback; rm -rf -- "$STAGE"' ERR
+for index in "${!SOURCES[@]}"; do
+  target="${TARGETS[$index]}"
+  if [[ ! -e "$target" && ! -L "$target" ]]; then
+    install -d -m 0755 -- "$(dirname -- "$target")"
+    install -m "${MODES[$index]}" -- "$STAGE/$index" "$target"
+    CREATED+=("$target")
+  fi
+done
+if [[ ! -e "$NFT_TARGET" && ! -L "$NFT_TARGET" ]]; then
+  install -d -m 0755 -- "$(dirname -- "$NFT_TARGET")"
+  install -m 0444 -- "$STAGE/policy.nft" "$NFT_TARGET"
+  CREATED+=("$NFT_TARGET")
+else
+  verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
+fi
+for index in "${!SOURCES[@]}"; do verify_installed "${SOURCES[$index]}" "${TARGETS[$index]}" "${MODES[$index]}"; done
+verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
+[[ "$FIXTURE_MODE" == 1 ]] || systemctl daemon-reload
+trap - ERR
+printf 'PASS mode=install artifacts=%d endpoint_authority=%s production_activation=false\n' "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")"

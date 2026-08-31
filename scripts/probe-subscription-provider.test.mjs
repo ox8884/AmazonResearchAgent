@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -9,226 +9,261 @@ import { fileURLToPath } from 'node:url';
 
 import {
   MAX_REPORT_BYTES,
+  canonicalizeEndpointAuthority,
+  renderEndpointPolicy,
+  runDerivedLocalProbe,
   runLocalFixtureProbe
 } from './probe-subscription-provider.mjs';
 
-const roots = [];
-const digest = (value) => value.repeat(64);
+const fixtureAuthority = () => ({
+  schemaVersion: 1,
+  fixtureOnly: true,
+  review: {
+    identity: 'task14-local-fixture',
+    version: '1',
+    bindingsSha256: 'pending'
+  },
+  resolvers: {
+    ipv4: ['192.0.2.53'],
+    ipv6: ['2001:db8::53']
+  },
+  adapters: {
+    codex: {
+      provider: { ipv4: ['198.51.100.0/24'], ipv6: ['2001:db8:1::/48'] },
+      auth: { ipv4: ['203.0.113.0/24'], ipv6: ['2001:db8:2::/48'] }
+    },
+    grok: {
+      provider: { ipv4: ['198.51.100.0/24'], ipv6: ['2001:db8:3::/48'] },
+      auth: { ipv4: ['203.0.113.0/24'], ipv6: ['2001:db8:4::/48'] }
+    }
+  }
+});
 
-function validFixture() {
-  const attemptId = '00000000-0000-4000-8000-000000000001';
-  const installedPaths = {
-    'subscription-supervisor.mjs': '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
-    'manage-invocation.sh': '/usr/local/libexec/amazon-research/manage-invocation.sh',
-    'amazon-research-subscription-gc.service': '/etc/systemd/system/amazon-research-subscription-gc.service',
-    'amazon-research-subscription-gc.timer': '/etc/systemd/system/amazon-research-subscription-gc.timer',
-    'amazon-research-codex@.service': '/etc/systemd/system/amazon-research-codex@.service',
-    '50-amazon-research-subscription.rules': '/etc/polkit-1/rules.d/50-amazon-research-subscription.rules',
-    'amazon-research-subscription.nft': '/etc/nftables.d/amazon-research-subscription.nft',
-    'codex-runtime-profile.json': '/etc/amazon-research/subscription/codex-runtime-profile.json'
-  };
-  const artifacts = Object.entries(installedPaths).map(([name, installedPath], index) => ({
-    name,
-    sourcePath: `C:/repo/ops/${name}`,
-    installedPath,
-    sourceSha256: digest(String((index % 9) + 1)),
-    installedSha256: digest(String((index % 9) + 1)),
-    ownerUid: 0,
-    ownerGid: 0,
-    mode: name.endsWith('.sh') || name.endsWith('.mjs') ? 0o500 : 0o444,
-    regularFile: true,
-    symlink: false,
-    mutable: false,
-    repositoryRelativeInstalledPath: false
-  }));
+function reviewedFixtureAuthority() {
+  const authority = fixtureAuthority();
+  const first = canonicalizeEndpointAuthority(authority, { environment: 'local-fixture', verifyDigest: false });
+  authority.review.bindingsSha256 = first.bindingsSha256;
+  return authority;
+}
+
+describe('endpoint binding authority', () => {
+  it('renders nonempty deterministic adapter-specific nft sets', () => {
+    const authority = reviewedFixtureAuthority();
+    const canonical = canonicalizeEndpointAuthority(authority, { environment: 'local-fixture' });
+    const rendered = renderEndpointPolicy(canonical);
+    assert.match(rendered.text, /elements = \{ 192\.0\.2\.53 \}/u);
+    assert.match(rendered.text, /codex_https_v4[^\n]*elements = \{ 198\.51\.100\.0\/24, 203\.0\.113\.0\/24 \}/u);
+    assert.equal(rendered.text.includes('elements = {  }'), false);
+    assert.match(rendered.sha256, /^[0-9a-f]{64}$/u);
+  });
+
+  for (const [name, mutate] of [
+    ['empty resolver set', (a) => { a.resolvers.ipv4 = []; a.resolvers.ipv6 = []; }],
+    ['missing adapter auth endpoint', (a) => { a.adapters.codex.auth.ipv4 = []; a.adapters.codex.auth.ipv6 = []; }],
+    ['IPv4 in IPv6 field', (a) => { a.resolvers.ipv6 = ['192.0.2.1']; }],
+    ['host bits in prefix', (a) => { a.adapters.codex.provider.ipv4 = ['198.51.100.1/24']; }],
+    ['noncanonical duplicate', (a) => { a.adapters.codex.provider.ipv4.push('198.51.100.0/24'); }],
+    ['loopback address', (a) => { a.resolvers.ipv4 = ['127.0.0.1']; }],
+    ['metadata address', (a) => { a.resolvers.ipv4 = ['169.254.169.254']; }],
+    ['unknown adapter', (a) => { a.adapters.evil = a.adapters.codex; }],
+    ['shell injection', (a) => { a.resolvers.ipv4 = ['192.0.2.1; flush ruleset']; }],
+    ['unreviewed prefix injection', (a) => { a.adapters.codex.provider.ipv4 = ['198.51.100.0/25']; }],
+    ['unspecified address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['0.0.0.0']; }],
+    ['private address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['10.0.0.1']; }],
+    ['multicast address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['239.1.1.1']; }],
+    ['link-local address', (a) => { a.fixtureOnly = false; a.resolvers.ipv6 = ['fe80::1']; }],
+    ['Tailscale address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['100.100.100.100']; }]
+  ]) {
+    it(`rejects ${name}`, () => {
+      const authority = reviewedFixtureAuthority();
+      mutate(authority);
+      assert.throws(() => canonicalizeEndpointAuthority(authority, { environment: 'local-fixture' }));
+    });
+  }
+
+  it('refuses fixture-only bindings in Oracle mode', () => {
+    assert.throws(() => canonicalizeEndpointAuthority(reviewedFixtureAuthority(), { environment: 'oracle' }));
+  });
+
+  it('canonical ordering produces the same authority and policy digest', () => {
+    const left = reviewedFixtureAuthority();
+    left.adapters.codex.provider.ipv4 = ['203.0.113.0/24', '198.51.100.0/24'];
+    const unsigned = canonicalizeEndpointAuthority(left, { environment: 'local-fixture', verifyDigest: false });
+    left.review.bindingsSha256 = unsigned.bindingsSha256;
+    const right = structuredClone(left);
+    right.adapters.codex.provider.ipv4.reverse();
+    const a = canonicalizeEndpointAuthority(left, { environment: 'local-fixture' });
+    const b = canonicalizeEndpointAuthority(right, { environment: 'local-fixture' });
+    assert.equal(a.bindingsSha256, b.bindingsSha256);
+    assert.equal(renderEndpointPolicy(a).sha256, renderEndpointPolicy(b).sha256);
+  });
+});
+describe('installer full preflight', () => {
+  it('leaves every target absent when the final unit is malformed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ara-task14-installer-'));
+    roots.push(root);
+    const repository = join(root, 'repo');
+    const installRoot = join(root, 'target');
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const files = [
+      'scripts/probe-subscription-provider.mjs',
+      'ops/subscription-providers/endpoint-bindings.json',
+      'ops/subscription-providers/subscription-supervisor.mjs',
+      'ops/subscription-providers/manage-invocation.sh',
+      'ops/systemd/amazon-research-codex@.service',
+      'ops/systemd/amazon-research-grok@.service',
+      'ops/systemd/amazon-research-subscription-gc.service',
+      'ops/systemd/amazon-research-subscription-gc.timer',
+      'ops/polkit/50-amazon-research-subscription.rules'
+    ];
+    for (const relative of files) {
+      const target = join(repository, relative);
+      await mkdir(join(target, '..'), { recursive: true });
+      await writeFile(target, await readFile(join(sourceRoot, relative)));
+    }
+    await writeFile(join(repository, 'ops/systemd/amazon-research-subscription-gc.timer'), '[Timer]\nBROKEN');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await writeFile(
+      join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'),
+      await readFile(join(repository, 'ops/subscription-providers/endpoint-bindings.json'))
+    );
+    const installer = join(sourceRoot, 'ops/subscription-providers/install-systemd-sandbox.sh');
+    const child = spawnSync('bash', [installer, 'install'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ARA_REPOSITORY_ROOT: repository,
+        ARA_INSTALL_ROOT: installRoot,
+        ARA_FIXTURE_MODE: '1'
+      }
+    });
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    await assert.rejects(stat(join(installRoot, 'usr/local/libexec/amazon-research/subscription-supervisor.mjs')), { code: 'ENOENT' });
+    await assert.rejects(stat(join(installRoot, 'etc/systemd/system/amazon-research-codex@.service')), { code: 'ENOENT' });
+    await assert.rejects(stat(join(installRoot, 'etc/nftables.d/amazon-research-subscription.nft')), { code: 'ENOENT' });
+  });
+
+  it('leaves targets absent when endpoint authority rendering fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ara-task14-authority-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    const authority = reviewedFixtureAuthority();
+    authority.adapters.grok.auth.ipv4 = [];
+    await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), JSON.stringify(authority));
+    const installer = fileURLToPath(new URL('../ops/subscription-providers/install-systemd-sandbox.sh', import.meta.url));
+    const repository = fileURLToPath(new URL('..', import.meta.url));
+    const child = spawnSync('bash', [installer, 'install'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARA_REPOSITORY_ROOT: repository, ARA_INSTALL_ROOT: installRoot, ARA_FIXTURE_MODE: '1' }
+    });
+    assert.notEqual(child.status, 0);
+    await assert.rejects(stat(join(installRoot, 'etc/systemd/system/amazon-research-codex@.service')), { code: 'ENOENT' });
+  });
+});
+const roots = [];
+const attemptId = '00000000-0000-4000-8000-000000000001';
+const operations = [
+  'attempt-authorized', 'start-no-block', 'directory-created', 'directory-verified',
+  'pre-start-waiting-no-request', 'request-tmp-written', 'request-renamed',
+  'pre-start-validated', 'main-started', 'sandbox-validated', 'ready',
+  'provider-fixture-started', 'result-tmp-written', 'result-renamed',
+  'result-read', 'explicit-stop', 'cgroup-empty', 'exec-stop-post', 'terminal'
+];
+const gcStates = [
+  { activeState: 'active', ageMinutes: 30, expected: 'refuse' },
+  { activeState: 'inactive', ageMinutes: 5, expected: 'refuse' },
+  { activeState: 'unknown', ageMinutes: 30, expected: 'refuse' },
+  { activeState: 'inactive', ageMinutes: 11, expected: 'remove' }
+];
+
+function runner(command, args) {
+  const child = spawnSync(command, args, { encoding: 'utf8' });
+  return Promise.resolve({ exitCode: child.status ?? 1 });
+}
+
+function derivedInput(overrides = {}) {
   return {
-    schemaVersion: 1,
-    mode: 'local-fixture',
     adapter: 'codex',
     attemptId,
-    host: {
-      ubuntuRelease: '24.04',
-      systemdVersion: 255,
-      unifiedCgroupV2: true,
-      nftablesAvailable: true,
-      polkitAvailable: true
-    },
-    identities: {
-      worker: { name: 'amazon-research', uid: 500, gid: 500, loginShell: '/usr/sbin/nologin', groups: ['amazon-research', 'ara-codex-ipc', 'ara-grok-ipc'] },
-      codex: { name: 'ara-codex', uid: 501, gid: 501, loginShell: '/usr/sbin/nologin', groups: ['ara-codex', 'ara-codex-ipc'] },
-      grok: { name: 'ara-grok', uid: 502, gid: 502, loginShell: '/usr/sbin/nologin', groups: ['ara-grok', 'ara-grok-ipc'] }
-    },
-    authHomes: {
-      codex: { path: '/var/lib/amazon-research/subscription/codex', uid: 501, gid: 501, mode: 0o700, symlink: false },
-      grok: { path: '/var/lib/amazon-research/subscription/grok', uid: 502, gid: 502, mode: 0o700, symlink: false }
-    },
-    ipc: {
-      parent: { path: '/run/amazon-research/subscription/codex', uid: 0, gid: 601, mode: 0o750, regularDirectory: true, symlink: false },
-      invocation: { path: `/run/amazon-research/subscription/codex/${attemptId}`, uid: 500, gid: 601, mode: 0o2770, regularDirectory: true, symlink: false },
-      request: { path: `/run/amazon-research/subscription/codex/${attemptId}/request.json`, uid: 500, gid: 601, mode: 0o640, regularFile: true, symlink: false, size: 1024, sha256: digest('a'), publishedByRename: true, temporaryRemoved: true },
-      result: { path: `/run/amazon-research/subscription/codex/${attemptId}/result.json`, uid: 501, gid: 601, mode: 0o640, regularFile: true, symlink: false, size: 2048, sha256: digest('b'), publishedByRename: true, temporaryRemoved: true },
-      crossAdapterDenied: true
-    },
-    artifacts,
-    unit: {
-      name: `amazon-research-codex@${attemptId}.service`,
-      type: 'notify',
-      notifyAccess: 'main',
-      execStartPre: `/usr/local/libexec/amazon-research/manage-invocation.sh prepare-and-wait codex ${attemptId}`,
-      execStart: `/usr/bin/node /usr/local/libexec/amazon-research/subscription-supervisor.mjs codex ${attemptId}`,
-      execStopPost: `/usr/local/libexec/amazon-research/manage-invocation.sh cleanup codex ${attemptId}`,
-      timeoutStartSec: 20,
-      requestHandoffSec: 5,
-      executionSec: 120,
-      timeoutStopSec: 15,
-      killMode: 'control-group',
-      propertiesObserved: ['ActiveState', 'SubState', 'StatusText', 'ExecMainCode', 'ExecMainStatus', 'Result']
-    },
-    lifecycle: {
-      events: [
-        'attempt-authorized', 'start-no-block', 'directory-created', 'directory-verified',
-        'pre-start-waiting-no-request', 'request-tmp-written', 'request-renamed',
-        'pre-start-validated', 'main-started', 'sandbox-validated', 'ready',
-        'provider-fixture-started', 'result-tmp-written', 'result-renamed',
-        'result-read', 'explicit-stop', 'cgroup-empty', 'exec-stop-post', 'terminal'
-      ],
-      mainAbsentWithoutRequest: true,
-      statusWithoutReadyRejected: true,
-      terminalOnlyAfterStop: true,
-      failureMatrix: {
-        cancellationBeforeDirectory: 'clean',
-        cancellationBeforeRequest: 'clean',
-        cancellationBeforeReady: 'clean',
-        invalidRequest: 'rejected',
-        handoffTimeout: 'rejected',
-        startFailureBeforeDirectory: 'clean',
-        startFailureAfterDirectory: 'clean',
-        synchronousStartDeadlock: 'rejected',
-        noReadyTimeout: 'rejected'
-      }
-    },
-    containment: {
-      environmentAllowlistOnly: true,
-      journalContainsSecrets: false,
-      productionReadDenied: true,
-      workerEnvReadDenied: true,
-      unrelatedHomeReadDenied: true,
-      sshReadDenied: true,
-      hermesReadDenied: true,
-      externalWriteDenied: true,
-      shellExecDenied: true,
-      subprocessExecDenied: true,
-      arbitraryNetworkDenied: true,
-      inheritedConfigDenied: true,
-      hooksDenied: true,
-      mcpDenied: true,
-      sessionReuseDenied: true,
-      memoryPersistenceDenied: true,
-      providerOverrideDenied: true
-    },
-    network: {
-      resolverOnlyDns: true,
-      acceptedHttpsPrefixesOnly: true,
-      otherEgressRejected: true,
-      bindingDigestMatches: true
-    },
-    gc: {
-      activeRefused: true,
-      recentRefused: true,
-      ambiguousRefused: true,
-      agedInactiveRemoved: true
-    },
-    writerFence: {
-      phaseAIdentityMatches: true,
-      sharedLockVerified: true,
-      timerDisabled: true,
-      workerStopped: true,
-      leasesSettled: true,
-      exclusiveLockVerified: true,
-      migration022Defects: 0,
-      canonicalCapabilityRows: 1,
-      wrongModeRejected: true,
-      phaseBIdentityMatches: true
-    },
-    sanitized: true,
-    liveProviderCalled: false,
-    productionMutated: false
+    repositoryRoot: fileURLToPath(new URL('..', import.meta.url)).replaceAll('\\', '/'),
+    operations: [...operations],
+    gcStates: structuredClone(gcStates),
+    runner,
+    ...overrides
   };
 }
-
-function clone(value) {
-  return structuredClone(value);
-}
-
 function categories(result) {
   return result.checks.filter((check) => !check.ok).map((check) => check.category);
-}
-
-function expectFailure(mutator, expectedCategory) {
-  const fixture = clone(validFixture());
-  mutator(fixture);
-  const result = runLocalFixtureProbe(fixture);
-  assert.equal(result.ok, false);
-  assert.ok(categories(result).includes(expectedCategory), JSON.stringify(result));
 }
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe('subscription provider local fixture probe', () => {
-  it('accepts the complete fixed Task-5 lifecycle and denial matrix', () => {
-    const result = runLocalFixtureProbe(validFixture());
+describe('subscription provider derived local probe', () => {
+  it('derives acceptance from fixed files, commands, lifecycle operations, and GC states', async () => {
+    const result = await runDerivedLocalProbe(derivedInput());
     assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.mode, 'local-fixture');
+    assert.equal(result.localFixtureVerified, true);
     assert.equal(result.oracleHostVerified, false);
     assert.equal(result.liveProviderVerified, false);
+    assert.equal(result.evidence.provenance, 'derived-local-v1');
+    assert.match(result.evidence.renderedPolicySha256, /^[0-9a-f]{64}$/u);
+    assert.deepEqual(result.evidence.lifecycleEvents, operations);
   });
 
-  for (const [name, mutate, category] of [
-    ['systemd below 255', (f) => { f.host.systemdVersion = 254; }, 'host-capability'],
-    ['non-unified cgroup', (f) => { f.host.unifiedCgroupV2 = false; }, 'host-capability'],
-    ['missing nftables', (f) => { f.host.nftablesAvailable = false; }, 'host-capability'],
-    ['missing polkit', (f) => { f.host.polkitAvailable = false; }, 'host-capability'],
-    ['wrong exact membership', (f) => { f.identities.codex.groups.push('ara-grok-ipc'); }, 'identity'],
-    ['login-capable adapter identity', (f) => { f.identities.codex.loginShell = '/bin/bash'; }, 'identity'],
-    ['shared auth home', (f) => { f.authHomes.grok.path = f.authHomes.codex.path; }, 'auth-home'],
-    ['wrong auth mode', (f) => { f.authHomes.codex.mode = 0o750; }, 'auth-home'],
-    ['wrong invocation owner', (f) => { f.ipc.invocation.uid = 0; }, 'ipc'],
-    ['request symlink', (f) => { f.ipc.request.symlink = true; }, 'ipc'],
-    ['oversized result', (f) => { f.ipc.result.size = 2 * 1024 * 1024 + 1; }, 'ipc'],
-    ['non-atomic request', (f) => { f.ipc.request.publishedByRename = false; }, 'ipc'],
-    ['cross-adapter IPC access', (f) => { f.ipc.crossAdapterDenied = false; }, 'ipc'],
-    ['artifact digest drift', (f) => { f.artifacts[0].installedSha256 = digest('f'); }, 'artifact'],
-    ['mutable artifact', (f) => { f.artifacts[0].mutable = true; }, 'artifact'],
-    ['artifact symlink', (f) => { f.artifacts[0].symlink = true; }, 'artifact'],
-    ['repo-relative installed artifact', (f) => { f.artifacts[0].repositoryRelativeInstalledPath = true; }, 'artifact'],
-    ['synchronous start', (f) => { f.lifecycle.events[1] = 'start-blocking'; }, 'lifecycle'],
-    ['MAIN before READY contract', (f) => { const a = f.lifecycle.events.indexOf('ready'); const b = f.lifecycle.events.indexOf('provider-fixture-started'); [f.lifecycle.events[a], f.lifecycle.events[b]] = [f.lifecycle.events[b], f.lifecycle.events[a]]; }, 'lifecycle'],
-    ['STATUS substitutes for READY', (f) => { f.lifecycle.statusWithoutReadyRejected = false; }, 'lifecycle'],
-    ['missing cancellation case', (f) => { delete f.lifecycle.failureMatrix.cancellationBeforeReady; }, 'failure-matrix'],
-    ['unsafe active GC', (f) => { f.gc.activeRefused = false; }, 'gc'],
-    ['resolver drift', (f) => { f.network.bindingDigestMatches = false; }, 'network'],
-    ['environment leak', (f) => { f.containment.environmentAllowlistOnly = false; }, 'containment'],
-    ['journal secret leak', (f) => { f.containment.journalContainsSecrets = true; }, 'containment'],
-    ['filesystem escape', (f) => { f.containment.productionReadDenied = false; }, 'containment'],
-    ['exec escape', (f) => { f.containment.shellExecDenied = false; }, 'containment'],
-    ['network escape', (f) => { f.containment.arbitraryNetworkDenied = false; }, 'containment'],
-    ['incomplete writer fence', (f) => { f.writerFence.workerStopped = false; }, 'writer-fence'],
-    ['wrong writer artifact pairing', (f) => { f.writerFence.phaseBIdentityMatches = false; }, 'writer-fence'],
-    ['live provider call in local mode', (f) => { f.liveProviderCalled = true; }, 'safety-boundary'],
-    ['production mutation in local mode', (f) => { f.productionMutated = true; }, 'safety-boundary']
+  it('rejects the former fabricated all-true fixture', () => {
+    const result = runLocalFixtureProbe({ allClaims: true, ok: true, oracleHostVerified: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.localFixtureVerified, false);
+    assert.equal(result.oracleHostVerified, false);
+    assert.ok(categories(result).includes('self-attested-fixture-rejected'));
+  });
+
+  for (const [name, mutate] of [
+    ['missing READY', (value) => value.filter((event) => event !== 'ready')],
+    ['duplicate READY', (value) => [...value.slice(0, 11), 'ready', ...value.slice(11)]],
+    ['reordered READY', (value) => { const copy = [...value]; [copy[10], copy[11]] = [copy[11], copy[10]]; return copy; }],
+    ['result before READY', (value) => { const copy = [...value]; const result = copy.splice(copy.indexOf('result-read'), 1)[0]; copy.splice(9, 0, result); return copy; }],
+    ['no explicit stop', (value) => value.filter((event) => event !== 'explicit-stop')],
+    ['ExecStopPost before cgroup empty', (value) => { const copy = [...value]; const a = copy.indexOf('cgroup-empty'); const b = copy.indexOf('exec-stop-post'); [copy[a], copy[b]] = [copy[b], copy[a]]; return copy; }]
   ]) {
-    it(`fails closed for ${name}`, () => expectFailure(mutate, category));
+    it(`fails for ${name}`, async () => {
+      const result = await runDerivedLocalProbe(derivedInput({ operations: mutate(operations) }));
+      assert.equal(result.ok, false);
+      assert.ok(categories(result).includes('lifecycle'));
+    });
   }
 
-  it('emits bounded sanitized JSON and exits nonzero for a missing category', async () => {
+  for (const [name, index, expected] of [
+    ['active GC removal', 0, 'remove'],
+    ['recent GC removal', 1, 'remove'],
+    ['ambiguous GC removal', 2, 'remove'],
+    ['aged inactive GC refusal', 3, 'refuse']
+  ]) {
+    it(`fails for ${name}`, async () => {
+      const states = structuredClone(gcStates);
+      states[index].expected = expected;
+      const result = await runDerivedLocalProbe(derivedInput({ gcStates: states }));
+      assert.equal(result.ok, false);
+      assert.ok(categories(result).includes('gc'));
+    });
+  }
+
+  it('fails when a fixed command reports nonzero', async () => {
+    const result = await runDerivedLocalProbe(derivedInput({
+      runner: async () => ({ exitCode: 1 })
+    }));
+    assert.equal(result.ok, false);
+    assert.ok(categories(result).includes('fixed-command-plan'));
+  });
+
+  it('emits bounded sanitized JSON and exits nonzero for self-attested input', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ara-task14-probe-'));
     roots.push(root);
     const fixturePath = join(root, 'fixture.json');
-    const fixture = validFixture();
-    fixture.containment.sshReadDenied = false;
-    await writeFile(fixturePath, JSON.stringify(fixture));
+    await writeFile(fixturePath, JSON.stringify({ allClaims: true, oracleHostVerified: true }));
     const child = spawnSync(process.execPath, [
       fileURLToPath(new URL('./probe-subscription-provider.mjs', import.meta.url)),
       '--mode', 'local-fixture', '--fixture', fixturePath
@@ -237,8 +272,6 @@ describe('subscription provider local fixture probe', () => {
     assert.ok(Buffer.byteLength(child.stdout) <= MAX_REPORT_BYTES);
     const report = JSON.parse(child.stdout);
     assert.equal(report.ok, false);
-    assert.ok(categories(report).includes('containment'));
-    assert.equal(child.stdout.includes('fixture prompt'), false);
-    assert.equal(child.stdout.includes('/home/'), false);
+    assert.equal(report.oracleHostVerified, false);
   });
 });

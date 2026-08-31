@@ -28,12 +28,15 @@ Real subscription CLI profiles remain disabled until the same version, structure
 
 ## Subscription sandbox probe modes
 
-Task 14 adds `scripts/probe-subscription-provider.mjs` with one authorized local mode:
+Task 14 exposes two closed local operations in `scripts/probe-subscription-provider.mjs`:
 
 ```text
-node scripts/probe-subscription-provider.mjs --mode local-fixture --fixture ABSOLUTE_FIXTURE_JSON
+node scripts/probe-subscription-provider.mjs --mode render-endpoint-policy --authority ops/subscription-providers/endpoint-bindings.json --environment local-fixture
+node --test scripts/probe-subscription-provider.test.mjs
 ```
 
-It validates deterministic fixture evidence for the fixed Task-5 unit/profile, lifecycle/failure matrix, artifact and IPC identity, containment, endpoint binding, GC, and writer fence. Output is bounded sanitized JSON; every missing category exits nonzero. A local result always reports `oracleHostVerified:false` and `liveProviderVerified:false`.
+The checked-in endpoint authority is explicitly `fixtureOnly:true` and contains only RFC 5737/RFC 3849 documentation ranges. The parser validates its closed schema, canonical address families/prefixes, nonempty adapter-specific provider/auth sets, and review digest before deterministic rendering. Oracle mode rejects that fixture; it requires a separately reviewed root-owned `0444`, regular, no-symlink authority at the fixed host path.
+
+Local acceptance is derived from concrete repository files, their SHA-256 digests, the rendered nonempty policy, fixed command exit codes, ordered lifecycle operations evaluated by the probe state machine, and concrete GC inputs. Caller-provided booleans and the former all-true JSON fixture cannot establish `ok:true`. Output records `provenance:derived-local-v1`, `localFixtureVerified`, `oracleHostVerified`, and `liveProviderVerified` separately. Local synthetic evidence always leaves Oracle and live-provider verification false.
 
 Oracle host verification is documented in [`../deployment/subscription-providers.md`](../deployment/subscription-providers.md) but remains pending explicit approval. Live provider/auth acceptance belongs to Tasks 15–17 and is forbidden in Task 14. Neither local fixtures nor host installation activate an adapter or consume a subscription.

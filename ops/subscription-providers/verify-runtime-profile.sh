@@ -5,6 +5,9 @@ readonly MODE="${1:-}"
 readonly ADAPTER="${2:-}"
 readonly REPOSITORY_ROOT="${ARA_REPOSITORY_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 readonly OUTPUT="${ARA_PROFILE_OUTPUT:-}"
+readonly PREFIX="${ARA_INSTALL_ROOT:-}"
+readonly FIXTURE_MODE="${ARA_FIXTURE_MODE:-0}"
+readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
 fail() { printf 'verify-runtime-profile: %s\n' "$1" >&2; exit 1; }
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 
@@ -12,17 +15,22 @@ case "$MODE" in verify|dry-run) ;; *) fail 'usage: verify-runtime-profile.sh ver
 case "$ADAPTER" in codex|grok) ;; *) fail 'adapter must be codex or grok' ;; esac
 
 readonly UNIT="$REPOSITORY_ROOT/ops/systemd/amazon-research-${ADAPTER}@.service"
+readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json" || printf '%s' "${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json")"
+readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
 readonly COMMON=(
   "$REPOSITORY_ROOT/ops/subscription-providers/manage-invocation.sh"
   "$REPOSITORY_ROOT/ops/subscription-providers/subscription-supervisor.mjs"
   "$REPOSITORY_ROOT/ops/systemd/amazon-research-subscription-gc.service"
   "$REPOSITORY_ROOT/ops/systemd/amazon-research-subscription-gc.timer"
   "$REPOSITORY_ROOT/ops/polkit/50-amazon-research-subscription.rules"
-  "$REPOSITORY_ROOT/ops/nftables/amazon-research-subscription.nft"
 )
-for artifact in "$UNIT" "${COMMON[@]}"; do
+for artifact in "$UNIT" "$AUTHORITY" "$PROBE" "${COMMON[@]}"; do
   [[ -f "$artifact" && ! -L "$artifact" ]] || fail "invalid repository artifact: $artifact"
 done
+if [[ "$ENVIRONMENT" == oracle ]]; then
+  [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
+  [[ "$(realpath -- "$AUTHORITY")" == '/etc/amazon-research/subscription/endpoint-bindings.json' ]] || fail 'endpoint authority fixed path rejected'
+fi
 
 unit_text="$(cat -- "$UNIT")"
 for fixed in \
@@ -36,8 +44,12 @@ grep -Fqx -- "ExecStartPre=+/usr/local/libexec/amazon-research/manage-invocation
 grep -Fqx -- "ExecStart=/usr/bin/node /usr/local/libexec/amazon-research/subscription-supervisor.mjs $ADAPTER %i" <<<"$unit_text" || fail 'ExecStart drift'
 grep -Fqx -- "ExecStopPost=+/usr/local/libexec/amazon-research/manage-invocation.sh cleanup $ADAPTER %i" <<<"$unit_text" || fail 'ExecStopPost drift'
 
+readonly RENDERED_POLICY="$(mktemp)"
+trap 'rm -f -- "$RENDERED_POLICY"' EXIT
+node "$PROBE" --mode render-endpoint-policy --authority "$AUTHORITY" --environment "$ENVIRONMENT" >"$RENDERED_POLICY"
+grep -Eq 'elements = \{[^}]+\}' "$RENDERED_POLICY" || fail 'rendered policy is empty'
 readonly POLICY_DIGEST="$(
-  for artifact in "$UNIT" "${COMMON[@]}"; do
+  for artifact in "$UNIT" "${COMMON[@]}" "$AUTHORITY" "$RENDERED_POLICY"; do
     printf '%s\0' "${artifact#"$REPOSITORY_ROOT/"}"
     cat -- "$artifact"
     printf '\0'
@@ -45,11 +57,13 @@ readonly POLICY_DIGEST="$(
 )"
 
 if [[ "$MODE" == verify ]]; then
-  [[ "$(uname -s)" == Linux ]] || fail 'host verification requires Linux'
-  systemd-analyze verify "$UNIT" >/dev/null
-  nft --check --file "$REPOSITORY_ROOT/ops/nftables/amazon-research-subscription.nft"
-  pkaction --action-id org.freedesktop.systemd1.manage-units >/dev/null
-  [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] || fail 'unified cgroup v2 required'
+  [[ "$(uname -s)" == Linux || "$FIXTURE_MODE" == 1 ]] || fail 'host verification requires Linux'
+  if [[ "$FIXTURE_MODE" != 1 ]]; then
+    systemd-analyze verify "$UNIT" >/dev/null
+    nft --check --file "$RENDERED_POLICY"
+    pkaction --action-id org.freedesktop.systemd1.manage-units >/dev/null
+    [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] || fail 'unified cgroup v2 required'
+  fi
   readonly USER="ara-$ADAPTER"
   readonly IPC="ara-$ADAPTER-ipc"
   readonly AUTH="/var/lib/amazon-research/subscription/$ADAPTER"
@@ -60,7 +74,7 @@ if [[ "$MODE" == verify ]]; then
   [[ -d "$RUNTIME" && ! -L "$RUNTIME" && "$(stat -c '%U:%G:%a' "$RUNTIME")" == "root:$IPC:750" ]] || fail 'runtime root drift'
 fi
 
-report="{\"schemaVersion\":1,\"ok\":true,\"mode\":\"$MODE\",\"adapter\":\"$ADAPTER\",\"policyDigest\":\"$POLICY_DIGEST\",\"oracleHostVerified\":$([[ "$MODE" == verify ]] && printf true || printf false),\"liveProviderVerified\":false,\"productionActivated\":false}"
+report="{\"schemaVersion\":1,\"ok\":true,\"mode\":\"$MODE\",\"adapter\":\"$ADAPTER\",\"authoritySha256\":\"$(sha "$AUTHORITY")\",\"renderedPolicySha256\":\"$(sha "$RENDERED_POLICY")\",\"policyDigest\":\"$POLICY_DIGEST\",\"localFixtureVerified\":$([[ "$ENVIRONMENT" == local-fixture ]] && printf true || printf false),\"oracleHostVerified\":$([[ "$MODE" == verify && "$ENVIRONMENT" == oracle ]] && printf true || printf false),\"liveProviderVerified\":false,\"productionActivated\":false}"
 [[ "${#report}" -le 4096 ]] || fail 'report exceeded fixed bound'
 if [[ -n "$OUTPUT" ]]; then
   [[ "$OUTPUT" == /* ]] || fail 'profile output must be absolute'

@@ -1,20 +1,12 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 export const MAX_REPORT_BYTES = 32 * 1024;
 const MAX_FIXTURE_BYTES = 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const SHA256 = /^[0-9a-f]{64}$/u;
-const REQUIRED_ARTIFACTS = [
-  'subscription-supervisor.mjs',
-  'manage-invocation.sh',
-  'amazon-research-subscription-gc.service',
-  'amazon-research-subscription-gc.timer',
-  '50-amazon-research-subscription.rules',
-  'amazon-research-subscription.nft',
-  'runtime-profile.json'
-];
 const EVENTS = [
   'attempt-authorized', 'start-no-block', 'directory-created', 'directory-verified',
   'pre-start-waiting-no-request', 'request-tmp-written', 'request-renamed',
@@ -22,29 +14,188 @@ const EVENTS = [
   'provider-fixture-started', 'result-tmp-written', 'result-renamed',
   'result-read', 'explicit-stop', 'cgroup-empty', 'exec-stop-post', 'terminal'
 ];
-const FAILURES = {
-  cancellationBeforeDirectory: 'clean',
-  cancellationBeforeRequest: 'clean',
-  cancellationBeforeReady: 'clean',
-  invalidRequest: 'rejected',
-  handoffTimeout: 'rejected',
-  startFailureBeforeDirectory: 'clean',
-  startFailureAfterDirectory: 'clean',
-  synchronousStartDeadlock: 'rejected',
-  noReadyTimeout: 'rejected'
-};
-const OBSERVED_PROPERTIES = [
-  'ActiveState', 'SubState', 'StatusText', 'ExecMainCode', 'ExecMainStatus', 'Result'
-];
-const INSTALLED_PATHS = Object.freeze({
-  'subscription-supervisor.mjs': '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
-  'manage-invocation.sh': '/usr/local/libexec/amazon-research/manage-invocation.sh',
-  'amazon-research-subscription-gc.service': '/etc/systemd/system/amazon-research-subscription-gc.service',
-  'amazon-research-subscription-gc.timer': '/etc/systemd/system/amazon-research-subscription-gc.timer',
-  '50-amazon-research-subscription.rules': '/etc/polkit-1/rules.d/50-amazon-research-subscription.rules',
-  'amazon-research-subscription.nft': '/etc/nftables.d/amazon-research-subscription.nft'
-});
 
+const AUTHORITY_KEYS = ['adapters', 'fixtureOnly', 'resolvers', 'review', 'schemaVersion'];
+const ADAPTER_KEYS = ['auth', 'provider'];
+const FAMILY_KEYS = ['ipv4', 'ipv6'];
+const ADAPTERS = ['codex', 'grok'];
+
+function keysAre(value, expected) {
+  return object(value) && exact(Object.keys(value), expected);
+}
+
+function ipv4Number(address) {
+  return address.split('.').reduce((value, part) => (value << 8n) | BigInt(part), 0n);
+}
+
+function ipv6Number(address) {
+  const [leftText, rightText = ''] = address.split('::');
+  const parseSide = (text) => text === '' ? [] : text.split(':').map((part) => Number.parseInt(part, 16));
+  const left = parseSide(leftText);
+  const right = parseSide(rightText);
+  const words = rightText === '' && !address.includes('::')
+    ? left
+    : [...left, ...Array(8 - left.length - right.length).fill(0), ...right];
+  if (words.length !== 8 || words.some((word) => !Number.isInteger(word) || word < 0 || word > 0xffff)) {
+    throw new TypeError('Invalid IPv6 address.');
+  }
+  return words.reduce((value, word) => (value << 16n) | BigInt(word), 0n);
+}
+
+function canonicalIpv6(value) {
+  const number = ipv6Number(value);
+  const words = Array.from({ length: 8 }, (_, index) => Number((number >> BigInt((7 - index) * 16)) & 0xffffn));
+  let bestStart = -1;
+  let bestLength = 0;
+  for (let start = 0; start < words.length;) {
+    if (words[start] !== 0) { start += 1; continue; }
+    let end = start;
+    while (end < words.length && words[end] === 0) end += 1;
+    if (end - start > bestLength && end - start >= 2) {
+      bestStart = start;
+      bestLength = end - start;
+    }
+    start = end;
+  }
+  if (bestStart === -1) return words.map((word) => word.toString(16)).join(':');
+  const left = words.slice(0, bestStart).map((word) => word.toString(16)).join(':');
+  const right = words.slice(bestStart + bestLength).map((word) => word.toString(16)).join(':');
+  return `${left}::${right}`;
+}
+
+function prohibitedAddress(number, family, fixtureOnly) {
+  if (fixtureOnly) {
+    return family === 4
+      ? ![[ipv4Number('192.0.2.0'), 24], [ipv4Number('198.51.100.0'), 24], [ipv4Number('203.0.113.0'), 24]]
+        .some(([network, bits]) => (number >> BigInt(32 - bits)) === (network >> BigInt(32 - bits)))
+      : (number >> 96n) !== (ipv6Number('2001:db8::') >> 96n);
+  }
+  if (family === 4) {
+    return number === 0n || number === 0xffffffffn ||
+      (number >> 24n) === 10n || (number >> 24n) === 127n ||
+      (number >> 20n) === (ipv4Number('172.16.0.0') >> 20n) ||
+      (number >> 16n) === (ipv4Number('192.168.0.0') >> 16n) ||
+      (number >> 16n) === (ipv4Number('169.254.0.0') >> 16n) ||
+      (number >> 28n) === 0xen || number === ipv4Number('100.100.100.100');
+  }
+  return number === 0n || number === 1n ||
+    (number >> 120n) === 0xffn || (number >> 118n) === 0x3fen;
+}
+
+function canonicalNetwork(value, family, fixtureOnly, allowPrefix) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 100 || /[\s;{}]/u.test(value)) {
+    throw new TypeError('Invalid endpoint token.');
+  }
+  const parts = value.split('/');
+  if (parts.length > 2 || (!allowPrefix && parts.length !== 1)) throw new TypeError('Invalid endpoint prefix.');
+  const address = parts[0];
+  if (isIP(address) !== family) throw new TypeError('Endpoint address family mismatch.');
+  const width = family === 4 ? 32 : 128;
+  const prefix = parts.length === 2 ? Number(parts[1]) : width;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > width) throw new TypeError('Invalid endpoint prefix length.');
+  const number = family === 4 ? ipv4Number(address) : ipv6Number(address);
+  const hostBits = width - prefix;
+  if (hostBits > 0 && (number & ((1n << BigInt(hostBits)) - 1n)) !== 0n) {
+    throw new TypeError('Endpoint prefix has host bits.');
+  }
+  if (prohibitedAddress(number, family, fixtureOnly)) throw new TypeError('Endpoint range is not allowed.');
+  const canonicalAddress = family === 4 ? address : canonicalIpv6(address);
+  return parts.length === 1 ? canonicalAddress : `${canonicalAddress}/${prefix}`;
+}
+
+function canonicalFamily(value, family, fixtureOnly, allowPrefix) {
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError('Endpoint set must be nonempty.');
+  const canonical = value.map((entry) => canonicalNetwork(entry, family, fixtureOnly, allowPrefix));
+  if (new Set(canonical).size !== canonical.length) throw new TypeError('Duplicate endpoint binding.');
+  return canonical.sort();
+}
+
+function authorityBody(authority) {
+  return {
+    schemaVersion: authority.schemaVersion,
+    fixtureOnly: authority.fixtureOnly,
+    review: { identity: authority.review.identity, version: authority.review.version },
+    resolvers: authority.resolvers,
+    adapters: authority.adapters
+  };
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+export function canonicalizeEndpointAuthority(input, options = {}) {
+  if (!keysAre(input, AUTHORITY_KEYS) || input.schemaVersion !== 1 || typeof input.fixtureOnly !== 'boolean' ||
+      !keysAre(input.review, ['bindingsSha256', 'identity', 'version']) ||
+      typeof input.review.identity !== 'string' || !/^[a-z0-9][a-z0-9._-]{2,63}$/u.test(input.review.identity) ||
+      typeof input.review.version !== 'string' || !/^[1-9][0-9]{0,9}$/u.test(input.review.version) ||
+      !keysAre(input.resolvers, FAMILY_KEYS) || !keysAre(input.adapters, ADAPTERS)) {
+    throw new TypeError('Endpoint authority schema rejected.');
+  }
+  const environment = options.environment ?? 'local-fixture';
+  if (!['local-fixture', 'oracle'].includes(environment) || (environment === 'oracle' && input.fixtureOnly)) {
+    throw new TypeError('Endpoint authority environment rejected.');
+  }
+  const fixtureOnly = input.fixtureOnly;
+  const adapters = Object.fromEntries(ADAPTERS.map((adapter) => {
+    const binding = input.adapters[adapter];
+    if (!keysAre(binding, ADAPTER_KEYS)) throw new TypeError('Adapter endpoint schema rejected.');
+    const groups = Object.fromEntries(ADAPTER_KEYS.map((group) => {
+      if (!keysAre(binding[group], FAMILY_KEYS)) throw new TypeError('Endpoint family schema rejected.');
+      return [group, {
+        ipv4: canonicalFamily(binding[group].ipv4, 4, fixtureOnly, true),
+        ipv6: canonicalFamily(binding[group].ipv6, 6, fixtureOnly, true)
+      }];
+    }));
+    return [adapter, groups];
+  }));
+  const canonical = {
+    schemaVersion: 1,
+    fixtureOnly,
+    review: { identity: input.review.identity, version: input.review.version },
+    resolvers: {
+      ipv4: canonicalFamily(input.resolvers.ipv4, 4, fixtureOnly, false),
+      ipv6: canonicalFamily(input.resolvers.ipv6, 6, fixtureOnly, false)
+    },
+    adapters
+  };
+  const bindingsSha256 = sha256(`${JSON.stringify(authorityBody(canonical))}\n`);
+  if (options.verifyDigest !== false && input.review.bindingsSha256 !== bindingsSha256) {
+    throw new TypeError('Endpoint authority review digest rejected.');
+  }
+  return Object.freeze({ ...canonical, bindingsSha256 });
+}
+
+export function renderEndpointPolicy(authority) {
+  const values = (items) => items.join(', ');
+  const https = (adapter, family) => values([...new Set([
+    ...authority.adapters[adapter].provider[family], ...authority.adapters[adapter].auth[family]
+  ])].sort());
+  const text = `table inet amazon_research_subscription {\n` +
+    `  set resolver_v4 { type ipv4_addr; flags interval; elements = { ${values(authority.resolvers.ipv4)} } }\n` +
+    `  set resolver_v6 { type ipv6_addr; flags interval; elements = { ${values(authority.resolvers.ipv6)} } }\n` +
+    `  set codex_https_v4 { type ipv4_addr; flags interval; elements = { ${https('codex', 'ipv4')} } }\n` +
+    `  set codex_https_v6 { type ipv6_addr; flags interval; elements = { ${https('codex', 'ipv6')} } }\n` +
+    `  set grok_https_v4 { type ipv4_addr; flags interval; elements = { ${https('grok', 'ipv4')} } }\n` +
+    `  set grok_https_v6 { type ipv6_addr; flags interval; elements = { ${https('grok', 'ipv6')} } }\n\n` +
+    `  chain output {\n    type filter hook output priority filter; policy accept;\n\n` +
+    `    meta skuid "ara-codex" ip daddr @resolver_v4 udp dport 53 accept\n` +
+    `    meta skuid "ara-codex" ip daddr @resolver_v4 tcp dport 53 accept\n` +
+    `    meta skuid "ara-codex" ip6 daddr @resolver_v6 udp dport 53 accept\n` +
+    `    meta skuid "ara-codex" ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
+    `    meta skuid "ara-codex" ip daddr @codex_https_v4 tcp dport 443 accept\n` +
+    `    meta skuid "ara-codex" ip6 daddr @codex_https_v6 tcp dport 443 accept\n` +
+    `    meta skuid "ara-codex" reject\n\n` +
+    `    meta skuid "ara-grok" ip daddr @resolver_v4 udp dport 53 accept\n` +
+    `    meta skuid "ara-grok" ip daddr @resolver_v4 tcp dport 53 accept\n` +
+    `    meta skuid "ara-grok" ip6 daddr @resolver_v6 udp dport 53 accept\n` +
+    `    meta skuid "ara-grok" ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
+    `    meta skuid "ara-grok" ip daddr @grok_https_v4 tcp dport 443 accept\n` +
+    `    meta skuid "ara-grok" ip6 daddr @grok_https_v6 tcp dport 443 accept\n` +
+    `    meta skuid "ara-grok" reject\n  }\n}\n`;
+  if (/elements = \{\s*\}/u.test(text)) throw new TypeError('Rendered endpoint policy contains an empty set.');
+  return Object.freeze({ text, sha256: sha256(text) });
+}
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -54,203 +205,111 @@ function exact(values, expected) {
     [...values].sort().every((value, index) => value === [...expected].sort()[index]);
 }
 
-function pathFor(adapter, attemptId, fileName = '') {
-  const suffix = fileName === '' ? '' : `/${fileName}`;
-  return `/run/amazon-research/subscription/${adapter}/${attemptId}${suffix}`;
-}
-
-function artifactNameMatches(name, expected) {
-  return expected === 'runtime-profile.json'
-    ? name.endsWith('-runtime-profile.json') || name === expected
-    : name === expected;
-}
 
 function check(category, ok) {
   return Object.freeze({ category, ok: Boolean(ok) });
 }
 
-function hostCapability(f) {
-  return f.host?.ubuntuRelease === '24.04' && Number.isInteger(f.host?.systemdVersion) &&
-    f.host.systemdVersion >= 255 && f.host.unifiedCgroupV2 === true &&
-    f.host.nftablesAvailable === true && f.host.polkitAvailable === true;
-}
 
-function identities(f) {
-  const i = f.identities;
-  if (!object(i)) return false;
-  const worker = i.worker;
-  const codex = i.codex;
-  const grok = i.grok;
-  const numeric = [worker, codex, grok].every((identity) => object(identity) &&
-    Number.isInteger(identity.uid) && identity.uid >= 0 && Number.isInteger(identity.gid) && identity.gid >= 0);
-  return numeric && new Set([worker.uid, codex.uid, grok.uid]).size === 3 &&
-    worker.loginShell === '/usr/sbin/nologin' && codex.loginShell === '/usr/sbin/nologin' &&
-    grok.loginShell === '/usr/sbin/nologin' &&
-    exact(worker.groups, ['amazon-research', 'ara-codex-ipc', 'ara-grok-ipc']) &&
-    exact(codex.groups, ['ara-codex', 'ara-codex-ipc']) &&
-    exact(grok.groups, ['ara-grok', 'ara-grok-ipc']);
-}
-
-function authHomes(f) {
-  const codex = f.authHomes?.codex;
-  const grok = f.authHomes?.grok;
-  return object(codex) && object(grok) && codex.path !== grok.path &&
-    codex.path === '/var/lib/amazon-research/subscription/codex' &&
-    grok.path === '/var/lib/amazon-research/subscription/grok' &&
-    codex.uid === f.identities?.codex?.uid && codex.gid === f.identities?.codex?.gid &&
-    grok.uid === f.identities?.grok?.uid && grok.gid === f.identities?.grok?.gid &&
-    codex.mode === 0o700 && grok.mode === 0o700 &&
-    codex.symlink === false && grok.symlink === false;
-}
-
-function protocolObject(value, expected) {
-  return object(value) && value.path === expected.path && value.uid === expected.uid &&
-    value.gid === expected.gid && value.mode === expected.mode &&
-    value[expected.type] === true && value.symlink === false;
-}
-
-function ipc(f) {
-  const adapter = f.adapter;
-  const id = f.attemptId;
-  const group = adapter === 'codex' ? 601 : 602;
-  const adapterUid = f.identities?.[adapter]?.uid;
-  const data = f.ipc;
-  const parent = protocolObject(data?.parent, {
-    path: `/run/amazon-research/subscription/${adapter}`, uid: 0, gid: group,
-    mode: 0o750, type: 'regularDirectory'
-  });
-  const invocation = protocolObject(data?.invocation, {
-    path: pathFor(adapter, id), uid: f.identities?.worker?.uid, gid: group,
-    mode: 0o2770, type: 'regularDirectory'
-  });
-  const request = protocolObject(data?.request, {
-    path: pathFor(adapter, id, 'request.json'), uid: f.identities?.worker?.uid,
-    gid: group, mode: 0o640, type: 'regularFile'
-  });
-  const result = protocolObject(data?.result, {
-    path: pathFor(adapter, id, 'result.json'), uid: adapterUid,
-    gid: group, mode: 0o640, type: 'regularFile'
-  });
-  return parent && invocation && request && result && data.crossAdapterDenied === true &&
-    data.request.size >= 0 && data.request.size <= 256 * 1024 && SHA256.test(data.request.sha256 ?? '') &&
-    data.result.size >= 0 && data.result.size <= 2 * 1024 * 1024 && SHA256.test(data.result.sha256 ?? '') &&
-    data.request.publishedByRename === true && data.request.temporaryRemoved === true &&
-    data.result.publishedByRename === true && data.result.temporaryRemoved === true;
-}
-
-function artifacts(f) {
-  if (!Array.isArray(f.artifacts)) return false;
-  const required = [...REQUIRED_ARTIFACTS, `amazon-research-${f.adapter}@.service`];
-  const expectedPath = (artifact) => {
-    if (artifact.name.endsWith('-runtime-profile.json') || artifact.name === 'runtime-profile.json') {
-      return `/etc/amazon-research/subscription/${f.adapter}-runtime-profile.json`;
+function evaluateLifecycle(operations) {
+  if (!Array.isArray(operations)) return { ok: false, events: [] };
+  const events = [];
+  let ready = false;
+  let resultRead = false;
+  let stopped = false;
+  let cgroupEmpty = false;
+  for (const operation of operations) {
+    if (typeof operation !== 'string' || !EVENTS.includes(operation) || events.includes(operation)) {
+      return { ok: false, events };
     }
-    if (artifact.name === `amazon-research-${f.adapter}@.service`) {
-      return `/etc/systemd/system/${artifact.name}`;
-    }
-    return INSTALLED_PATHS[artifact.name];
-  };
-  return required.every((expected) => f.artifacts.some((artifact) => artifactNameMatches(artifact.name, expected))) &&
-    f.artifacts.every((artifact) => object(artifact) && artifact.installedPath === expectedPath(artifact) &&
-      artifact.repositoryRelativeInstalledPath === false && artifact.regularFile === true &&
-      artifact.symlink === false && artifact.mutable === false && artifact.ownerUid === 0 &&
-      artifact.ownerGid === 0 && [0o444, 0o500].includes(artifact.mode) &&
-      SHA256.test(artifact.sourceSha256 ?? '') && artifact.sourceSha256 === artifact.installedSha256);
+    if (operation === 'ready') ready = true;
+    if (operation === 'provider-fixture-started' && !ready) return { ok: false, events };
+    if (operation === 'result-read' && !ready) return { ok: false, events };
+    if (operation === 'result-read') resultRead = true;
+    if (operation === 'explicit-stop' && !resultRead) return { ok: false, events };
+    if (operation === 'explicit-stop') stopped = true;
+    if (operation === 'cgroup-empty' && !stopped) return { ok: false, events };
+    if (operation === 'cgroup-empty') cgroupEmpty = true;
+    if (operation === 'exec-stop-post' && !cgroupEmpty) return { ok: false, events };
+    events.push(operation);
+  }
+  return { ok: EVENTS.every((event, index) => events[index] === event), events };
 }
 
-function fixedUnit(f) {
-  const u = f.unit;
-  const adapter = f.adapter;
-  const id = f.attemptId;
-  return object(u) && u.name === `amazon-research-${adapter}@${id}.service` &&
-    u.type === 'notify' && u.notifyAccess === 'main' &&
-    u.execStartPre === `/usr/local/libexec/amazon-research/manage-invocation.sh prepare-and-wait ${adapter} ${id}` &&
-    u.execStart === `/usr/bin/node /usr/local/libexec/amazon-research/subscription-supervisor.mjs ${adapter} ${id}` &&
-    u.execStopPost === `/usr/local/libexec/amazon-research/manage-invocation.sh cleanup ${adapter} ${id}` &&
-    u.timeoutStartSec === 20 && u.requestHandoffSec === 5 && u.executionSec === 120 &&
-    u.timeoutStopSec === 15 && u.killMode === 'control-group' &&
-    exact(u.propertiesObserved, OBSERVED_PROPERTIES);
+function evaluateGc(states) {
+  if (!Array.isArray(states)) return false;
+  const decisions = states.map((state) => {
+    if (!keysAre(state, ['activeState', 'ageMinutes', 'expected'])) return 'refuse';
+    if (!['inactive', 'failed'].includes(state.activeState) || !Number.isInteger(state.ageMinutes)) return 'refuse';
+    return state.ageMinutes > 10 ? 'remove' : 'refuse';
+  });
+  return states.length === 4 && states.every((state, index) => decisions[index] === state.expected);
 }
 
-function lifecycle(f) {
-  const value = f.lifecycle;
-  return object(value) && exact(value.events, EVENTS) &&
-    EVENTS.every((event, index) => value.events[index] === event) &&
-    value.mainAbsentWithoutRequest === true && value.statusWithoutReadyRejected === true &&
-    value.terminalOnlyAfterStop === true;
-}
-
-function failureMatrix(f) {
-  const value = f.lifecycle?.failureMatrix;
-  return object(value) && Object.entries(FAILURES).every(([name, outcome]) => value[name] === outcome);
-}
-
-function containment(f) {
-  const c = f.containment;
-  return object(c) && c.environmentAllowlistOnly === true && c.journalContainsSecrets === false &&
-    [
-      'productionReadDenied', 'workerEnvReadDenied', 'unrelatedHomeReadDenied', 'sshReadDenied',
-      'hermesReadDenied', 'externalWriteDenied', 'shellExecDenied', 'subprocessExecDenied',
-      'arbitraryNetworkDenied', 'inheritedConfigDenied', 'hooksDenied', 'mcpDenied',
-      'sessionReuseDenied', 'memoryPersistenceDenied', 'providerOverrideDenied'
-    ].every((key) => c[key] === true);
-}
-
-function network(f) {
-  const n = f.network;
-  return object(n) && n.resolverOnlyDns === true && n.acceptedHttpsPrefixesOnly === true &&
-    n.otherEgressRejected === true && n.bindingDigestMatches === true;
-}
-
-function gc(f) {
-  const g = f.gc;
-  return object(g) && g.activeRefused === true && g.recentRefused === true &&
-    g.ambiguousRefused === true && g.agedInactiveRemoved === true;
-}
-
-function writerFence(f) {
-  const w = f.writerFence;
-  return object(w) && w.phaseAIdentityMatches === true && w.sharedLockVerified === true &&
-    w.timerDisabled === true && w.workerStopped === true && w.leasesSettled === true &&
-    w.exclusiveLockVerified === true && w.migration022Defects === 0 &&
-    w.canonicalCapabilityRows === 1 && w.wrongModeRejected === true &&
-    w.phaseBIdentityMatches === true;
-}
-
-export function runLocalFixtureProbe(fixture) {
-  const validEnvelope = object(fixture) && fixture.schemaVersion === 1 &&
-    fixture.mode === 'local-fixture' && ['codex', 'grok'].includes(fixture.adapter) &&
-    UUID.test(fixture.attemptId ?? '');
-  const checks = [
-    check('fixture-envelope', validEnvelope),
-    check('host-capability', validEnvelope && hostCapability(fixture)),
-    check('identity', validEnvelope && identities(fixture)),
-    check('auth-home', validEnvelope && authHomes(fixture)),
-    check('ipc', validEnvelope && ipc(fixture)),
-    check('artifact', validEnvelope && artifacts(fixture)),
-    check('unit', validEnvelope && fixedUnit(fixture)),
-    check('lifecycle', validEnvelope && lifecycle(fixture)),
-    check('failure-matrix', validEnvelope && failureMatrix(fixture)),
-    check('containment', validEnvelope && containment(fixture)),
-    check('network', validEnvelope && network(fixture)),
-    check('gc', validEnvelope && gc(fixture)),
-    check('writer-fence', validEnvelope && writerFence(fixture)),
-    check('safety-boundary', validEnvelope && fixture.sanitized === true &&
-      fixture.liveProviderCalled === false && fixture.productionMutated === false)
-  ];
+export async function runDerivedLocalProbe(input) {
+  const validEnvelope = object(input) && ['codex', 'grok'].includes(input.adapter) && UUID.test(input.attemptId ?? '') &&
+    typeof input.repositoryRoot === 'string' && typeof input.runner === 'function';
+  const checks = [check('fixture-envelope', validEnvelope)];
+  if (!validEnvelope) return Object.freeze({ schemaVersion: 2, ok: false, checks, localFixtureVerified: false, oracleHostVerified: false, liveProviderVerified: false });
+  const authorityPath = `${input.repositoryRoot}/ops/subscription-providers/endpoint-bindings.json`;
+  const unitPath = `${input.repositoryRoot}/ops/systemd/amazon-research-${input.adapter}@.service`;
+  const [authorityBytes, unitText] = await Promise.all([readFile(authorityPath), readFile(unitPath, 'utf8')]);
+  const authority = canonicalizeEndpointAuthority(JSON.parse(authorityBytes.toString('utf8')), { environment: 'local-fixture' });
+  const rendered = renderEndpointPolicy(authority);
+  const unitOk = unitText.includes('Type=notify') && unitText.includes('KillMode=control-group') &&
+    unitText.includes(`prepare-and-wait ${input.adapter} %i`) && unitText.includes(`cleanup ${input.adapter} %i`);
+  const lifecycleEvidence = evaluateLifecycle(input.operations);
+  const commandResults = [];
+  for (const command of [
+    ['node', ['--check', `${input.repositoryRoot}/ops/subscription-providers/subscription-supervisor.mjs`]],
+    ['node', ['--check', `${input.repositoryRoot}/scripts/probe-subscription-provider.mjs`]]
+  ]) {
+    const result = await input.runner(command[0], command[1]);
+    commandResults.push({ command: command[0], exitCode: result.exitCode });
+  }
+  checks.push(
+    check('endpoint-authority', authority.fixtureOnly && rendered.text.includes('elements = {') && !/elements = \{\s*\}/u.test(rendered.text)),
+    check('unit', unitOk),
+    check('lifecycle', lifecycleEvidence.ok),
+    check('gc', evaluateGc(input.gcStates)),
+    check('fixed-command-plan', commandResults.every((result) => result.exitCode === 0))
+  );
   return Object.freeze({
-    schemaVersion: 1,
-    ok: checks.every(({ ok }) => ok),
+    schemaVersion: 2,
+    ok: checks.every((entry) => entry.ok),
     mode: 'local-fixture',
-    adapter: validEnvelope ? fixture.adapter : null,
+    adapter: input.adapter,
     checks,
+    evidence: {
+      provenance: 'derived-local-v1',
+      authoritySha256: sha256(authorityBytes),
+      bindingsSha256: authority.bindingsSha256,
+      renderedPolicySha256: rendered.sha256,
+      unitSha256: sha256(unitText),
+      lifecycleEvents: lifecycleEvidence.events,
+      commandResults
+    },
+    localFixtureVerified: checks.every((entry) => entry.ok),
+    oracleHostVerified: false,
+    liveProviderVerified: false
+  });
+}
+
+export function runLocalFixtureProbe() {
+  return Object.freeze({
+    schemaVersion: 2,
+    ok: false,
+    mode: 'local-fixture',
+    adapter: null,
+    checks: [check('self-attested-fixture-rejected', false)],
+    localFixtureVerified: false,
     oracleHostVerified: false,
     liveProviderVerified: false
   });
 }
 
 function usageError() {
-  throw new TypeError('Usage: probe-subscription-provider.mjs --mode local-fixture --fixture <absolute-json-path>');
+  throw new TypeError('Usage: local-fixture --fixture PATH or render-endpoint-policy --authority PATH --environment MODE');
 }
 
 async function readFixture(path) {
@@ -261,10 +320,15 @@ async function readFixture(path) {
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 4 || argv[0] !== '--mode' || argv[1] !== 'local-fixture' || argv[2] !== '--fixture') {
-    usageError();
+  if (argv.length === 4 && argv[0] === '--mode' && argv[1] === 'local-fixture' && argv[2] === '--fixture') {
+    return { mode: 'local-fixture', path: argv[3] };
   }
-  return argv[3];
+  if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'render-endpoint-policy' &&
+      argv[2] === '--authority' && argv[4] === '--environment' &&
+      ['local-fixture', 'oracle'].includes(argv[5])) {
+    return { mode: 'render-endpoint-policy', path: argv[3], environment: argv[5] };
+  }
+  usageError();
 }
 
 function boundedJson(report) {
@@ -276,26 +340,37 @@ function boundedJson(report) {
 }
 
 async function cli() {
-  const fixturePath = parseArguments(process.argv.slice(2));
-  const report = runLocalFixtureProbe(await readFixture(fixturePath));
+  const args = parseArguments(process.argv.slice(2));
+  if (args.mode === 'render-endpoint-policy') {
+    const authority = canonicalizeEndpointAuthority(await readFixture(args.path), {
+      environment: args.environment
+    });
+    process.stdout.write(renderEndpointPolicy(authority).text);
+    return;
+  }
+  const report = runLocalFixtureProbe(await readFixture(args.path));
   process.stdout.write(boundedJson(report));
   if (!report.ok) process.exitCode = 1;
 }
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     await cli();
   } catch {
-    const report = {
-      schemaVersion: 1,
-      ok: false,
-      mode: 'local-fixture',
-      adapter: null,
-      checks: [check('fixture-envelope', false)],
-      oracleHostVerified: false,
-      liveProviderVerified: false
-    };
-    process.stdout.write(boundedJson(report));
-    process.exitCode = 1;
+    if (process.argv.includes('render-endpoint-policy')) {
+      process.exitCode = 1;
+    } else {
+      const report = {
+        schemaVersion: 1,
+        ok: false,
+        mode: 'local-fixture',
+        adapter: null,
+        checks: [check('fixture-envelope', false)],
+        localFixtureVerified: false,
+        oracleHostVerified: false,
+        liveProviderVerified: false
+      };
+      process.stdout.write(boundedJson(report));
+      process.exitCode = 1;
+    }
   }
 }

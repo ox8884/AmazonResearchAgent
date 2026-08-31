@@ -25,6 +25,32 @@ allow_only_groups() {
   done < <(id -nG "$user" | tr ' ' '\n')
 }
 
+preflight_path() {
+  local path="$1" expected="$2"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -d "$path" && ! -L "$path" && "$(stat -c '%U:%G:%a' -- "$path")" == "$expected" ]] || fail "unsafe existing path $path"
+  else
+    parent="$(dirname -- "$path")"
+    [[ ! -e "$parent" && ! -L "$parent" ]] || [[ -d "$parent" && ! -L "$parent" ]] || fail "unsafe path parent $parent"
+  fi
+}
+
+preflight_identity() {
+  local adapter="$1" user="$2" ipc="$3" auth runtime
+  getent passwd "$WORKER" >/dev/null || fail 'missing existing worker identity'
+  if getent passwd "$user" >/dev/null; then
+    [[ "$(getent passwd "$user" | cut -d: -f7)" == /usr/sbin/nologin ]] || fail "unsafe existing identity $user"
+    allow_only_groups "$user" "$user,$ipc"
+  fi
+  if getent group "$ipc" >/dev/null; then
+    allow_only_groups "$WORKER" 'amazon-research,ara-codex-ipc,ara-grok-ipc'
+  fi
+  auth="$(root_path "/var/lib/amazon-research/subscription/$adapter")"
+  runtime="$(root_path "/run/amazon-research/subscription/$adapter")"
+  preflight_path "$auth" "$user:$user:700"
+  preflight_path "$runtime" "root:$ipc:750"
+}
+
 verify_identity() {
   local adapter="$1" user="$2" ipc="$3" auth runtime owner expected_worker expected_adapter
   auth="$(root_path "/var/lib/amazon-research/subscription/$adapter")"
@@ -68,6 +94,14 @@ install_identity() {
 }
 
 if [[ "$MODE" == install ]]; then
+  # Complete shared read-only preflight before the first group/user/path mutation.
+  for spec in "${ADAPTERS[@]}"; do
+    IFS='|' read -r adapter user ipc <<<"$spec"
+    preflight_identity "$adapter" "$user" "$ipc"
+  done
+  codex_auth="$(root_path /var/lib/amazon-research/subscription/codex)"
+  grok_auth="$(root_path /var/lib/amazon-research/subscription/grok)"
+  [[ "$codex_auth" != "$grok_auth" ]] || fail 'shared auth home rejected'
   for spec in "${ADAPTERS[@]}"; do
     IFS='|' read -r adapter user ipc <<<"$spec"
     install_identity "$adapter" "$user" "$ipc"

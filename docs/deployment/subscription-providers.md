@@ -6,14 +6,16 @@ This runbook installs and verifies repository-owned Task-5 artifacts on Ubuntu 2
 
 ## Immutable inputs
 
-Record the release SHA and artifact digests before copying anything:
+The repository authority `ops/subscription-providers/endpoint-bindings.json` is fixture-only and cannot be installed on Oracle. Before approval, a network reviewer must publish one production authority at `/etc/amazon-research/subscription/endpoint-bindings.json`: regular/no-symlink, root-owned `0444`, schema version 1, `fixtureOnly:false`, explicit review identity/version, canonical nonempty resolver and per-adapter provider/auth IPv4/IPv6 sets, and the parser-computed `bindingsSha256`. Resolve live names only in that bounded root-owned review procedure. A changed answer, TTL boundary, review version, or digest invalidates acceptance and requires atomic temp-file + rename publication of a newly reviewed artifact. Workers and callers cannot override this path or provide commands/prefixes.
+
+Record the release SHA and fixture artifact digests locally before any approved host copying:
 
 ```bash
 set -euo pipefail
 cd /opt/amazon-research/releases/RELEASE_SHA
 git rev-parse HEAD
 sha256sum \
-  ops/subscription-providers/{subscription-supervisor.mjs,manage-invocation.sh} \
+  ops/subscription-providers/{subscription-supervisor.mjs,manage-invocation.sh,endpoint-bindings.json} \
   ops/systemd/amazon-research-{codex,grok}@.service \
   ops/systemd/amazon-research-subscription-gc.{service,timer} \
   ops/polkit/50-amazon-research-subscription.rules \
@@ -28,7 +30,7 @@ The fixed lifecycle is `systemctl start --no-block amazon-research-{codex,grok}@
 
 ## Oracle host install — explicit approval required
 
-Run only after reviewing exact release SHA/digests and granting explicit host-change approval:
+Do not run this section until a separate review has approved the exact production endpoint authority described above and explicit host-change approval is granted. Both installers finish all read-only source, target, identity, membership, path, unit, policy, digest, and tool preflight before their first mutation. The systemd installer stages and validates the complete artifact set, renders only validated tokens into fixed set names, refuses existing drift, and removes newly created files if a later bounded copy fails. It never loads nftables or starts an adapter.
 
 ```bash
 set -euo pipefail
@@ -42,9 +44,7 @@ sudo bash ops/subscription-providers/verify-runtime-profile.sh verify codex
 sudo bash ops/subscription-providers/verify-runtime-profile.sh verify grok
 ```
 
-Changes: system users `ara-codex`/`ara-grok`; groups `ara-codex-ipc`/`ara-grok-ipc`; worker membership in both; separate `0700` auth homes; root/group `0750` runtime parents; two fixed template units; GC service/timer; one UUID-only polkit rule; one UID/resolver/provider-prefix nftables ruleset. The installer reloads systemd but does not start an adapter unit or load/activate provider credentials.
-
-Before loading nftables, populate only approved resolver addresses and provider/auth endpoint prefixes through the separately reviewed host configuration. `nft --check` is syntax proof, not endpoint approval. Empty/wrong/drifting bindings fail acceptance.
+Changes: system users `ara-codex`/`ara-grok`; groups `ara-codex-ipc`/`ara-grok-ipc`; worker membership in both; separate `0700` auth homes; root/group `0750` runtime parents; two fixed template units; GC service/timer; one UUID-only polkit rule; one concrete rendered UID/resolver/provider/auth-prefix nftables policy. Runtime profile digests bind both the canonical authority source and final rendered policy. The installer reloads systemd but does not load nftables, start an adapter unit, activate credentials, or call a provider.
 
 ## Disabled host acceptance evidence
 
@@ -103,53 +103,89 @@ systemctl show amazon-research-daily.timer amazon-research-daily.service amazon-
 pgrep -af '(@ara/worker|enqueue:daily)' && exit 1 || true
 ```
 
-All three units must be inactive and every `MainPID=0`. Record and settle running job/analysis leases. Higher-level rows may queue, but no process may transform them until Phase B starts.
+All three units must be inactive and every `MainPID=0`. Record and settle running job/analysis leases. Higher-level rows may queue, but no process may transform them until Phase B starts. These columns exist before migration 022:
 
 ```sql
-select id, job_type, status, locked_by, locked_at, lease_expires_at, attempts
+select id, type, status, leased_by, leased_until, attempts
 from public.jobs
-where status = 'running' and job_type = 'normalize_opportunity'
+where status = 'running' and type = 'NORMALIZE_OPPORTUNITIES'
 order by id;
 
-select id, status, worker_id, lease_expires_at, attempts
+select id, status, leased_by, leased_until, attempts
 from public.ai_analyses
-where status = 'running'
+where status = 'pending'
+  and leased_until is not null
+  and leased_until > clock_timestamp()
 order by id;
 ```
 
 ### 4. Pre-migration defect queries
 
-Record `legacy_keys`; migration 022 rewrites that exact set. Require collision, malformed-key, malformed-payload, and generation-mismatch counts to be zero before applying it:
+Record `legacy_keys`; migration 022 rewrites that exact set. Run each query separately and require every defect count to be zero. These predicates mirror migration 022 and reference only pre-022 state:
 
 ```sql
 select count(*) as legacy_keys
 from public.jobs
-where idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+where type = 'NORMALIZE_OPPORTUNITIES'
+  and idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 select count(*) as legacy_canonical_collisions
 from public.jobs legacy
 join public.jobs canonical
   on canonical.idempotency_key = legacy.idempotency_key || ':0'
-where legacy.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+where legacy.type = 'NORMALIZE_OPPORTUNITIES'
+  and legacy.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 select count(*) as malformed_normalization_keys
 from public.jobs
-where job_type = 'normalize_opportunity'
-  and idempotency_key !~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(:[0-9]+)?$';
+where type = 'NORMALIZE_OPPORTUNITIES'
+  and idempotency_key like 'normalize:%'
+  and idempotency_key !~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(:[0-9]+)?$';
 
-select count(*) as malformed_payloads
-from public.jobs
-where job_type = 'normalize_opportunity'
-  and (jsonb_typeof(payload) <> 'object'
-       or coalesce(payload->>'candidateId','') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
-
-select count(*) as generation_mismatches
+select count(*) as malformed_legacy_payloads
 from public.jobs j
-join public.candidates c on c.id = (j.payload->>'candidateId')::uuid
-where j.job_type = 'normalize_opportunity'
-  and j.idempotency_key ~ ':([0-9]+)$'
-  and (j.payload->>'normalizationGeneration')::integer <> c.normalization_generation;
+left join public.candidates c on c.id::text = split_part(j.idempotency_key, ':', 2)
+where j.type = 'NORMALIZE_OPPORTUNITIES'
+  and j.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  and (jsonb_typeof(j.payload) <> 'object'
+       or jsonb_typeof(j.payload->'candidateIds') <> 'array'
+       or jsonb_array_length(j.payload->'candidateIds') <> 1
+       or j.payload->'candidateIds'->>0 is distinct from split_part(j.idempotency_key, ':', 2)
+       or j.payload ? 'normalizationGeneration'
+       or j.payload->>'locale' not in ('ko', 'en')
+       or j.payload - array['candidateIds', 'locale', 'promptVersion'] <> '{}'::jsonb
+       or c.id is null or c.normalization_generation <> 0);
+
+select count(*) as malformed_generation_zero_payloads
+from public.jobs j
+left join public.candidates c on c.id::text = split_part(j.idempotency_key, ':', 2)
+where j.type = 'NORMALIZE_OPPORTUNITIES'
+  and j.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:0$'
+  and (jsonb_typeof(j.payload->'candidateIds') <> 'array'
+       or jsonb_array_length(j.payload->'candidateIds') <> 1
+       or j.payload->'candidateIds'->>0 is distinct from split_part(j.idempotency_key, ':', 2)
+       or jsonb_typeof(j.payload->'normalizationGeneration') <> 'number'
+       or j.payload->>'normalizationGeneration' is distinct from '0'
+       or j.payload->>'locale' not in ('ko', 'en')
+       or c.id is null or c.normalization_generation <> 0);
+
+select count(*) as active_lease_defects
+from (
+  select id from public.jobs
+  where type = 'NORMALIZE_OPPORTUNITIES' and status = 'running'
+    and (leased_by is null or leased_until is null or leased_until <= clock_timestamp() or attempts < 1)
+  union all
+  select id from public.ai_analyses
+  where status = 'pending' and leased_until > clock_timestamp()
+    and (leased_by is null or attempts < 1)
+) defects;
+
+select count(*) as legacy_capability_rows
+from public.normalization_writer_capability
+where singleton is true and mode = 'legacy';
 ```
+
+Require `legacy_capability_rows = 1`; all defect/collision counts must be `0`. `legacy_keys` is an inventory count, not a defect count.
 
 ### 5. Apply migration 022 under the exclusive lock
 
@@ -166,33 +202,42 @@ To prove shared/exclusive serialization in a disposable transaction, session A h
 
 ### 6. Post-migration gates
 
+These queries require migration 022 and must not be run against pre-022 schema:
+
 ```sql
 select count(*) as legacy_keys
 from public.jobs
-where idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+where type = 'NORMALIZE_OPPORTUNITIES'
+  and idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 select count(*) as legacy_canonical_collisions
 from public.jobs legacy
-join public.jobs canonical
-  on canonical.idempotency_key = legacy.idempotency_key || ':0'
-where legacy.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+join public.jobs canonical on canonical.idempotency_key = legacy.idempotency_key || ':0'
+where legacy.type = 'NORMALIZE_OPPORTUNITIES'
+  and legacy.idempotency_key ~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 select count(*) as malformed_canonical
-from public.jobs
-where job_type = 'normalize_opportunity'
-  and (idempotency_key !~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[0-9]+$'
-       or jsonb_typeof(payload->'normalizationGeneration') <> 'number');
-
-select count(*) as payload_candidate_generation_mismatch
 from public.jobs j
-left join public.candidates c on c.id = (j.payload->>'candidateId')::uuid
-where j.job_type = 'normalize_opportunity'
-  and (c.id is null or (j.payload->>'normalizationGeneration')::integer <> c.normalization_generation);
+left join public.candidates c on c.id::text = split_part(j.idempotency_key, ':', 2)
+where j.type = 'NORMALIZE_OPPORTUNITIES'
+  and (j.idempotency_key !~ '^normalize:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9]+$'
+       or jsonb_typeof(j.payload->'candidateIds') <> 'array'
+       or jsonb_array_length(j.payload->'candidateIds') <> 1
+       or j.payload->'candidateIds'->>0 is distinct from split_part(j.idempotency_key, ':', 2)
+       or jsonb_typeof(j.payload->'normalizationGeneration') <> 'number'
+       or j.payload->>'normalizationGeneration' is distinct from split_part(j.idempotency_key, ':', 3)
+       or c.id is null
+       or (j.payload->>'normalizationGeneration')::bigint <> c.normalization_generation);
 
 select count(*) as running_lease_defects
 from public.jobs
-where job_type = 'normalize_opportunity' and status = 'running'
-  and (locked_by is null or lease_expires_at is null or attempts < 1);
+where type = 'NORMALIZE_OPPORTUNITIES' and status = 'running'
+  and (leased_by is null or leased_until is null or leased_until <= clock_timestamp() or attempts < 1);
+
+select count(*) as active_analysis_lease_defects
+from public.ai_analyses
+where status = 'pending' and leased_until > clock_timestamp()
+  and (leased_by is null or attempts < 1);
 
 select count(*) as canonical_capability_rows
 from public.normalization_writer_capability
@@ -201,7 +246,7 @@ where singleton is true and mode = 'canonical' and migration_identity = '2026082
 select public.read_normalization_writer_capability() as capability;
 ```
 
-Require all defect/legacy/collision counts `0` and `canonical_capability_rows = 1`. While holding the exclusive lock in session A, a session B call to `enqueue_initial_candidate_normalization(..., 'legacy')` must block and then fail `normalization_writer_mode_rejected`; it must create no row.
+Require all defect/legacy/collision counts `0`, `canonical_capability_rows = 1`, and capability exactly `{"mode":"canonical","migration_identity":"202608290022"}`. With a real disposable candidate UUID substituted for `:'candidate_id'`, call `public.enqueue_initial_candidate_normalization(:'candidate_id'::uuid, 'en', 'legacy')` while the exclusive lock is held in session A; session B must block, then fail `normalization_writer_mode_rejected` after session A commits. It must create no normalization job for that candidate.
 
 ### 7. Start Phase B
 
