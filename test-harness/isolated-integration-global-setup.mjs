@@ -1,5 +1,4 @@
 import { createHash, createHmac } from 'node:crypto';
-import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import postgres from 'postgres';
@@ -12,7 +11,10 @@ import {
   removeDockerContainer,
   withGlobalDdlLock,
 } from './harness-boundaries.mjs';
-import { listenOnFetchSafeLoopback } from './safe-loopback-server.mjs';
+import {
+  startPostgrestProxy,
+  waitForPostgrest,
+} from './postgrest-loopback-transport.mjs';
 
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -50,52 +52,6 @@ function docker(args) {
   return result.stdout.trim();
 }
 
-async function startProxy(targetPort) {
-  const server = createServer((request, response) => {
-    const sourceUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
-    const path = sourceUrl.pathname.replace(/^\/rest\/v1(?=\/|$)/u, '') || '/';
-    const target = new URL(`${path}${sourceUrl.search}`, `http://127.0.0.1:${targetPort}`);
-    const headers = { ...request.headers };
-    delete headers.host;
-    const upstream = fetch(target, {
-      method: request.method,
-      headers,
-      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request,
-      duplex: 'half',
-    });
-    void upstream.then(async (upstreamResponse) => {
-      response.writeHead(upstreamResponse.status, Object.fromEntries(upstreamResponse.headers.entries()));
-      response.end(Buffer.from(await upstreamResponse.arrayBuffer()));
-    }).catch((error) => {
-      response.writeHead(502, { 'content-type': 'text/plain' });
-      response.end(error instanceof Error ? error.message : 'PostgREST proxy failure');
-    });
-  });
-  const address = await listenOnFetchSafeLoopback(server);
-  return { server, url: address.url };
-}
-
-async function waitForPostgrest(url, key, containerName) {
-  const deadline = Date.now() + 15_000;
-  let lastObservation = 'no response';
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${url}/jobs?select=id&limit=1`, {
-        headers: { apikey: key, authorization: `Bearer ${key}` },
-      });
-      if (response.ok) return;
-      lastObservation = `${response.status} ${await response.text()}`;
-    } catch (error) {
-      if (!(error instanceof TypeError)) throw error;
-      lastObservation = error.message;
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
-  }
-  const logs = spawnSync('docker', ['logs', containerName], { encoding: 'utf8' });
-  throw new Error(
-    `Ephemeral PostgREST did not become ready: ${lastObservation}\n${logs.stderr || logs.stdout}`,
-  );
-}
 
 export async function setup(project) {
   const adminUrl = required(databaseUrl, 'TEST_DATABASE_URL');
@@ -170,8 +126,8 @@ export async function setup(project) {
       const portOutput = docker(['port', containerName, '3000/tcp']);
       const targetPort = Number.parseInt(portOutput.slice(portOutput.lastIndexOf(':') + 1), 10);
       if (!Number.isSafeInteger(targetPort)) throw new Error(`Invalid PostgREST port: ${portOutput}`);
-      proxy = await startProxy(targetPort);
-      await waitForPostgrest(`http://127.0.0.1:${targetPort}`, ephemeralKey, containerName);
+      proxy = await startPostgrestProxy(targetPort);
+      await waitForPostgrest(targetPort, ephemeralKey, containerName);
       supabaseUrl = proxy.url;
     }
 

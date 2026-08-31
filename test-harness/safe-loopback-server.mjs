@@ -58,29 +58,73 @@ export async function listenOnFetchSafeLoopback(server, options = {}) {
     throw new RangeError('Safe loopback maxAttempts must be a positive integer.');
   }
   const candidates = options.candidates ?? defaultCandidates(maxAttempts);
+  const iterator = candidates[Symbol.iterator]();
   let attempts = 0;
-  for (const port of candidates) {
-    if (attempts >= maxAttempts) break;
-    attempts += 1;
-    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-      throw new RangeError(`Invalid safe loopback port candidate: ${port}.`);
+  let completed = false;
+  let result;
+  let primaryError;
+
+  try {
+    while (attempts < maxAttempts) {
+      const next = iterator.next();
+      if (next.done) {
+        completed = true;
+        break;
+      }
+      const port = next.value;
+      attempts += 1;
+      if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+        throw new RangeError(`Invalid safe loopback port candidate: ${port}.`);
+      }
+      if (isFetchForbiddenPort(port)) continue;
+      try {
+        await listen(server, port);
+      } catch (error) {
+        if (isAddressInUse(error)) continue;
+        throw error;
+      }
+      const address = server.address();
+      if (
+        !address
+        || typeof address === 'string'
+        || address.address !== LOOPBACK_HOST
+        || !Number.isInteger(address.port)
+        || address.port < 0
+        || address.port > 65_535
+        || isFetchForbiddenPort(address.port)
+        || address.port !== port
+      ) {
+        throw new Error('Safe loopback server did not bind the requested Fetch-safe IPv4 endpoint.');
+      }
+      result = {
+        host: LOOPBACK_HOST,
+        port: address.port,
+        url: `http://${LOOPBACK_HOST}:${address.port}`,
+      };
+      break;
     }
-    if (isFetchForbiddenPort(port)) continue;
-    try {
-      await listen(server, port);
-    } catch (error) {
-      if (isAddressInUse(error)) continue;
-      throw error;
+    if (result === undefined) {
+      throw new Error(`Allocation exhausted ${attempts} safe loopback port candidates.`);
     }
-    const address = server.address();
-    if (!address || typeof address === 'string' || address.address !== LOOPBACK_HOST) {
-      throw new Error('Safe loopback server did not bind the expected IPv4 address.');
-    }
-    return {
-      host: LOOPBACK_HOST,
-      port: address.port,
-      url: `http://${LOOPBACK_HOST}:${address.port}`,
-    };
+  } catch (error) {
+    primaryError = error;
   }
-  throw new Error(`Allocation exhausted ${attempts} safe loopback port candidates.`);
+
+  let finalizationError;
+  if (!completed && typeof iterator.return === 'function') {
+    try {
+      iterator.return();
+    } catch (error) {
+      finalizationError = error;
+    }
+  }
+  if (primaryError && finalizationError) {
+    throw new AggregateError(
+      [primaryError, finalizationError],
+      'Safe loopback allocation and candidate finalization both failed.',
+    );
+  }
+  if (primaryError) throw primaryError;
+  if (finalizationError) throw finalizationError;
+  return result;
 }
