@@ -164,8 +164,11 @@ async function seedCandidateAndLeases(
     )
   `;
   const [job] = await sql<{ id: string; leased_by: string; attempts: number }[]>`
-    select id, leased_by, attempts from claim_jobs('worker-a', 100, 120)
-    where id = ${jobId}
+    update jobs
+    set status = 'running', leased_by = 'worker-a',
+      leased_until = clock_timestamp() + interval '120 seconds', attempts = attempts + 1
+    where id = ${jobId} and status = 'queued' and attempts < max_attempts
+    returning id, leased_by, attempts
   `;
   if (!job) throw new Error('Normalization job was not claimed.');
   const inputHash = `hash-${suffix}`;
@@ -215,8 +218,11 @@ async function seedClaimedJobForFixture(fixture: Fixture): Promise<Lease> {
     )
   `;
   const [job] = await sql<{ id: string; leased_by: string; attempts: number }[]>`
-    select id, leased_by, attempts from claim_jobs('worker-b', 100, 120)
-    where id = ${jobId}
+    update jobs
+    set status = 'running', leased_by = 'worker-b',
+      leased_until = clock_timestamp() + interval '120 seconds', attempts = attempts + 1
+    where id = ${jobId} and status = 'queued' and attempts < max_attempts
+    returning id, leased_by, attempts
   `;
   if (!job) throw new Error('Cross-job normalization fixture was not claimed.');
   return {
@@ -225,6 +231,24 @@ async function seedClaimedJobForFixture(fixture: Fixture): Promise<Lease> {
     job_lease_epoch: job.attempts,
   };
 }
+async function withExpiredGlobalQueue<T>(operation: () => Promise<T>): Promise<T> {
+  const noisePrefix = `fixture-noise-${randomUUID()}`;
+  await sql`
+    insert into jobs (
+      type, payload, status, priority, leased_by, leased_until, idempotency_key
+    )
+    select 'PROBE_AI_PROVIDER_READINESS', '{}'::jsonb, 'running', 10,
+      'expired-fixture-worker', clock_timestamp() - interval '1 second',
+      ${noisePrefix} || ':' || index
+    from generate_series(1, 100) as index
+  `;
+  try {
+    return await operation();
+  } finally {
+    await sql`delete from jobs where idempotency_key like ${`${noisePrefix}:%`}`;
+  }
+}
+
 
 async function beginAttempt(fixture: Fixture, fallbackParentAttemptId: string | null = null) {
   const [row] = await sql<{ result: {
@@ -505,7 +529,7 @@ describe('provider attempt transactions', () => {
 
   // Break: reconciliation exposes a fallback parent owned by another current job.
   it('does not reconcile a crash-unknown parent from another job', async () => {
-    const fixture = await seedCandidateAndLeases();
+    const fixture = await withExpiredGlobalQueue(seedCandidateAndLeases);
     const first = await beginAttempt(fixture);
     await sql`
       select reconcile_ai_provider_attempts(
@@ -514,7 +538,7 @@ describe('provider attempt transactions', () => {
         ${fixture.analysis.analysis_lease_epoch}
       )
     `;
-    const currentJob = await seedClaimedJobForFixture(fixture);
+    const currentJob = await withExpiredGlobalQueue(() => seedClaimedJobForFixture(fixture));
 
     const [reconciliation] = await sql<{ result: {
       attempted_provider_ids: string[];
