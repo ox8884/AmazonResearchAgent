@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -13,7 +13,8 @@ import {
   renderEndpointPolicy,
   runDerivedLocalProbe,
   runLocalFixtureProbe,
-  validateLocalEvidence
+  validateLocalEvidence,
+  verifyNssIdentity
 } from './probe-subscription-provider.mjs';
 import { verifyInstalledAuthority } from './probe-subscription-provider.mjs';
 import { assertActiveNftMatches, assertAuthorityActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
@@ -190,6 +191,35 @@ describe('production endpoint authority', () => {
       () => canonicalizeEndpointAuthority(authority),
       /No reviewed production numeric UID authority is published/u
     );
+  });
+
+  describe('reviewed numeric UID NSS equality', () => {
+    const authority = { fixtureOnly: false, identities: { codex: { username: 'ara-codex', uid: 31001 }, grok: { username: 'ara-grok', uid: 31002 } } };
+
+    it('accepts one stable exact reviewed NSS record', async () => {
+      await assert.doesNotReject(verifyNssIdentity(authority, 'codex', async () => 'ara-codex:x:31001:31001::/nonexistent:/usr/sbin/nologin\n'));
+    });
+
+    for (const [name, records] of [
+      ['UID drift', ['ara-codex:x:31002:31001::/nonexistent:/usr/sbin/nologin\n']],
+      ['UID zero', ['ara-codex:x:0:31001::/nonexistent:/usr/sbin/nologin\n']],
+      ['nonnumeric UID', ['ara-codex:x:not-a-uid:31001::/nonexistent:/usr/sbin/nologin\n']],
+      ['username drift', ['ara-other:x:31001:31001::/nonexistent:/usr/sbin/nologin\n']],
+      ['malformed record', ['ara-codex:x:31001\n']],
+      ['duplicate records', ['ara-codex:x:31001:31001::/nonexistent:/usr/sbin/nologin\nara-codex:x:31001:31001::/nonexistent:/usr/sbin/nologin\n']],
+      ['repeated lookup drift', ['ara-codex:x:31001:31001::/nonexistent:/usr/sbin/nologin\n', 'ara-codex:x:31002:31001::/nonexistent:/usr/sbin/nologin\n']]
+    ]) {
+      it(`rejects ${name}`, async () => {
+        let index = 0;
+        await assert.rejects(verifyNssIdentity(authority, 'codex', async () => records[Math.min(index++, records.length - 1)]));
+      });
+    }
+
+    it('rejects fixture authority before NSS lookup', async () => {
+      let called = false;
+      await assert.rejects(verifyNssIdentity({ ...authority, fixtureOnly: true }, 'codex', async () => { called = true; return ''; }), /Production NSS authority required/u);
+      assert.equal(called, false);
+    });
   });
 });
 
@@ -496,6 +526,31 @@ describe('installer full preflight', () => {
     const policyDrift = runFixtureVerify();
     assert.notEqual(policyDrift.status, 0);
   });
+  // Break: opening the fixed lock follows a symlink and truncates its referent before validation.
+  it('rejects a symlink lock without changing its referent', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-lock-symlink-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    const lockParent = join(installRoot, 'run/lock');
+    const victim = join(root, 'victim');
+    const victimBytes = Buffer.from('attacker-owned-bytes\n');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await mkdir(lockParent, { recursive: true });
+    await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
+    await writeFile(victim, victimBytes, { mode: 0o644 });
+    const victimMode = (await lstat(victim)).mode & 0o777;
+    await symlink(victim, join(lockParent, 'amazon-research-subscription-install.lock'));
+
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+      '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+
+    assert.notEqual(child.status, 0);
+    assert.deepEqual(await readFile(victim), victimBytes);
+    assert.equal((await lstat(victim)).mode & 0o777, victimMode);
+  });
   it('fails before mutation when the installation transaction lock is held', async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const root = await mkdtemp(join(sourceRoot, '.task14-lock-'));
@@ -574,19 +629,36 @@ describe('subscription provider derived local probe', () => {
     assert.equal(report.oracleHostVerified, false);
   });
 
-  it('rejects hostile parent evidence with preserved lengths and booleans', () => {
+  it('rejects hostile parent evidence with preserved lengths and booleans', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const handoffRoot = await mkdtemp(join(tmpdir(), 'ara-task14-hostile-parent-'));
+    const invocationRoot = join(handoffRoot, 'invocations');
+    const artifactRoot = join(handoffRoot, 'artifacts');
+    await mkdir(invocationRoot, { recursive: true });
+    await mkdir(artifactRoot, { recursive: true });
+    roots.push(handoffRoot);
     const child = spawnSync(process.execPath, [
-      fileURLToPath(new URL('./probe-subscription-provider.mjs', import.meta.url)),
-      '--mode', 'local-behavior', '--adapter', 'codex'
-    ], { encoding: 'utf8' });
+      join(sourceRoot, 'apps/worker/node_modules/tsx/dist/cli.mjs'),
+      join(sourceRoot, 'apps/worker/src/commands/subscription-local-evidence.ts'),
+      'codex', artifactRoot, invocationRoot
+    ], { cwd: sourceRoot, encoding: 'utf8' });
     assert.equal(child.status, 0, child.stdout + child.stderr);
-    const baseline = JSON.parse(child.stdout).evidence;
+    const baseline = JSON.parse(child.stdout);
+    await assert.doesNotReject(validateLocalEvidence(baseline, 'codex', artifactRoot));
     const wrongTuple = structuredClone(baseline);
     wrongTuple.events[6].observed.sequence = 2;
-    assert.throws(() => validateLocalEvidence(wrongTuple, 'codex'), /transcript rejected/u);
+    await assert.rejects(validateLocalEvidence(wrongTuple, 'codex', artifactRoot), /transcript rejected/u);
     const wrongGc = structuredClone(baseline);
     wrongGc.gc[3].decision = 'retain';
-    assert.throws(() => validateLocalEvidence(wrongGc, 'codex'), /GC, or cleanup evidence rejected/u);
+    await assert.rejects(validateLocalEvidence(wrongGc, 'codex', artifactRoot), /GC, or cleanup evidence rejected/u);
+    const fabricated = structuredClone(baseline);
+    fabricated.request.size = 1;
+    fabricated.result.size = 1;
+    fabricated.request.sha256 = '0'.repeat(64);
+    fabricated.result.sha256 = '0'.repeat(64);
+    fabricated.request.observedMode = 0;
+    fabricated.result.observedMode = 0;
+    await assert.rejects(validateLocalEvidence(fabricated, 'codex', artifactRoot), /artifact evidence rejected/u);
   });
 
   it('does not export caller-authored derived acceptance', async () => {

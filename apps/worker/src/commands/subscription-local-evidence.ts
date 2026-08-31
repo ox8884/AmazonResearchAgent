@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { IPC_LIMITS, SubscriptionRequestEnvelopeSchema, SubscriptionResultEnvelopeSchema, verifyInvocationDirectory, writeAtomicIpcJson } from '@ara/ai-router';
 import type { SubscriptionAdapter } from '@ara/shared';
@@ -18,6 +18,13 @@ async function observeGcDecision(activeState: string, ageMinutes: number): Promi
   if (stderr.length !== 0) throw new TypeError('GC owner emitted stderr.');
   return stdout.trim();
 }
+
+async function publishHandoff(root: string, name: 'request' | 'result', text: string): Promise<void> {
+  const temporary = join(root, `${name}.tmp`);
+  await writeFile(temporary, text, { flag: 'wx', mode: 0o640 });
+  await chmod(temporary, 0o640);
+  await rename(temporary, join(root, `${name}.json`));
+}
 export type LocalEvidenceScenario = 'success' | 'missing-ready' | 'status-before-ready' | 'result-before-ready' | 'start-failure' | 'non-atomic-result' | 'wrong-result-digest' | 'stop-failure' | 'cgroup-not-empty' | 'cleanup-residue';
 
 const state = (overrides: Partial<SubscriptionUnitState> = {}): SubscriptionUnitState => ({
@@ -32,7 +39,7 @@ class LocalEvidenceController implements SubscriptionSandboxController {
   requestEvidence: Readonly<Record<string, string | number | boolean>> | undefined;
   resultEvidence: Readonly<Record<string, string | number | boolean>> | undefined;
   private shows = 0;
-  constructor(private readonly scenario: LocalEvidenceScenario, private readonly invocationPath: string, private readonly root: string, private readonly adapter: SubscriptionAdapter, private readonly attemptId: string) {}
+  constructor(private readonly scenario: LocalEvidenceScenario, private readonly invocationPath: string, private readonly root: string, private readonly adapter: SubscriptionAdapter, private readonly attemptId: string, private readonly handoffRoot?: string) {}
   private event(kind: string, observed: Readonly<Record<string, string | number | boolean>>): void { this.events.push({ kind, observed }); }
 
   async startNoBlock(unitName: string): Promise<void> {
@@ -51,6 +58,7 @@ class LocalEvidenceController implements SubscriptionSandboxController {
       const info = await lstat(join(this.invocationPath, 'request.json'));
       if (request.attemptId !== this.attemptId || request.adapter !== this.adapter) throw new TypeError('Observed request identity drift.');
       this.requestEvidence = { relativePath: `${this.attemptId}/request.json`, adapter: request.adapter, attemptId: request.attemptId, size: Buffer.byteLength(text), sha256: sha256(text), expectedMode: 0o640, observedMode: info.mode & 0o777, atomic: true };
+      if (this.handoffRoot !== undefined) await publishHandoff(this.handoffRoot, 'request', text);
       this.event('request-observed', { adapter: request.adapter, attemptId: request.attemptId });
     }
     if (this.scenario === 'missing-ready' && this.shows >= 2) return state({ activeState: 'failed', subState: 'failed' });
@@ -72,6 +80,7 @@ class LocalEvidenceController implements SubscriptionSandboxController {
       const result = SubscriptionResultEnvelopeSchema.parse(JSON.parse(text));
       const info = await lstat(join(this.invocationPath, 'result.json'));
       this.resultEvidence = { relativePath: `${this.attemptId}/result.json`, adapter: result.adapter, attemptId: result.attemptId, size: Buffer.byteLength(text), sha256: sha256(text), expectedMode: 0o640, observedMode: info.mode & 0o777, atomic: true, rawOutputSha256: sha256(result.rawOutput) };
+      if (this.handoffRoot !== undefined) await publishHandoff(this.handoffRoot, 'result', text);
       this.event('result-atomically-published', { adapter: result.adapter, attemptId: result.attemptId });
     } finally { await directory.close(); }
   }
@@ -123,11 +132,13 @@ function exactLocalEvidence(report: Readonly<Record<string, unknown>>): boolean 
     result.rawOutputSha256 === sha256('{"ok":true}') && cleanup.relativeRoot === attemptId && cleanup.absent === true;
 }
 
-export async function runLocalSubscriptionEvidence(adapter: SubscriptionAdapter, scenario: LocalEvidenceScenario = 'success') {
-  const root = join(tmpdir(), `ara-task14-owner-${randomUUID()}`); const attemptId = randomUUID(); const invocationPath = join(root, attemptId);
-  const controller = new LocalEvidenceController(scenario, invocationPath, root, adapter, attemptId);
+export async function runLocalSubscriptionEvidence(adapter: SubscriptionAdapter, scenario: LocalEvidenceScenario = 'success', handoffRoot?: string, parentInvocationRoot?: string) {
+  const root = parentInvocationRoot ?? join(tmpdir(), `ara-task14-owner-${randomUUID()}`); const attemptId = randomUUID(); const invocationPath = join(root, attemptId);
+  if (handoffRoot !== undefined && (!isAbsolute(handoffRoot) || resolve(handoffRoot) !== handoffRoot)) throw new TypeError('Parent handoff root rejected.');
+  if (parentInvocationRoot !== undefined && (!isAbsolute(parentInvocationRoot) || resolve(parentInvocationRoot) !== parentInvocationRoot)) throw new TypeError('Parent invocation root rejected.');
+  const controller = new LocalEvidenceController(scenario, invocationPath, root, adapter, attemptId, handoffRoot);
   const sandbox = new SystemdSubscriptionSandbox({ controller, pollIntervalMs: 1, requestHandoffTimeoutMs: 100, startupTimeoutMs: 100, executionTimeoutMs: 100, cleanupTimeoutMs: 100 });
-  await mkdir(root, { mode: 0o750 });
+  await mkdir(root, { mode: 0o750, recursive: true });
   try {
     await sandbox.run({ adapter, profileId: `${adapter}-subscription-v1`, unitTemplate: `amazon-research-${adapter}@.service`, invocationRoot: root }, { attemptId, modelId: adapter === 'codex' ? 'gpt-5.6' : 'fixture-grok', role: 'niche_normalization', locale: 'en', prompt: 'local disposable fixture', inputHash: '0'.repeat(64) }, new AbortController().signal);
     const gc = await Promise.all(GC_MATRIX.map(async ({ activeState, ageMinutes }) => ({ activeState, ageMinutes, decision: await observeGcDecision(activeState, ageMinutes) })));
@@ -135,13 +146,15 @@ export async function runLocalSubscriptionEvidence(adapter: SubscriptionAdapter,
     const evidence = { schemaVersion: 2, adapter, attemptId, profileId: `${adapter}-subscription-v1`, unitName: `amazon-research-${adapter}@${attemptId}.service`, provenance: 'task5-owner-executed-v2', events: controller.events, request: controller.requestEvidence, result: controller.resultEvidence, gc, cleanup, oracleHostVerified: false, liveProviderVerified: false };
     const ok = exactLocalEvidence(evidence);
     return { ...evidence, ok, localFixtureVerified: ok };
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { if (parentInvocationRoot === undefined) await rm(root, { recursive: true, force: true }); }
 }
 
 async function main(): Promise<void> {
   const adapter = process.argv[2];
-  if ((adapter !== 'codex' && adapter !== 'grok') || process.argv.length !== 3) throw new TypeError('Closed local evidence arguments rejected.');
-  process.stdout.write(`${JSON.stringify(await runLocalSubscriptionEvidence(adapter))}\n`);
+  const handoffRoot = process.argv[3];
+  const invocationRoot = process.argv[4];
+  if ((adapter !== 'codex' && adapter !== 'grok') || process.argv.length !== 5 || handoffRoot === undefined || invocationRoot === undefined) throw new TypeError('Closed local evidence arguments rejected.');
+  process.stdout.write(`${JSON.stringify(await runLocalSubscriptionEvidence(adapter, 'success', handoffRoot, invocationRoot))}\n`);
 }
 
 if (process.argv[1]?.endsWith('subscription-local-evidence.ts')) {

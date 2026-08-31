@@ -101,8 +101,7 @@ if [[ "$MODE" == verify ]]; then
     readonly IPC="ara-$ADAPTER-ipc"
     readonly AUTH="/var/lib/amazon-research/subscription/$ADAPTER"
     readonly RUNTIME="/run/amazon-research/subscription/$ADAPTER"
-    getent passwd "$USER" >/dev/null || fail "missing $USER"
-    [[ "$(getent passwd "$USER" | cut -d: -f7)" == /usr/sbin/nologin ]] || fail 'adapter login shell drift'
+    node "$PROBE" --mode verify-nss-identity --authority "$AUTHORITY" --adapter "$ADAPTER" >/dev/null
     [[ -d "$AUTH" && ! -L "$AUTH" && "$(stat -c '%U:%G:%a' "$AUTH")" == "$USER:$USER:700" ]] || fail 'auth home drift'
     [[ -d "$RUNTIME" && ! -L "$RUNTIME" && "$(stat -c '%U:%G:%a' "$RUNTIME")" == "root:$IPC:750" ]] || fail 'runtime root drift'
   fi

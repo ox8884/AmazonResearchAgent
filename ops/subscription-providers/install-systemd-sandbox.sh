@@ -8,6 +8,7 @@ readonly FIXTURE_MODE="$([[ -n "$FIXTURE_ROOT_ARG" ]] && printf 1 || printf '%s'
 readonly REPOSITORY_ROOT="${FIXTURE_REPOSITORY_ARG:-${ARA_REPOSITORY_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}}"
 readonly PREFIX="${FIXTURE_ROOT_ARG:-${ARA_INSTALL_ROOT:-}}"
 readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
+readonly LOCK_HELPER="$REPOSITORY_ROOT/scripts/subscription-install-lock.mjs"
 readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json"
 readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
 readonly FIXTURE_FAIL_AT="$([[ "${6:-}" == --fail-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_FAIL_AT:-}")"
@@ -81,6 +82,7 @@ verify_installed() {
 readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$FIXTURE_AUTHORITY" || printf '%s' "$HOST_AUTHORITY")"
 readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
 verify_regular "$PROBE"
+verify_regular "$LOCK_HELPER"
 verify_regular "$AUTHORITY"
 if [[ "$ENVIRONMENT" == oracle ]]; then
   [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
@@ -94,10 +96,12 @@ if [[ "$MODE" == install ]]; then
   else
     [[ -d "$lock_parent" && ! -L "$lock_parent" && "$(stat -c '%u:%g:%a' -- "$lock_parent")" == '0:0:755' ]] || fail 'transaction lock parent rejected'
   fi
-  exec 9>"$TRANSACTION_LOCK"
-  chmod 0600 -- "$TRANSACTION_LOCK"
-  [[ "$FIXTURE_MODE" == 1 || "$(stat -c '%u:%g:%a' -- "$TRANSACTION_LOCK")" == '0:0:600' ]] || fail 'transaction lock authority rejected'
-  flock -n 9 || fail 'installation transaction is busy'
+  if [[ -z "${ARA_TRANSACTION_LOCK_FD:-}" ]]; then
+    owner_mode="$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || printf root)"
+    exec node "$LOCK_HELPER" "$TRANSACTION_LOCK" "$owner_mode" bash "$0" "$@"
+  fi
+  [[ "$ARA_TRANSACTION_LOCK_FD" =~ ^[0-9]+$ ]] || fail 'transaction lock descriptor rejected'
+  flock -n "$ARA_TRANSACTION_LOCK_FD" || fail 'installation transaction is busy'
 fi
 
 declare -a SOURCES=() TARGETS=() MODES=()
@@ -213,7 +217,7 @@ transaction_exit() {
   local status=$?
   if (( status != 0 )); then rollback; fi
   rm -rf -- "$STAGE"
-  if [[ "$MODE" == install ]]; then flock -u 9 || true; exec 9>&-; fi
+  if [[ "$MODE" == install ]]; then flock -u "$ARA_TRANSACTION_LOCK_FD" || true; fi
   exit "$status"
 }
 trap transaction_exit EXIT
@@ -234,6 +238,5 @@ verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
 for parent in "$(dirname -- "$NFT_TARGET")" "$(dirname -- "${TARGETS[0]}")" "$(dirname -- "${TARGETS[2]}")"; do sync -- "$parent"; done
 trap - EXIT
 rm -rf -- "$STAGE"
-flock -u 9
-exec 9>&-
+flock -u "$ARA_TRANSACTION_LOCK_FD"
 printf 'PASS mode=install artifacts=%d endpoint_authority=%s production_activation=false\n' "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")"

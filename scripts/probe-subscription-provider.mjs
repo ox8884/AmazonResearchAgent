@@ -2,9 +2,10 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, readFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { assertAuthorityActiveNftMatches } from './subscription-nft-semantics.mjs';
@@ -339,6 +340,23 @@ export function renderEndpointPolicy(authority) {
   return Object.freeze({ text, sha256: sha256(text) });
 }
 
+export async function verifyNssIdentity(authority, adapter, lookup = async (username) => {
+  const { stdout, stderr } = await execFileAsync('getent', ['passwd', username], { windowsHide: true, timeout: 1_000, maxBuffer: 4096 });
+  if (stderr.length !== 0) throw new TypeError('NSS lookup emitted stderr.');
+  return stdout;
+}) {
+  if (!ADAPTERS.includes(adapter) || authority.fixtureOnly !== false) throw new TypeError('Production NSS authority required.');
+  const identity = authority.identities[adapter];
+  const records = [await lookup(identity.username), await lookup(identity.username)];
+  if (records[0] !== records[1]) throw new TypeError('Inconsistent repeated NSS lookup.');
+  const lines = records[0].split('\n').filter((line) => line.length > 0);
+  if (lines.length !== 1) throw new TypeError('NSS record count rejected.');
+  const fields = lines[0].split(':');
+  if (fields.length !== 7 || fields[0] !== identity.username || !/^[0-9]+$/u.test(fields[2]) || Number(fields[2]) <= 0 || Number(fields[2]) > 0x7fffffff ||
+      Number(fields[2]) !== identity.uid || fields[6] !== '/usr/sbin/nologin') throw new TypeError('Reviewed NSS identity mismatch.');
+  return Object.freeze({ username: identity.username, uid: identity.uid });
+}
+
 function check(category, ok) {
   return Object.freeze({ category, ok: Boolean(ok) });
 }
@@ -398,21 +416,50 @@ const LOCAL_GC_MATRIX = [
   { activeState: 'inactive', ageMinutes: 11, decision: 'remove' }
 ];
 
-export function validateLocalEvidence(report, adapter) {
+export async function validateLocalEvidence(report, adapter, handoffRoot) {
   const keys = ['adapter', 'attemptId', 'cleanup', 'events', 'gc', 'liveProviderVerified', 'localFixtureVerified', 'ok', 'oracleHostVerified', 'profileId', 'provenance', 'request', 'result', 'schemaVersion', 'unitName'];
   if (!exactKeys(report, keys) || report.schemaVersion !== 2 || report.adapter !== adapter || report.provenance !== 'task5-owner-executed-v2' ||
       report.ok !== true || report.localFixtureVerified !== true || report.oracleHostVerified !== false || report.liveProviderVerified !== false ||
       typeof report.attemptId !== 'string' || !/^[0-9a-f-]{36}$/u.test(report.attemptId) || report.profileId !== `${adapter}-subscription-v1` ||
       report.unitName !== `amazon-research-${adapter}@${report.attemptId}.service`) throw new TypeError('Local evidence identity rejected.');
   if (JSON.stringify(report.events) !== JSON.stringify(expectedLocalEvents(adapter, report.attemptId))) throw new TypeError('Local evidence transcript rejected.');
-  for (const [name, value] of [['request', report.request], ['result', report.result]]) {
-    const expected = name === 'request' ? `${report.attemptId}/request.json` : `${report.attemptId}/result.json`;
-    const expectedKeys = name === 'request' ? ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'relativePath', 'sha256', 'size'] :
-      ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'rawOutputSha256', 'relativePath', 'sha256', 'size'];
-    if (!exactKeys(value, expectedKeys) || value.relativePath !== expected || value.adapter !== adapter || value.attemptId !== report.attemptId || value.atomic !== true ||
-        value.expectedMode !== 0o640 || !Number.isInteger(value.observedMode) || !Number.isInteger(value.size) || value.size <= 0 || !/^[0-9a-f]{64}$/u.test(value.sha256)) throw new TypeError(`Local ${name} evidence rejected.`);
+  if (typeof handoffRoot !== 'string' || resolve(handoffRoot) !== handoffRoot) throw new TypeError('Parent artifact handoff rejected.');
+  const observed = {};
+  for (const name of ['request', 'result']) {
+    const path = join(handoffRoot, `${name}.json`);
+    const temporary = join(handoffRoot, `${name}.tmp`);
+    const before = await lstat(path, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink()) throw new TypeError(`Local ${name} artifact type rejected.`);
+    await lstat(temporary).then(() => { throw new TypeError(`Local ${name} atomic publication rejected.`); }, (error) => { if (error?.code !== 'ENOENT') throw error; });
+    const noFollow = Number.isInteger(constants.O_NOFOLLOW) ? constants.O_NOFOLLOW : 0;
+    const handle = await open(path, constants.O_RDONLY | noFollow);
+    try {
+      const descriptor = await handle.stat({ bigint: true });
+      if (!descriptor.isFile() || descriptor.dev !== before.dev || descriptor.ino !== before.ino) throw new TypeError(`Local ${name} artifact identity rejected.`);
+      const bytes = await handle.readFile();
+      const afterDescriptor = await handle.stat({ bigint: true });
+      const afterPath = await lstat(path, { bigint: true });
+      if (!afterPath.isFile() || afterPath.isSymbolicLink() || descriptor.dev !== afterDescriptor.dev || descriptor.ino !== afterDescriptor.ino || descriptor.size !== afterDescriptor.size || descriptor.mtimeNs !== afterDescriptor.mtimeNs ||
+          afterPath.dev !== descriptor.dev || afterPath.ino !== descriptor.ino || BigInt(bytes.byteLength) !== descriptor.size) throw new TypeError(`Local ${name} artifact replacement rejected.`);
+      const value = JSON.parse(bytes.toString('utf8'));
+      const expectedKeys = name === 'request' ? ['adapter', 'attemptId', 'inputHash', 'locale', 'modelId', 'profileId', 'prompt', 'role', 'version'] : ['adapter', 'attemptId', 'clientExit', 'outcome', 'rawOutput', 'version'];
+      if (!exactKeys(value, expectedKeys) || value.version !== 1 || value.adapter !== adapter || value.attemptId !== report.attemptId) throw new TypeError(`Local ${name} artifact identity rejected.`);
+      observed[name] = { size: bytes.byteLength, sha256: sha256(bytes), mode: Number(descriptor.mode & 0o777n), value };
+    } finally {
+      await handle.close();
+    }
   }
-  if (report.result.rawOutputSha256 !== sha256('{"ok":true}') || JSON.stringify(report.gc) !== JSON.stringify(LOCAL_GC_MATRIX) ||
+  if (observed.request.value.profileId !== report.profileId || observed.request.value.role !== 'niche_normalization' || observed.request.value.inputHash !== '0'.repeat(64) ||
+      observed.result.value.outcome !== 'success' || observed.result.value.rawOutput !== '{"ok":true}' || !exactKeys(observed.result.value.clientExit, ['code', 'signal']) ||
+      observed.result.value.clientExit.code !== 0 || observed.result.value.clientExit.signal !== null) throw new TypeError('Local request/result relationship rejected.');
+  for (const name of ['request', 'result']) {
+    const value = report[name];
+    const expected = `${report.attemptId}/${name}.json`;
+    const expectedKeys = name === 'request' ? ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'relativePath', 'sha256', 'size'] : ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'rawOutputSha256', 'relativePath', 'sha256', 'size'];
+    if (!exactKeys(value, expectedKeys) || value.relativePath !== expected || value.adapter !== adapter || value.attemptId !== report.attemptId || value.atomic !== true ||
+        value.expectedMode !== 0o640 || value.observedMode !== observed[name].mode || value.size !== observed[name].size || value.sha256 !== observed[name].sha256) throw new TypeError(`Local ${name} artifact evidence rejected.`);
+  }
+  if (report.result.rawOutputSha256 !== sha256(observed.result.value.rawOutput) || JSON.stringify(report.gc) !== JSON.stringify(LOCAL_GC_MATRIX) ||
       !exactKeys(report.cleanup, ['absent', 'relativeRoot']) || report.cleanup.relativeRoot !== report.attemptId || report.cleanup.absent !== true) {
     throw new TypeError('Local result, GC, or cleanup evidence rejected.');
   }
@@ -423,18 +470,36 @@ async function runExecutedLocalProbe(adapter) {
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const tsxCli = resolve(repositoryRoot, 'apps/worker/node_modules/tsx/dist/cli.mjs');
   const harness = resolve(repositoryRoot, 'apps/worker/src/commands/subscription-local-evidence.ts');
-  const { stdout, stderr } = await execFileAsync(process.execPath, [tsxCli, harness, adapter], {
-    cwd: repositoryRoot, windowsHide: true, timeout: 10_000, maxBuffer: MAX_REPORT_BYTES
-  });
-  if (stderr.length !== 0) throw new TypeError('Local evidence harness emitted stderr.');
-  const report = JSON.parse(stdout);
-  validateLocalEvidence(report, adapter);
-  const checks = [
-    check('task5-owner-lifecycle', true), check('task5-ipc-atomicity', true),
-    check('task5-gc-owner', true), check('fixture-cleanup', true)
-  ];
-  return Object.freeze({ schemaVersion: 3, ok: checks.every((entry) => entry.ok), mode: 'local-behavior', adapter, checks,
-    evidence: report, localFixtureVerified: true, oracleHostVerified: false, liveProviderVerified: false });
+  const sessionRoot = await mkdtemp(join(tmpdir(), 'ara-task14-parent-'));
+  const handoffRoot = join(sessionRoot, 'handoff');
+  const invocationRoot = join(sessionRoot, 'invocations');
+  await mkdir(handoffRoot, { mode: 0o700 });
+  await mkdir(invocationRoot, { mode: 0o700 });
+  try {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [tsxCli, harness, adapter, handoffRoot, invocationRoot], {
+      cwd: repositoryRoot, windowsHide: true, timeout: 10_000, maxBuffer: MAX_REPORT_BYTES
+    });
+    if (stderr.length !== 0) throw new TypeError('Local evidence harness emitted stderr.');
+    const report = JSON.parse(stdout);
+    await validateLocalEvidence(report, adapter, handoffRoot);
+    await lstat(join(invocationRoot, report.attemptId)).then(() => { throw new TypeError('Maintained invocation cleanup rejected.'); }, (error) => { if (error?.code !== 'ENOENT') throw error; });
+    const parentGc = await Promise.all(LOCAL_GC_MATRIX.map(async ({ activeState, ageMinutes }) => {
+      const owner = resolve(repositoryRoot, 'ops/subscription-providers/subscription-gc-decision.mjs');
+      const { stdout: decision, stderr: gcError } = await execFileAsync(process.execPath, [owner, activeState, String(ageMinutes)], { timeout: 1_000, maxBuffer: 64 });
+      if (gcError.length !== 0) throw new TypeError('Parent GC owner emitted stderr.');
+      return { activeState, ageMinutes, decision: decision.trim() };
+    }));
+    if (JSON.stringify(parentGc) !== JSON.stringify(report.gc)) throw new TypeError('Parent GC owner evidence rejected.');
+    const checks = [
+      check('task5-owner-lifecycle', true), check('task5-ipc-atomicity', true),
+      check('task5-gc-owner', true), check('fixture-cleanup', true)
+    ];
+    return Object.freeze({ schemaVersion: 3, ok: checks.every((entry) => entry.ok), mode: 'local-behavior', adapter, checks,
+      evidence: report, localFixtureVerified: true, oracleHostVerified: false, liveProviderVerified: false });
+  } finally {
+    await rm(sessionRoot, { recursive: true, force: true });
+    await lstat(sessionRoot).then(() => { throw new TypeError('Parent session cleanup rejected.'); }, (error) => { if (error?.code !== 'ENOENT') throw error; });
+  }
 }
 
 async function readFixture(path) {
@@ -450,6 +515,7 @@ function parseArguments(argv) {
   if (argv.length === 4 && argv[0] === '--mode' && argv[1] === 'verify-installed' && argv[2] === '--authority') return { mode: 'verify-installed', path: argv[3] };
   if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'verify-active-nft' && argv[2] === '--authority' && argv[4] === '--active-json') return { mode: 'verify-active-nft', path: argv[3], activePath: argv[5] };
   if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'render-endpoint-policy' && argv[2] === '--authority' && argv[4] === '--environment' && ['local-fixture', 'oracle'].includes(argv[5])) return { mode: 'render-endpoint-policy', path: argv[3], environment: argv[5] };
+  if (argv.length === 6 && argv[0] === '--mode' && argv[1] === 'verify-nss-identity' && argv[2] === '--authority' && argv[4] === '--adapter' && ADAPTERS.includes(argv[5])) return { mode: 'verify-nss-identity', path: argv[3], adapter: argv[5] };
   throw new TypeError('Closed probe arguments rejected.');
 }
 
@@ -479,6 +545,12 @@ async function cli() {
     const authority = canonicalizeEndpointAuthority(await readFixture(args.path));
     assertAuthorityActiveNftMatches(authority, await readFixture(args.activePath));
     process.stdout.write(boundedJson({ schemaVersion: 1, ok: true, activeNftVerified: true }));
+    return;
+  }
+  if (args.mode === 'verify-nss-identity') {
+    const authority = canonicalizeEndpointAuthority(await readFixture(args.path));
+    const identity = await verifyNssIdentity(authority, args.adapter);
+    process.stdout.write(boundedJson({ schemaVersion: 1, ok: true, identity }));
     return;
   }
   const report = args.mode === 'local-behavior' ? await runExecutedLocalProbe(args.adapter) : runLocalFixtureProbe(await readFixture(args.path));
