@@ -4,7 +4,11 @@
   "review": {
     "identity": "task14-local-fixture",
     "version": "1",
-    "bindingsSha256": "4a6bf65817e9ec1d83a0df09c33cbaa57c06789f47cfa06b71403dce7d668d30"
+    "bindingsSha256": "ba60b60203da4c21dd95d3a14a4549d7154c7cc0f6c5354d24867de3c0b88fab"
+  },
+  "identities": {
+    "codex": { "username": "ara-codex", "uid": 20001 },
+    "grok": { "username": "ara-grok", "uid": 20002 }
   },
   "resolvers": {
     "ipv4": ["192.0.2.53"],

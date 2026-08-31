@@ -14,7 +14,7 @@ function nftRule(uid, family, set, protocol, port, verdict) {
   const expr = [nftMatch('meta', 'skuid', uid)];
   if (family !== undefined) expr.push(nftMatch(family, 'daddr', { set }));
   if (protocol !== undefined) expr.push(nftMatch(protocol, 'dport', port));
-  expr.push(verdict === 'accept' ? { accept: {} } : { reject: { type: 'icmpx', expr: 'admin-prohibited' } });
+  expr.push(verdict === 'accept' ? { accept: null } : { reject: { type: 'icmpx', expr: 'port-unreachable' } });
   return { rule: { family: FAMILY, table: TABLE, chain: 'output', expr } };
 }
 
@@ -36,7 +36,7 @@ export function expectedNftRuleset(authority) {
   for (const [name, elem] of Object.entries(sets)) nftables.push({ set: { family: FAMILY, table: TABLE, name, type: SET_TYPES[name], flags: ['interval'], elem } });
   nftables.push({ chain: { family: FAMILY, table: TABLE, name: 'output', type: 'filter', hook: 'output', prio: 0, policy: 'accept' } });
   for (const adapter of ['codex', 'grok']) {
-    const uid = `ara-${adapter}`;
+    const uid = authority.identities[adapter].uid;
     for (const [family, set] of [['ip', 'resolver_v4'], ['ip6', 'resolver_v6']]) {
       nftables.push(nftRule(uid, family, set, 'udp', 53, 'accept'));
       nftables.push(nftRule(uid, family, set, 'tcp', 53, 'accept'));
@@ -72,6 +72,13 @@ function scalar(value) {
   throw new TypeError('Unknown nft scalar.');
 }
 
+function metainfo(value) {
+  if (semantic(value, ['version', 'release_name', 'json_schema_version'], []) === undefined ||
+      value.version !== '1.0.9' || value.release_name !== 'Old Doc Yak #3' || value.json_schema_version !== 1) {
+    throw new TypeError('Unknown nft metainfo.');
+  }
+}
+
 function canonicalRule(rule) {
   if (semantic(rule, ['family', 'table', 'chain', 'expr'], ['handle']) === undefined) throw new TypeError('Unknown nft rule fields.');
   if (rule.family !== FAMILY || rule.table !== TABLE || rule.chain !== 'output' || !Array.isArray(rule.expr)) {
@@ -85,8 +92,10 @@ function canonicalRule(rule) {
       const left = match.left;
       if (!exactKeys(left, ['meta']) && !exactKeys(left, ['payload'])) throw new TypeError('Unknown nft match left side.');
       if (left.meta !== undefined) {
-        if (left.meta.key !== 'skuid' || !exactKeys(left.meta, ['key'])) throw new TypeError('Unknown nft meta expression.');
-        parts.push(`uid=${scalar(match.right)}`);
+        if (left.meta.key !== 'skuid' || !exactKeys(left.meta, ['key']) || !Number.isInteger(match.right) || match.right <= 0) {
+          throw new TypeError('Unknown nft meta expression.');
+        }
+        parts.push(`uid=${match.right}`);
       } else {
         const payload = left.payload;
         if (!exactKeys(payload, ['protocol', 'field'])) throw new TypeError('Unknown nft payload expression.');
@@ -98,8 +107,14 @@ function canonicalRule(rule) {
       }
       continue;
     }
-    if (exactKeys(expression, ['accept'])) { if (!exactKeys(expression.accept, [])) throw new TypeError('Malformed accept.'); parts.push('accept'); continue; }
-    if (exactKeys(expression, ['reject'])) { if (!exactKeys(expression.reject, ['type', 'expr']) || expression.reject.type !== 'icmpx' || expression.reject.expr !== 'admin-prohibited') throw new TypeError('Unknown reject.'); parts.push('reject'); continue; }
+    if (exactKeys(expression, ['accept'])) {
+      if (expression.accept !== null) throw new TypeError('Malformed accept.');
+      parts.push('accept'); continue;
+    }
+    if (exactKeys(expression, ['reject'])) {
+      if (expression.reject !== null && (!exactKeys(expression.reject, ['type', 'expr']) || expression.reject.type !== 'icmpx' || expression.reject.expr !== 'port-unreachable')) throw new TypeError('Unknown reject.');
+      parts.push('reject'); continue;
+    }
     throw new TypeError('Unknown nft rule expression.');
   }
   return parts.join('|');
@@ -112,7 +127,7 @@ export function canonicalizeActiveNftRuleset(input) {
   let table = 0;
   let chain = 0;
   for (const object of input.nftables) {
-    if (exactKeys(object, ['metainfo'])) continue;
+    if (exactKeys(object, ['metainfo'])) { metainfo(object.metainfo); continue; }
     if (exactKeys(object, ['table'])) {
       const value = semantic(object.table, ['family', 'name'], ['handle']);
       if (value === undefined || value.family !== FAMILY || value.name !== TABLE) throw new TypeError('Unexpected nft table.');
@@ -131,7 +146,7 @@ export function canonicalizeActiveNftRuleset(input) {
     if (exactKeys(object, ['chain'])) {
       const value = object.chain;
       if (semantic(value, ['family', 'table', 'name', 'type', 'hook', 'prio', 'policy'], ['handle']) === undefined || value.family !== FAMILY || value.table !== TABLE ||
-          value.name !== 'output' || value.type !== 'filter' || value.hook !== 'output' || value.prio !== 0 || value.policy !== 'accept') {
+          value.name !== 'output' || value.type !== 'filter' || value.hook !== 'output' || ![0, 'filter'].includes(value.prio) || value.policy !== 'accept') {
         throw new TypeError('Unexpected nft chain.');
       }
       chain += 1; continue;

@@ -367,20 +367,25 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
 });
 
 describe('Task-14 local evidence executes Task-5 owners', () => {
-  it('derives positive evidence from the real sandbox lifecycle and IPC helpers', async () => {
+  it('derives exact ordered evidence from the real sandbox lifecycle and IPC helpers', async () => {
     const report = await runLocalSubscriptionEvidence('codex');
     expect(report.ok).toBe(true);
-    expect(report.provenance).toBe('task5-owner-executed-v1');
-    expect(report.events).toEqual(expect.arrayContaining([
-      'request-observed', 'ready-observed', 'result-atomically-published',
-      'explicit-stop', 'terminal-observed', 'exec-stop-post-observed', 'cgroup-observed'
-    ]));
+    expect(report.schemaVersion).toBe(2);
+    expect(report.provenance).toBe('task5-owner-executed-v2');
+    expect(report.events.map((event) => event.kind)).toEqual([
+      'start-no-block', 'directory-created', 'unit-state', 'unit-state', 'request-observed', 'ready-observed',
+      'unit-state', 'result-atomically-published', 'result-status-observed', 'explicit-stop', 'kill-all',
+      'terminal-observed', 'exec-stop-post-observed', 'cgroup-observed'
+    ]);
+    expect(report.request).toMatchObject({ adapter: 'codex', attemptId: report.attemptId, atomic: true, expectedMode: 0o640 });
+    expect(report.result).toMatchObject({ adapter: 'codex', attemptId: report.attemptId, atomic: true, expectedMode: 0o640 });
     expect(report.gc).toEqual([
       { activeState: 'active', ageMinutes: 30, decision: 'retain' },
       { activeState: 'inactive', ageMinutes: 5, decision: 'retain' },
       { activeState: 'unknown', ageMinutes: 30, decision: 'retain' },
       { activeState: 'inactive', ageMinutes: 11, decision: 'remove' }
     ]);
+    expect(report.cleanup).toEqual({ relativeRoot: report.attemptId, absent: true });
     expect(report.oracleHostVerified).toBe(false);
     expect(report.liveProviderVerified).toBe(false);
   });

@@ -1,0 +1,809 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Ubuntu Noble nftables parser compatibility only; not Oracle evidence",
+  "source": {
+    "distribution": "Ubuntu 24.04 Noble",
+    "architecture": "amd64",
+    "nftablesVersion": "1.0.9-1build1",
+    "nftablesDebSha256": "539a2dec3d0178fdb401f7fc351c57b1bddb08024ede5555e33c49d944fa04eb",
+    "libnftablesDebSha256": "f74276e2b0a6ab97ac1187d38f5b22a5e742e9d17bf67c1d66dacc4ede6ff923"
+  },
+  "isolation": "unshare --user --map-root-user --net; disposable empty network namespace destroyed on exit; no host rules loaded or modified",
+  "command": "unshare --user --map-root-user --net sh -c '\"$1\" --json --file \"$2\" && \"$1\" --json list table inet amazon_research_subscription' sh <pinned-nft> policy.nft",
+  "renderedInputSha256": "b56cd39aff84fff0e1fc6a95e446b3b0a70edd5310da3f3cb99264c4d8bef44e",
+  "jsonOutputSha256": "896be47824b3d96876c4e43a3a1c86401857435f377dcb451925b6443e8bc392",
+  "json": {
+    "nftables": [
+      {
+        "metainfo": {
+          "version": "1.0.9",
+          "release_name": "Old Doc Yak #3",
+          "json_schema_version": 1
+        }
+      },
+      {
+        "table": {
+          "family": "inet",
+          "name": "amazon_research_subscription",
+          "handle": 1
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "resolver_v4",
+          "table": "amazon_research_subscription",
+          "type": "ipv4_addr",
+          "handle": 2,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            "192.0.2.53"
+          ]
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "resolver_v6",
+          "table": "amazon_research_subscription",
+          "type": "ipv6_addr",
+          "handle": 3,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            "2001:db8::53"
+          ]
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "codex_https_v4",
+          "table": "amazon_research_subscription",
+          "type": "ipv4_addr",
+          "handle": 4,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            {
+              "prefix": {
+                "addr": "198.51.100.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "203.0.113.0",
+                "len": 24
+              }
+            }
+          ]
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "codex_https_v6",
+          "table": "amazon_research_subscription",
+          "type": "ipv6_addr",
+          "handle": 5,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            {
+              "prefix": {
+                "addr": "2001:db8:1::",
+                "len": 48
+              }
+            },
+            {
+              "prefix": {
+                "addr": "2001:db8:2::",
+                "len": 48
+              }
+            }
+          ]
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "grok_https_v4",
+          "table": "amazon_research_subscription",
+          "type": "ipv4_addr",
+          "handle": 6,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            {
+              "prefix": {
+                "addr": "198.51.100.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "203.0.113.0",
+                "len": 24
+              }
+            }
+          ]
+        }
+      },
+      {
+        "set": {
+          "family": "inet",
+          "name": "grok_https_v6",
+          "table": "amazon_research_subscription",
+          "type": "ipv6_addr",
+          "handle": 7,
+          "flags": [
+            "interval"
+          ],
+          "elem": [
+            {
+              "prefix": {
+                "addr": "2001:db8:3::",
+                "len": 48
+              }
+            },
+            {
+              "prefix": {
+                "addr": "2001:db8:4::",
+                "len": 48
+              }
+            }
+          ]
+        }
+      },
+      {
+        "chain": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "name": "output",
+          "handle": 1,
+          "type": "filter",
+          "hook": "output",
+          "prio": 0,
+          "policy": "accept"
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 8,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 9,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 10,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 11,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 12,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@codex_https_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 443
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 13,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@codex_https_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 443
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 14,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20001
+              }
+            },
+            {
+              "reject": {
+                "type": "icmpx",
+                "expr": "port-unreachable"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 15,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 16,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 17,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 18,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@resolver_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 19,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@grok_https_v4"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 443
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 20,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "daddr"
+                  }
+                },
+                "right": "@grok_https_v6"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 443
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      },
+      {
+        "rule": {
+          "family": "inet",
+          "table": "amazon_research_subscription",
+          "chain": "output",
+          "handle": 21,
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "skuid"
+                  }
+                },
+                "right": 20002
+              }
+            },
+            {
+              "reject": {
+                "type": "icmpx",
+                "expr": "port-unreachable"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

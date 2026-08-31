@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { assertAuthorityActiveNftMatches } from './subscription-nft-semantics.mjs';
+import { verifyInstalledArtifactsCore } from './installed-artifact-verifier.mjs';
 
 const execFileAsync = promisify(execFile);
 export const MAX_REPORT_BYTES = 32 * 1024;
@@ -23,10 +24,10 @@ const APPROVED_RELEASE = Object.freeze({
   commit: 'ce6a68bb08ece2a2ea1a986662523d024eddf3e7',
   profile: 'subscription-sandbox-v1'
 });
-// Intentionally empty until an independently reviewed production publication adds exact names and prefixes.
+// Intentionally empty until an independently reviewed production publication adds exact names, numeric UIDs, and prefixes.
 const APPROVED_PRODUCTION_BINDINGS = Object.freeze({});
-const FIXTURE_KEYS = ['adapters', 'fixtureOnly', 'resolvers', 'review', 'schemaVersion'];
-const PRODUCTION_KEYS = ['adapters', 'artifacts', 'fixtureOnly', 'release', 'resolvers', 'review', 'schemaVersion'];
+const FIXTURE_KEYS = ['adapters', 'fixtureOnly', 'identities', 'resolvers', 'review', 'schemaVersion'];
+const PRODUCTION_KEYS = ['adapters', 'artifacts', 'fixtureOnly', 'identities', 'release', 'resolvers', 'review', 'schemaVersion'];
 const REQUIRED_INSTALLED_PATHS = Object.freeze([
   '/usr/local/libexec/amazon-research/subscription-supervisor.mjs',
   '/usr/local/libexec/amazon-research/manage-invocation.sh',
@@ -71,6 +72,7 @@ export function computeEndpointAuthorityDigest(input) {
       schemaVersion: input.schemaVersion,
       fixtureOnly: input.fixtureOnly,
       review: { identity: input.review?.identity, version: input.review?.version },
+      identities: input.identities,
       resolvers: input.resolvers,
       adapters: input.adapters
     };
@@ -169,9 +171,10 @@ function canonicalFamily(value, family, fixtureOnly, allowPrefix) {
 function canonicalFixture(input) {
   if (!exactKeys(input, FIXTURE_KEYS) || input.schemaVersion !== 1 || input.fixtureOnly !== true ||
       !exactKeys(input.review, ['bindingsSha256', 'identity', 'version']) ||
-      !exactKeys(input.resolvers, FAMILIES) || !exactKeys(input.adapters, ADAPTERS)) {
+      !exactKeys(input.identities, ADAPTERS) || !exactKeys(input.resolvers, FAMILIES) || !exactKeys(input.adapters, ADAPTERS)) {
     throw new TypeError('Endpoint fixture schema rejected.');
   }
+  const identities = canonicalIdentities(input.identities);
   const adapters = Object.fromEntries(ADAPTERS.map((adapter) => {
     const binding = input.adapters[adapter];
     if (!exactKeys(binding, GROUPS)) throw new TypeError('Adapter endpoint schema rejected.');
@@ -187,12 +190,29 @@ function canonicalFixture(input) {
     schemaVersion: 1,
     fixtureOnly: true,
     review: { identity: input.review.identity, version: input.review.version },
+    identities,
     resolvers: {
       ipv4: canonicalFamily(input.resolvers.ipv4, 4, true, false),
       ipv6: canonicalFamily(input.resolvers.ipv6, 6, true, false)
     },
     adapters
   };
+}
+
+function canonicalIdentities(value) {
+  if (!exactKeys(value, ADAPTERS)) throw new TypeError('Adapter identity schema rejected.');
+  const seen = new Set();
+  const identities = Object.fromEntries(ADAPTERS.map((adapter) => {
+    const identity = value[adapter];
+    const username = `ara-${adapter}`;
+    if (!exactKeys(identity, ['uid', 'username']) || identity.username !== username ||
+        !Number.isInteger(identity.uid) || identity.uid <= 0 || identity.uid > 0x7fffffff || seen.has(identity.uid)) {
+      throw new TypeError('Adapter numeric UID authority rejected.');
+    }
+    seen.add(identity.uid);
+    return [adapter, { username, uid: identity.uid }];
+  }));
+  return identities;
 }
 
 function parseTimestamp(value, name) {
@@ -227,9 +247,9 @@ function canonicalResolution(record, allowPrefix, now, approvedBindings) {
 }
 
 function canonicalProduction(input, now, approvedBindings) {
-  if (!exactKeys(input, PRODUCTION_KEYS) || input.schemaVersion !== 2 || input.fixtureOnly !== false ||
+  if (!exactKeys(input, PRODUCTION_KEYS) || input.schemaVersion !== 3 || input.fixtureOnly !== false ||
       !exactKeys(input.release, ['commit', 'profile']) || !exactKeys(input.review, ['bindingsSha256', 'expiresAt', 'identity', 'reviewedAt', 'version']) ||
-      !exactKeys(input.adapters, ADAPTERS) || !object(input.artifacts) || !Array.isArray(input.resolvers)) {
+      !exactKeys(input.identities, ADAPTERS) || !exactKeys(input.adapters, ADAPTERS) || !object(input.artifacts) || !Array.isArray(input.resolvers)) {
     throw new TypeError('Production endpoint authority schema rejected.');
   }
   if (input.review.identity !== APPROVED_REVIEW.identity || input.review.version !== APPROVED_REVIEW.version) throw new TypeError('Production reviewer authority rejected.');
@@ -237,6 +257,13 @@ function canonicalProduction(input, now, approvedBindings) {
   const reviewedAt = parseTimestamp(input.review.reviewedAt, 'reviewedAt');
   const expiresAt = parseTimestamp(input.review.expiresAt, 'expiresAt');
   if (reviewedAt > now || expiresAt <= now || expiresAt - reviewedAt > 86400000) throw new TypeError('Production review freshness rejected.');
+  const identities = canonicalIdentities(input.identities);
+  for (const adapter of ADAPTERS) {
+    const approved = approvedBindings[`identity:${adapter}`];
+    if (approved === undefined || approved.username !== identities[adapter].username || approved.uid !== identities[adapter].uid) {
+      throw new TypeError('No reviewed production numeric UID authority is published.');
+    }
+  }
   if (input.resolvers.length === 0) throw new TypeError('Production resolver authority is empty.');
   const resolvers = input.resolvers.map((record) => canonicalResolution(record, false, now, approvedBindings)).sort((a, b) => a.hostname.localeCompare(b.hostname));
   const adapters = Object.fromEntries(ADAPTERS.map((adapter) => {
@@ -255,9 +282,9 @@ function canonicalProduction(input, now, approvedBindings) {
     }
     return [path, { mode: entry.mode, sha256: entry.sha256 }];
   }));
-  return { schemaVersion: 2, fixtureOnly: false, release: input.release, review: {
+  return { schemaVersion: 3, fixtureOnly: false, release: input.release, review: {
     identity: input.review.identity, version: input.review.version, reviewedAt: input.review.reviewedAt, expiresAt: input.review.expiresAt
-  }, resolvers, adapters, artifacts };
+  }, identities, resolvers, adapters, artifacts };
 }
 
 export function canonicalizeEndpointAuthority(input, options) {
@@ -293,6 +320,7 @@ function resolverFamilies(authority, family) {
 export function renderEndpointPolicy(authority) {
   const values = (items) => [...new Set(items)].sort().join(', ');
   const https = (adapter, family) => values([...policyFamilies(authority, adapter, 'provider', family), ...policyFamilies(authority, adapter, 'auth', family)]);
+  const uid = (adapter) => authority.identities[adapter].uid;
   const text = `table inet amazon_research_subscription {\n` +
     `  set resolver_v4 { type ipv4_addr; flags interval; elements = { ${values(resolverFamilies(authority, 'ipv4'))} } }\n` +
     `  set resolver_v6 { type ipv6_addr; flags interval; elements = { ${values(resolverFamilies(authority, 'ipv6'))} } }\n` +
@@ -301,12 +329,12 @@ export function renderEndpointPolicy(authority) {
     `  set grok_https_v4 { type ipv4_addr; flags interval; elements = { ${https('grok', 'ipv4')} } }\n` +
     `  set grok_https_v6 { type ipv6_addr; flags interval; elements = { ${https('grok', 'ipv6')} } }\n\n` +
     `  chain output {\n    type filter hook output priority filter; policy accept;\n\n` +
-    `    meta skuid "ara-codex" ip daddr @resolver_v4 udp dport 53 accept\n    meta skuid "ara-codex" ip daddr @resolver_v4 tcp dport 53 accept\n` +
-    `    meta skuid "ara-codex" ip6 daddr @resolver_v6 udp dport 53 accept\n    meta skuid "ara-codex" ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
-    `    meta skuid "ara-codex" ip daddr @codex_https_v4 tcp dport 443 accept\n    meta skuid "ara-codex" ip6 daddr @codex_https_v6 tcp dport 443 accept\n    meta skuid "ara-codex" reject\n\n` +
-    `    meta skuid "ara-grok" ip daddr @resolver_v4 udp dport 53 accept\n    meta skuid "ara-grok" ip daddr @resolver_v4 tcp dport 53 accept\n` +
-    `    meta skuid "ara-grok" ip6 daddr @resolver_v6 udp dport 53 accept\n    meta skuid "ara-grok" ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
-    `    meta skuid "ara-grok" ip daddr @grok_https_v4 tcp dport 443 accept\n    meta skuid "ara-grok" ip6 daddr @grok_https_v6 tcp dport 443 accept\n    meta skuid "ara-grok" reject\n  }\n}\n`;
+    `    meta skuid ${uid('codex')} ip daddr @resolver_v4 udp dport 53 accept\n    meta skuid ${uid('codex')} ip daddr @resolver_v4 tcp dport 53 accept\n` +
+    `    meta skuid ${uid('codex')} ip6 daddr @resolver_v6 udp dport 53 accept\n    meta skuid ${uid('codex')} ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
+    `    meta skuid ${uid('codex')} ip daddr @codex_https_v4 tcp dport 443 accept\n    meta skuid ${uid('codex')} ip6 daddr @codex_https_v6 tcp dport 443 accept\n    meta skuid ${uid('codex')} reject\n\n` +
+    `    meta skuid ${uid('grok')} ip daddr @resolver_v4 udp dport 53 accept\n    meta skuid ${uid('grok')} ip daddr @resolver_v4 tcp dport 53 accept\n` +
+    `    meta skuid ${uid('grok')} ip6 daddr @resolver_v6 udp dport 53 accept\n    meta skuid ${uid('grok')} ip6 daddr @resolver_v6 tcp dport 53 accept\n` +
+    `    meta skuid ${uid('grok')} ip daddr @grok_https_v4 tcp dport 443 accept\n    meta skuid ${uid('grok')} ip6 daddr @grok_https_v6 tcp dport 443 accept\n    meta skuid ${uid('grok')} reject\n  }\n}\n`;
   if (/elements = \{\s*\}/u.test(text)) throw new TypeError('Rendered endpoint policy contains an empty set.');
   return Object.freeze({ text, sha256: sha256(text) });
 }
@@ -342,32 +370,52 @@ export function runLocalFixtureProbe() {
 }
 
 export async function verifyInstalledAuthority(authority, options) {
-
   if (options !== undefined) throw new TypeError('production installed verifier rejects options');
   if (authority.fixtureOnly || !object(authority.artifacts)) throw new TypeError('Production installed manifest required.');
-  const verified = [];
-  for (const path of REQUIRED_INSTALLED_PATHS) {
-    const before = await lstat(path);
-    if (!before.isFile() || before.isSymbolicLink()) throw new TypeError('Installed artifact type rejected.');
-    const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    try {
-      const info = await handle.stat();
-      if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.uid !== 0 || info.gid !== 0) {
-        throw new TypeError('Installed artifact type, identity, or owner rejected.');
-      }
-      const expected = authority.artifacts[path];
-      const mode = `0${(info.mode & 0o777).toString(8)}`;
-      if (mode !== expected.mode) throw new TypeError('Installed artifact mode rejected.');
-      const bytes = await handle.readFile();
-      if (sha256(bytes) !== expected.sha256) throw new TypeError('Installed artifact digest rejected.');
-      const after = await lstat(path);
-      if (after.dev !== info.dev || after.ino !== info.ino) throw new TypeError('Installed artifact changed during verification.');
-      verified.push({ path, sha256: expected.sha256, mode });
-    } finally {
-      await handle.close();
-    }
+  return verifyInstalledArtifactsCore(authority, REQUIRED_INSTALLED_PATHS, { constants, lstat, open });
+}
+
+function expectedLocalEvents(adapter, attemptId) {
+  return [
+    { kind: 'start-no-block', observed: { unitName: `amazon-research-${adapter}@${attemptId}.service` } },
+    { kind: 'directory-created', observed: { relativePath: attemptId, mode: 0o2770 } },
+    { kind: 'unit-state', observed: { sequence: 1 } }, { kind: 'unit-state', observed: { sequence: 2 } },
+    { kind: 'request-observed', observed: { adapter, attemptId } },
+    { kind: 'ready-observed', observed: { activeState: 'active', subState: 'running', statusText: '' } },
+    { kind: 'unit-state', observed: { sequence: 3 } },
+    { kind: 'result-atomically-published', observed: { adapter, attemptId } },
+    { kind: 'result-status-observed', observed: { activeState: 'active', subState: 'running', statusText: 'result-published' } },
+    { kind: 'explicit-stop', observed: { requested: true } }, { kind: 'kill-all', observed: { requested: true } },
+    { kind: 'terminal-observed', observed: { terminal: true } },
+    { kind: 'exec-stop-post-observed', observed: { invocationAbsent: true } },
+    { kind: 'cgroup-observed', observed: { empty: true } }
+  ];
+}
+const LOCAL_GC_MATRIX = [
+  { activeState: 'active', ageMinutes: 30, decision: 'retain' },
+  { activeState: 'inactive', ageMinutes: 5, decision: 'retain' },
+  { activeState: 'unknown', ageMinutes: 30, decision: 'retain' },
+  { activeState: 'inactive', ageMinutes: 11, decision: 'remove' }
+];
+
+export function validateLocalEvidence(report, adapter) {
+  const keys = ['adapter', 'attemptId', 'cleanup', 'events', 'gc', 'liveProviderVerified', 'localFixtureVerified', 'ok', 'oracleHostVerified', 'profileId', 'provenance', 'request', 'result', 'schemaVersion', 'unitName'];
+  if (!exactKeys(report, keys) || report.schemaVersion !== 2 || report.adapter !== adapter || report.provenance !== 'task5-owner-executed-v2' ||
+      report.ok !== true || report.localFixtureVerified !== true || report.oracleHostVerified !== false || report.liveProviderVerified !== false ||
+      typeof report.attemptId !== 'string' || !/^[0-9a-f-]{36}$/u.test(report.attemptId) || report.profileId !== `${adapter}-subscription-v1` ||
+      report.unitName !== `amazon-research-${adapter}@${report.attemptId}.service`) throw new TypeError('Local evidence identity rejected.');
+  if (JSON.stringify(report.events) !== JSON.stringify(expectedLocalEvents(adapter, report.attemptId))) throw new TypeError('Local evidence transcript rejected.');
+  for (const [name, value] of [['request', report.request], ['result', report.result]]) {
+    const expected = name === 'request' ? `${report.attemptId}/request.json` : `${report.attemptId}/result.json`;
+    const expectedKeys = name === 'request' ? ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'relativePath', 'sha256', 'size'] :
+      ['adapter', 'atomic', 'attemptId', 'expectedMode', 'observedMode', 'rawOutputSha256', 'relativePath', 'sha256', 'size'];
+    if (!exactKeys(value, expectedKeys) || value.relativePath !== expected || value.adapter !== adapter || value.attemptId !== report.attemptId || value.atomic !== true ||
+        value.expectedMode !== 0o640 || !Number.isInteger(value.observedMode) || !Number.isInteger(value.size) || value.size <= 0 || !/^[0-9a-f]{64}$/u.test(value.sha256)) throw new TypeError(`Local ${name} evidence rejected.`);
   }
-  return Object.freeze(verified);
+  if (report.result.rawOutputSha256 !== sha256('{"ok":true}') || JSON.stringify(report.gc) !== JSON.stringify(LOCAL_GC_MATRIX) ||
+      !exactKeys(report.cleanup, ['absent', 'relativeRoot']) || report.cleanup.relativeRoot !== report.attemptId || report.cleanup.absent !== true) {
+    throw new TypeError('Local result, GC, or cleanup evidence rejected.');
+  }
 }
 
 async function runExecutedLocalProbe(adapter) {
@@ -380,16 +428,13 @@ async function runExecutedLocalProbe(adapter) {
   });
   if (stderr.length !== 0) throw new TypeError('Local evidence harness emitted stderr.');
   const report = JSON.parse(stdout);
-  if (!exactKeys(report, ['schemaVersion', 'ok', 'adapter', 'provenance', 'events', 'gc', 'localFixtureVerified', 'oracleHostVerified', 'liveProviderVerified']) ||
-      report.schemaVersion !== 1 || report.ok !== true || report.adapter !== adapter || report.provenance !== 'task5-owner-executed-v1' ||
-      !Array.isArray(report.events) || report.events.length !== 14 || !Array.isArray(report.gc) || report.gc.length !== 4 ||
-      report.localFixtureVerified !== true || report.oracleHostVerified !== false || report.liveProviderVerified !== false) {
-    throw new TypeError('Local evidence harness report rejected.');
-  }
-  return Object.freeze({ schemaVersion: 3, ok: true, mode: 'local-behavior', adapter, checks: [
+  validateLocalEvidence(report, adapter);
+  const checks = [
     check('task5-owner-lifecycle', true), check('task5-ipc-atomicity', true),
     check('task5-gc-owner', true), check('fixture-cleanup', true)
-  ], evidence: report, localFixtureVerified: true, oracleHostVerified: false, liveProviderVerified: false });
+  ];
+  return Object.freeze({ schemaVersion: 3, ok: checks.every((entry) => entry.ok), mode: 'local-behavior', adapter, checks,
+    evidence: report, localFixtureVerified: true, oracleHostVerified: false, liveProviderVerified: false });
 }
 
 async function readFixture(path) {

@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -12,10 +12,13 @@ import {
   computeEndpointAuthorityDigest,
   renderEndpointPolicy,
   runDerivedLocalProbe,
-  runLocalFixtureProbe
+  runLocalFixtureProbe,
+  validateLocalEvidence
 } from './probe-subscription-provider.mjs';
 import { verifyInstalledAuthority } from './probe-subscription-provider.mjs';
-import { assertActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
+import { assertActiveNftMatches, assertAuthorityActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
+import { verifyInstalledArtifactsCore } from './installed-artifact-verifier.mjs';
+const nobleFixturePath = fileURLToPath(new URL('../tests/fixtures/nftables-noble-1.0.9-parser.json', import.meta.url));
 
 const fixtureAuthority = () => ({
   schemaVersion: 1,
@@ -24,6 +27,10 @@ const fixtureAuthority = () => ({
     identity: 'task14-local-fixture',
     version: '1',
     bindingsSha256: 'pending'
+  },
+  identities: {
+    codex: { username: 'ara-codex', uid: 20001 },
+    grok: { username: 'ara-grok', uid: 20002 }
   },
   resolvers: {
     ipv4: ['192.0.2.53'],
@@ -53,7 +60,7 @@ function reviewedFixtureAuthority() {
 function productionAuthority(overrides = {}) {
   const now = new Date();
   const authority = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     fixtureOnly: false,
     release: {
       commit: 'ce6a68bb08ece2a2ea1a986662523d024eddf3e7',
@@ -65,6 +72,10 @@ function productionAuthority(overrides = {}) {
       reviewedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
       bindingsSha256: 'pending'
+    },
+    identities: {
+      codex: { username: 'ara-codex', uid: 20001 },
+      grok: { username: 'ara-grok', uid: 20002 }
     },
     resolvers: [{ hostname: 'resolver.example.test', resolvedAt: now.toISOString(), ttlSeconds: 3600, ipv4: ['8.8.8.8'], ipv6: ['2001:4860:4860::8888'] }],
     adapters: {
@@ -108,6 +119,7 @@ describe('endpoint binding authority', () => {
     assert.equal(child.status, 0, child.stdout);
     assert.match(child.stdout, /elements = \{ 192\.0\.2\.53 \}/u);
     assert.match(child.stdout, /codex_https_v4[^\n]*elements = \{ 198\.51\.100\.0\/24, 203\.0\.113\.0\/24 \}/u);
+    assert.match(child.stdout, /meta skuid 20001/u);
   });
 
   for (const [name, mutate] of [
@@ -125,7 +137,10 @@ describe('endpoint binding authority', () => {
     ['private address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['10.0.0.1']; }],
     ['multicast address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['239.1.1.1']; }],
     ['link-local address', (a) => { a.fixtureOnly = false; a.resolvers.ipv6 = ['fe80::1']; }],
-    ['Tailscale address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['100.100.100.100']; }]
+    ['Tailscale address', (a) => { a.fixtureOnly = false; a.resolvers.ipv4 = ['100.100.100.100']; }],
+    ['UID zero', (a) => { a.identities.codex.uid = 0; }],
+    ['duplicate UID', (a) => { a.identities.grok.uid = a.identities.codex.uid; }],
+    ['username drift', (a) => { a.identities.codex.username = 'ara-other'; }],
   ]) {
     it(`rejects ${name}`, async () => {
       const authority = reviewedFixtureAuthority();
@@ -173,7 +188,7 @@ describe('production endpoint authority', () => {
     const authority = productionAuthority();
     assert.throws(
       () => canonicalizeEndpointAuthority(authority),
-      /No reviewed production hostname authority is published/u
+      /No reviewed production numeric UID authority is published/u
     );
   });
 });
@@ -191,14 +206,17 @@ describe('active nft semantic identity', () => {
 
     ['missing final reject', (rules) => { rules.nftables.pop(); }],
     ['changed set prefix', (rules) => { rules.nftables.find((entry) => entry.set?.name === 'codex_https_v4').set.elem[0] = '198.51.100.0/25'; }],
-    ['wrong UID', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[0].match.right = 'ara-other'; }],
+    ['wrong UID', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[0].match.right = 29999; }],
     ['wrong family', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[1].match.left.payload.protocol = 'ip6'; }],
     ['wrong port', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[2].match.right = 54; }],
     ['wrong hook', (rules) => { rules.nftables.find((entry) => entry.chain).chain.hook = 'input'; }],
     ['wrong priority', (rules) => { rules.nftables.find((entry) => entry.chain).chain.prio = 1; }],
     ['wrong policy', (rules) => { rules.nftables.find((entry) => entry.chain).chain.policy = 'drop'; }],
     ['unknown semantic object', (rules) => rules.nftables.push({ flowtable: {} })],
-    ['truncated output', (rules) => { rules.nftables = rules.nftables.slice(0, 2); }]
+    ['truncated output', (rules) => { rules.nftables = rules.nftables.slice(0, 2); }],
+    ['named UID', (rules) => { rules.nftables.find((entry) => entry.rule).rule.expr[0].match.right = 'ara-codex'; }],
+    ['reordered rule', (rules) => { const first = rules.nftables.findIndex((entry) => entry.rule); [rules.nftables[first], rules.nftables[first + 1]] = [rules.nftables[first + 1], rules.nftables[first]]; }],
+    ['extra presentation field', (rules) => { rules.nftables.find((entry) => entry.rule).rule.comment = 'not inert'; }],
   ]) {
     // Break: active rules drift while the installed policy remains approved.
     it(`rejects ${name}`, () => {
@@ -214,6 +232,31 @@ describe('active nft semantic identity', () => {
       if (value !== undefined) value.handle = 99;
     }
     assert.doesNotThrow(() => assertActiveNftMatches(expected(), active));
+  });
+
+  it('accepts exact Noble 1.0.9 metainfo and filter priority form', () => {
+    const active = clone();
+    active.nftables.unshift({ metainfo: { version: '1.0.9', release_name: 'Old Doc Yak #3', json_schema_version: 1 } });
+    active.nftables.find((entry) => entry.chain).chain.prio = 'filter';
+    assert.doesNotThrow(() => assertActiveNftMatches(expected(), active));
+  });
+
+  it('normalizes documented null reject to the target reject semantics', () => {
+    const active = clone();
+    const reject = active.nftables.findLast((entry) => entry.rule);
+    reject.rule.expr.at(-1).reject = null;
+    assert.doesNotThrow(() => assertActiveNftMatches(expected(), active));
+  });
+
+  it('consumes the pinned Noble parser capture provenance and target forms', async () => {
+    const fixture = JSON.parse(await readFile(nobleFixturePath, 'utf8'));
+    assert.equal(fixture.source.nftablesVersion, '1.0.9-1build1');
+    assert.equal(fixture.source.architecture, 'amd64');
+    assert.equal(fixture.renderedInputSha256, 'b56cd39aff84fff0e1fc6a95e446b3b0a70edd5310da3f3cb99264c4d8bef44e');
+    assert.equal(fixture.jsonOutputSha256, '896be47824b3d96876c4e43a3a1c86401857435f377dcb451925b6443e8bc392');
+    const authority = reviewedFixtureAuthority();
+    assert.doesNotThrow(() => assertAuthorityActiveNftMatches(authority, fixture.json));
+    assert.equal(fixture.json.nftables.filter((entry) => entry.rule).length, 14);
   });
 
   it('rejects malformed active output', () => {
@@ -243,6 +286,42 @@ describe('production import authority separation', () => {
     );
   });
 });
+describe('installed artifact stable descriptor core', () => {
+  const path = '/fixed/artifact';
+  const bytes = Buffer.from('approved');
+  const base = { dev: 1n, ino: 2n, uid: 0n, gid: 0n, mode: 0o100500n, size: BigInt(bytes.length), mtimeNs: 10n, ctimeNs: 11n, isFile: () => true, isSymbolicLink: () => false };
+  const authority = { artifacts: { [path]: { mode: '0500', sha256: '2687f86ed6784b8a5fca36e6c468e12aa44dc3c7e8137e3160d1a95079bdcd02' } } };
+  function fsFixture(overrides = {}) {
+    let closeCount = 0; let statCount = 0; let lstatCount = 0;
+    const handle = { stat: async () => { statCount += 1; return statCount === 1 ? base : (overrides.afterDescriptor ?? base); }, readFile: async () => overrides.readBytes ?? bytes, close: async () => { closeCount += 1; } };
+    const fs = { constants: { O_RDONLY: 0, O_NOFOLLOW: 1 }, open: async () => handle, lstat: async () => { lstatCount += 1; return lstatCount === 1 ? (overrides.beforePath ?? base) : (overrides.afterPath ?? base); } };
+    if (overrides.noFollow === null) delete fs.constants.O_NOFOLLOW;
+    return { fs, closed: () => closeCount };
+  }
+
+  it('accepts one stable descriptor and closes exactly once', async () => {
+    const fixture = fsFixture();
+    await assert.doesNotReject(verifyInstalledArtifactsCore(authority, [path], fixture.fs));
+    assert.equal(fixture.closed(), 1);
+  });
+
+  for (const [name, overrides, message] of [
+    ['missing O_NOFOLLOW', { noFollow: null }, /O_NOFOLLOW/u],
+    ['pre-open replacement', { beforePath: { ...base, ino: 3n } }, /identity/u],
+    ['in-place size mutation', { afterDescriptor: { ...base, size: base.size + 1n } }, /descriptor read/u],
+    ['mtime mutation', { afterDescriptor: { ...base, mtimeNs: 12n } }, /descriptor read/u],
+    ['path replacement', { afterPath: { ...base, ino: 4n } }, /path changed/u],
+    ['partial read', { readBytes: Buffer.from('short') }, /descriptor read/u],
+    ['digest mismatch', { readBytes: Buffer.from('disguise') }, /digest/u]
+  ]) {
+    it(`rejects ${name} and closes any opened descriptor once`, async () => {
+      const fixture = fsFixture(overrides);
+      await assert.rejects(verifyInstalledArtifactsCore(authority, [path], fixture.fs), message);
+      assert.equal(fixture.closed(), name === 'missing O_NOFOLLOW' ? 0 : 1);
+    });
+  }
+});
+
 describe('installer full preflight', () => {
   it('leaves every target absent when the final unit is malformed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ara-task14-installer-'));
@@ -417,6 +496,35 @@ describe('installer full preflight', () => {
     const policyDrift = runFixtureVerify();
     assert.notEqual(policyDrift.status, 0);
   });
+  it('fails before mutation when the installation transaction lock is held', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-lock-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await mkdir(join(installRoot, 'run/lock'), { recursive: true });
+    await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
+    const lock = `./${basename(root)}/target/run/lock/amazon-research-subscription-install.lock`;
+    const holder = spawn('bash', ['-c', `exec 8>"${lock}"; flock 8; printf ready; sleep 30`], { cwd: sourceRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      await new Promise((resolveReady, rejectReady) => {
+        const timer = setTimeout(() => rejectReady(new Error('lock holder readiness timeout')), 2_000);
+        holder.stdout.once('data', (chunk) => { if (String(chunk) === 'ready') { clearTimeout(timer); resolveReady(); } });
+        holder.once('exit', (code) => { clearTimeout(timer); rejectReady(new Error(`lock holder exited ${code}`)); });
+      });
+      const child = spawnSync('bash', [
+        'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+        '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.'
+      ], { cwd: sourceRoot, encoding: 'utf8' });
+      assert.notEqual(child.status, 0);
+      assert.match(child.stderr, /installation transaction is busy/u);
+      await assert.rejects(stat(join(installRoot, 'usr/local/libexec/amazon-research/subscription-supervisor.mjs')), { code: 'ENOENT' });
+      assert.equal((await readFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'))).length > 0, true);
+    } finally {
+      holder.kill();
+    }
+  });
+
 });
 const roots = [];
 function categories(result) {
@@ -462,8 +570,23 @@ describe('subscription provider derived local probe', () => {
     assert.equal(child.status, 0, child.stdout + child.stderr);
     const report = JSON.parse(child.stdout);
     assert.equal(report.ok, true);
-    assert.equal(report.evidence.provenance, 'task5-owner-executed-v1');
+    assert.equal(report.evidence.provenance, 'task5-owner-executed-v2');
     assert.equal(report.oracleHostVerified, false);
+  });
+
+  it('rejects hostile parent evidence with preserved lengths and booleans', () => {
+    const child = spawnSync(process.execPath, [
+      fileURLToPath(new URL('./probe-subscription-provider.mjs', import.meta.url)),
+      '--mode', 'local-behavior', '--adapter', 'codex'
+    ], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    const baseline = JSON.parse(child.stdout).evidence;
+    const wrongTuple = structuredClone(baseline);
+    wrongTuple.events[6].observed.sequence = 2;
+    assert.throws(() => validateLocalEvidence(wrongTuple, 'codex'), /transcript rejected/u);
+    const wrongGc = structuredClone(baseline);
+    wrongGc.gc[3].decision = 'retain';
+    assert.throws(() => validateLocalEvidence(wrongGc, 'codex'), /GC, or cleanup evidence rejected/u);
   });
 
   it('does not export caller-authored derived acceptance', async () => {

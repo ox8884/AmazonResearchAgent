@@ -41,6 +41,7 @@ command -v install >/dev/null || fail 'install required'
 command -v sha256sum >/dev/null || fail 'sha256sum required'
 command -v ln >/dev/null || fail 'ln required'
 command -v sync >/dev/null || fail 'sync required'
+command -v flock >/dev/null || fail 'flock required'
 [[ ( -z "$FIXTURE_FAIL_AT" && -z "$FIXTURE_RACE_AT" ) || "$FIXTURE_MODE" == 1 ]] || fail 'fixture injection requires fixture mode'
 
 readonly ARTIFACTS=(
@@ -84,6 +85,19 @@ verify_regular "$AUTHORITY"
 if [[ "$ENVIRONMENT" == oracle ]]; then
   [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
   [[ "$(realpath -- "$AUTHORITY")" == '/etc/amazon-research/subscription/endpoint-bindings.json' ]] || fail 'endpoint authority fixed path rejected'
+fi
+readonly TRANSACTION_LOCK="$(root_path /run/lock/amazon-research-subscription-install.lock)"
+if [[ "$MODE" == install ]]; then
+  lock_parent="$(dirname -- "$TRANSACTION_LOCK")"
+  if [[ "$FIXTURE_MODE" == 1 ]]; then
+    install -d -m 0755 -- "$lock_parent"
+  else
+    [[ -d "$lock_parent" && ! -L "$lock_parent" && "$(stat -c '%u:%g:%a' -- "$lock_parent")" == '0:0:755' ]] || fail 'transaction lock parent rejected'
+  fi
+  exec 9>"$TRANSACTION_LOCK"
+  chmod 0600 -- "$TRANSACTION_LOCK"
+  [[ "$FIXTURE_MODE" == 1 || "$(stat -c '%u:%g:%a' -- "$TRANSACTION_LOCK")" == '0:0:600' ]] || fail 'transaction lock authority rejected'
+  flock -n 9 || fail 'installation transaction is busy'
 fi
 
 declare -a SOURCES=() TARGETS=() MODES=()
@@ -199,6 +213,7 @@ transaction_exit() {
   local status=$?
   if (( status != 0 )); then rollback; fi
   rm -rf -- "$STAGE"
+  if [[ "$MODE" == install ]]; then flock -u 9 || true; exec 9>&-; fi
   exit "$status"
 }
 trap transaction_exit EXIT
@@ -216,6 +231,9 @@ fi
 for index in "${!SOURCES[@]}"; do verify_installed "${SOURCES[$index]}" "${TARGETS[$index]}" "${MODES[$index]}"; done
 verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
 [[ "$FIXTURE_MODE" == 1 ]] || systemctl daemon-reload
+for parent in "$(dirname -- "$NFT_TARGET")" "$(dirname -- "${TARGETS[0]}")" "$(dirname -- "${TARGETS[2]}")"; do sync -- "$parent"; done
 trap - EXIT
 rm -rf -- "$STAGE"
+flock -u 9
+exec 9>&-
 printf 'PASS mode=install artifacts=%d endpoint_authority=%s production_activation=false\n' "$(( ${#ARTIFACTS[@]} + 2 ))" "$(sha "$AUTHORITY")"
