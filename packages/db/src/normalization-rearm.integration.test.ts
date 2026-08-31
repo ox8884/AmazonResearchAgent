@@ -6,12 +6,15 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+const harnessRunId = process.env.ARA_TEST_RUN_ID;
+const deferDatabaseCleanup = Boolean(harnessRunId);
+const databaseDropLock = 202608300830;
 const admin = postgres(databaseUrl, { max: 1 });
 const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migrations');
 const databases: string[] = [];
 
 async function provisionThrough021() {
-  const name = `normalization_rearm_${randomUUID().replaceAll('-', '')}`;
+  const name = `${harnessRunId ?? 'normalization_rearm'}_normalization_rearm_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
   databases.push(name);
   await admin.unsafe(`create database ${name}`);
   const url = new URL(databaseUrl);
@@ -186,10 +189,20 @@ async function seedReadyProvider(sql: ReturnType<typeof postgres>): Promise<{
   await sql`update jobs set status = 'completed' where id = ${activated.result.job_id}`;
   return { providerId, modelId };
 }
+async function dropDatabase(name: string): Promise<void> {
+  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
+  try {
+    await admin.unsafe(`drop database if exists ${name} with (force)`);
+  } finally {
+    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
+  }
+}
 
 afterAll(async () => {
-  for (const name of databases) {
-    await admin.unsafe(`drop database if exists ${name} with (force)`);
+  if (!deferDatabaseCleanup) {
+    for (const name of databases) {
+      await dropDatabase(name);
+    }
   }
   await admin.end();
 }, 60_000);

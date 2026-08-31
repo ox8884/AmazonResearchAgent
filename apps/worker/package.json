@@ -9,7 +9,7 @@
     "start": "tsx src/main.ts",
     "enqueue:daily": "tsx src/commands/enqueue-daily.ts",
     "writer:identity": "tsx src/commands/writer-identity.ts",
-    "test": "vitest run --passWithNoTests",
+    "test": "node ../../test-harness/run-isolated-tests.mjs --rest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
   },

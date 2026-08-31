@@ -4,27 +4,19 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL ??
+const databaseUrl =
+  process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const admin = postgres(databaseUrl, { max: 1 });
-const databaseName = `provider_attempts_${randomUUID().replaceAll('-', '')}`;
+const harnessRunId = process.env.ARA_TEST_RUN_ID;
+const deferDatabaseCleanup = Boolean(harnessRunId);
+const databaseDropLock = 202608300830;
+const databaseName = `${harnessRunId ?? 'provider_attempts'}_provider_attempts_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const testUrl = new URL(databaseUrl);
 testUrl.pathname = `/${databaseName}`;
 const sql = postgres(testUrl.toString(), { max: 8 });
 const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migrations');
-
-type NormalizationOutput = {
-  readonly classification: string;
-  readonly canonicalNiche: string;
-  readonly canonicalEnglish: string;
-  readonly catalogPhrases: readonly string[];
-  readonly aliases: readonly string[];
-  readonly productFit: string;
-  readonly riskFlags: readonly string[];
-  readonly confidence: number;
-  readonly reason: string;
-};
-const normalizationOutput: NormalizationOutput = {
+const normalizationOutput = {
   classification: 'product_niche',
   canonicalNiche: 'Batter / Pancake Dispenser',
   canonicalEnglish: 'Batter / Pancake Dispenser',
@@ -315,7 +307,6 @@ async function applyRuntimeFailure(
   `;
 }
 
-
 beforeAll(async () => {
   await admin.unsafe(`create database ${databaseName}`);
   await sql.unsafe('create schema extensions');
@@ -338,11 +329,20 @@ beforeAll(async () => {
   }
   await sql.unsafe('drop index ai_providers_subscription_adapter_unique');
 }, 60_000);
+async function dropDatabase(name: string): Promise<void> {
+  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
+  try {
+    await admin.unsafe(`drop database if exists ${name} with (force)`);
+  } finally {
+    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
+  }
+}
 
 afterAll(async () => {
   await sql.end();
-  await admin.unsafe(`drop database if exists ${databaseName} with (force)`);
-  await admin.end();
+  if (!deferDatabaseCleanup) {
+    await dropDatabase(databaseName);
+  }
 });
 
 describe('provider attempt transactions', () => {

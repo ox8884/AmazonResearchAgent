@@ -4,10 +4,14 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL ??
+const databaseUrl =
+  process.env.TEST_DATABASE_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const admin = postgres(databaseUrl, { max: 1 });
-const databaseName = `provider_runtime_${randomUUID().replaceAll('-', '')}`;
+const harnessRunId = process.env.ARA_TEST_RUN_ID;
+const deferDatabaseCleanup = Boolean(harnessRunId);
+const databaseDropLock = 202608300830;
+const databaseName = `${harnessRunId ?? 'provider_runtime'}_provider_runtime_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const testUrl = new URL(databaseUrl);
 testUrl.pathname = `/${databaseName}`;
 const sql = postgres(testUrl.toString(), { max: 4 });
@@ -241,7 +245,7 @@ beforeAll(async () => {
     );
   `);
   const files = (await readdir(migrationsDirectory))
-    .filter((file) => file.endsWith('.sql') && file <= '202608290020_subscription_ai_runtime_cas.sql')
+    .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
     .sort();
   for (const file of files) {
     await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
@@ -249,9 +253,20 @@ beforeAll(async () => {
   await sql.unsafe('drop index ai_providers_subscription_adapter_unique');
 }, 60_000);
 
+async function dropDatabase(name: string): Promise<void> {
+  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
+  try {
+    await admin.unsafe(`drop database if exists ${name} with (force)`);
+  } finally {
+    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
+  }
+}
+
 afterAll(async () => {
   await sql.end();
-  await admin.unsafe(`drop database if exists ${databaseName} with (force)`);
+  if (!deferDatabaseCleanup) {
+    await dropDatabase(databaseName);
+  }
   await admin.end();
 });
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -10,26 +10,29 @@ const databaseUrl =
 const admin = postgres(databaseUrl, { max: 1 });
 const migrationsDirectory = resolve(import.meta.dirname, '../../../supabase/migrations');
 const migration019 = '202608290019_subscription_ai_provider_schema.sql';
-
+const harnessRunId = process.env.ARA_TEST_RUN_ID;
+const deferDatabaseCleanup = Boolean(harnessRunId);
+const templateDatabase = `${harnessRunId ?? 'subscription_schema'}_template_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+const databaseDropLock = 202608300830;
+const caseDatabases = Array.from(
+  { length: 12 },
+  (_, index) => `${harnessRunId ?? 'subscription_schema'}_case_${index}_${randomUUID().replaceAll('-', '').slice(0, 12)}`,
+);
+let nextCaseDatabase = 0;
 async function migrationFilesBefore019(): Promise<readonly string[]> {
   return (await readdir(migrationsDirectory))
     .filter((file) => file.endsWith('.sql') && file < migration019)
     .sort();
 }
 
-async function withDatabase(
-  arrange: (sql: postgres.Sql) => Promise<void>,
-  verify: (sql: postgres.Sql) => Promise<void>,
-): Promise<void> {
-  const databaseName = `subscription_schema_${randomUUID().replaceAll('-', '')}`;
-  await admin.unsafe(`create database ${databaseName}`);
-  const testUrl = new URL(databaseUrl);
-  testUrl.pathname = `/${databaseName}`;
-  const sql = postgres(testUrl.toString(), { max: 1 });
-
+beforeAll(async () => {
+  await admin.unsafe(`create database ${templateDatabase}`);
+  const templateUrl = new URL(databaseUrl);
+  templateUrl.pathname = `/${templateDatabase}`;
+  const template = postgres(templateUrl.toString(), { max: 1 });
   try {
-    await sql.unsafe('create schema extensions');
-    await sql.unsafe(`
+    await template.unsafe('create schema extensions');
+    await template.unsafe(`
       create schema storage;
       create table storage.buckets (
         id text primary key,
@@ -40,16 +43,48 @@ async function withDatabase(
       );
     `);
     for (const file of await migrationFilesBefore019()) {
-      await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
+      await template.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
     }
+  } finally {
+    await template.end();
+  }
+  for (const caseDatabase of caseDatabases) {
+    await admin.unsafe(`create database ${caseDatabase} template ${templateDatabase}`);
+  }
+}, 60_000);
+async function dropDatabase(name: string): Promise<void> {
+  await admin.unsafe(`select pg_advisory_lock(${databaseDropLock})`);
+  try {
+    await admin.unsafe(`drop database if exists ${name} with (force)`);
+  } finally {
+    await admin.unsafe(`select pg_advisory_unlock(${databaseDropLock})`);
+  }
+}
+
+async function withDatabase(
+  arrange: (sql: postgres.Sql) => Promise<void>,
+  verify: (sql: postgres.Sql) => Promise<void>,
+): Promise<void> {
+  const databaseName = caseDatabases[nextCaseDatabase++];
+  if (!databaseName) {
+    throw new Error('subscription schema case database pool exhausted');
+  }
+  const testUrl = new URL(databaseUrl);
+  testUrl.pathname = `/${databaseName}`;
+  const sql = postgres(testUrl.toString(), { max: 1 });
+
+  try {
     await arrange(sql);
     await sql.unsafe(await readFile(resolve(migrationsDirectory, migration019), 'utf8'));
     await verify(sql);
   } finally {
     await sql.end();
-    await admin.unsafe(`drop database if exists ${databaseName} with (force)`);
-  }
+    if (!deferDatabaseCleanup) {
+      await dropDatabase(databaseName);
+    }
 }
+}
+
 
 async function expectMigrationFailure(
   arrange: (sql: postgres.Sql) => Promise<void>,
@@ -95,6 +130,12 @@ async function insertModel(
 }
 
 afterAll(async () => {
+  if (!deferDatabaseCleanup) {
+    for (const caseDatabase of caseDatabases) {
+      await dropDatabase(caseDatabase);
+    }
+    await dropDatabase(templateDatabase);
+  }
   await admin.end();
 });
 

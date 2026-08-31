@@ -176,9 +176,11 @@ integration('settings API to worker catalog', () => {
     mock?.server.close();
     mock = undefined;
     for (const providerId of providerIds.splice(0)) {
-      await client.from('ai_usage').delete().eq('provider_id', providerId);
-      await client.from('ai_analyses').delete().eq('provider_id', providerId);
-      await client.from('ai_providers').delete().eq('id', providerId);
+      const { error: disableError } = await client
+        .from('ai_providers')
+        .update({ enabled: false })
+        .eq('id', providerId);
+      if (disableError) throw disableError;
     }
     for (const importRunId of importRunIds.splice(0)) {
       await client.from('import_runs').delete().eq('id', importRunId);
