@@ -46,10 +46,12 @@ class FakeOutgoingRequest extends EventEmitter {
   constructor(onEnd = () => undefined) {
     super();
     this.destroyCalls = 0;
+    this.endCalls = 0;
     this.onEnd = onEnd;
   }
 
   end() {
+    this.endCalls += 1;
     this.onEnd();
   }
 
@@ -108,6 +110,17 @@ const assertPrimaryFailure = (error, primary, secondary) => {
   assert.match(messages[0], primary);
   if (secondary !== undefined) assert.match(messages.slice(1).join('\n'), secondary);
   return true;
+};
+
+const causalErrors = (error) => error instanceof AggregateError ? error.errors : [error];
+
+const captureRejection = async (operation) => {
+  try {
+    await operation;
+  } catch (error) {
+    return error;
+  }
+  assert.fail('Expected operation to reject.');
 };
 
 const adversarialTiming = ({ advance = true } = {}) => {
@@ -733,4 +746,316 @@ test('absorbs a late response callback and error after timeout settlement', asyn
 
   assert.equal(outgoing.destroyCalls, 1);
   assert.equal(responseDestroyCalls, 1);
+});
+
+test('retains timeout and cleanup identities in final causal order', async () => {
+  const timing = adversarialTiming();
+  const timeoutCleanup = new Error('outgoing cleanup identity');
+  const responseCleanup = new Error('response cleanup identity');
+  const dockerFailure = new Error('docker diagnostic identity');
+  const outgoing = new FakeOutgoingRequest();
+  const response = fakeUpstreamResponse();
+  outgoing.destroy = () => {
+    outgoing.destroyCalls += 1;
+    throw timeoutCleanup;
+  };
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    throw responseCleanup;
+  };
+  const options = readinessOptions(timing, requestWithResponse(outgoing, response));
+  options.dockerLogs = () => { throw dockerFailure; };
+
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', options));
+  assert.ok(failure instanceof AggregateError);
+  assert.equal(failure.errors[0], failure.cause);
+  assert.match(failure.cause.message, /timed out after 15000 ms/u);
+  assert.deepEqual(failure.errors.slice(1), [timeoutCleanup, responseCleanup, dockerFailure]);
+  assert.match(failure.message, /Ephemeral PostgREST did not become ready/u);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('cleans the request when observation scheduling throws before handle assignment', async () => {
+  const scheduleFailure = new Error('observation schedule identity');
+  const outgoing = new FakeOutgoingRequest();
+  let current = 0;
+  let scheduleCalls = 0;
+  let cancelCalls = 0;
+  const options = {
+    request: () => outgoing,
+    now: () => current,
+    setTimeout(callback, milliseconds) {
+      scheduleCalls += 1;
+      if (scheduleCalls === 1) throw scheduleFailure;
+      const handle = { active: true };
+      setImmediate(() => {
+        if (!handle.active) return;
+        current += milliseconds;
+        callback();
+      });
+      return handle;
+    },
+    clearTimeout(handle) {
+      cancelCalls += 1;
+      handle.active = false;
+    },
+    dockerLogs: () => '',
+  };
+
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', options));
+  assert.equal(causalErrors(failure)[0], scheduleFailure);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(outgoing.endCalls, 0);
+  assert.equal(cancelCalls, 0);
+});
+
+test('cleans a synchronous response when observation scheduling throws', async () => {
+  const scheduleFailure = new Error('schedule after response identity');
+  const outgoing = new FakeOutgoingRequest();
+  const response = fakeUpstreamResponse();
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    return response;
+  };
+  let current = 0;
+  let scheduleCalls = 0;
+  const options = {
+    request: (_requestOptions, callback) => {
+      callback(response);
+      return outgoing;
+    },
+    now: () => current,
+    setTimeout(callback, milliseconds) {
+      scheduleCalls += 1;
+      if (scheduleCalls === 1) throw scheduleFailure;
+      current += milliseconds;
+      callback();
+      return { active: true };
+    },
+    clearTimeout: () => assert.fail('No observation timer handle was assigned.'),
+    dockerLogs: () => '',
+  };
+
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', options));
+  assert.equal(causalErrors(failure)[0], scheduleFailure);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+  assert.equal(outgoing.endCalls, 0);
+});
+
+test('orders schedule failure before independent cleanup failures and re-entry', async () => {
+  const scheduleFailure = new Error('schedule primary');
+  const outgoingCleanup = new Error('outgoing cleanup secondary');
+  const responseCleanup = new Error('response cleanup secondary');
+  const outgoing = new FakeOutgoingRequest();
+  const response = fakeUpstreamResponse();
+  outgoing.destroy = () => {
+    outgoing.destroyCalls += 1;
+    outgoing.emit('error', new Error('re-entrant outgoing error'));
+    throw outgoingCleanup;
+  };
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    response.emit('error', new Error('re-entrant response error'));
+    throw responseCleanup;
+  };
+  let clockReads = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: (_requestOptions, callback) => {
+      callback(response);
+      return outgoing;
+    },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    setTimeout: () => { throw scheduleFailure; },
+    clearTimeout: () => assert.fail('No timer must be cancelled.'),
+    dockerLogs: () => '',
+  }));
+
+  assert.deepEqual(causalErrors(failure), [scheduleFailure, outgoingCleanup, responseCleanup]);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('cancels the timer and destroys the request when outgoing end throws', async () => {
+  const endFailure = new Error('outgoing end identity');
+  const outgoing = new FakeOutgoingRequest(() => { throw endFailure; });
+  let timerHandle;
+  let cancelCalls = 0;
+  let clockReads = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: () => outgoing,
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    setTimeout(callback) {
+      timerHandle = { active: true, callback };
+      return timerHandle;
+    },
+    clearTimeout(handle) {
+      cancelCalls += 1;
+      handle.active = false;
+    },
+    dockerLogs: () => '',
+  }));
+
+  assert.equal(causalErrors(failure)[0], endFailure);
+  assert.equal(cancelCalls, 1);
+  assert.equal(timerHandle.active, false);
+  assert.equal(outgoing.endCalls, 1);
+  assert.equal(outgoing.destroyCalls, 1);
+});
+
+test('orders end failure before cancellation and resource cleanup failures', async () => {
+  const endFailure = new Error('end primary');
+  const cancelFailure = new Error('cancel secondary');
+  const outgoingCleanup = new Error('request secondary');
+  const responseCleanup = new Error('response secondary');
+  const outgoing = new FakeOutgoingRequest(() => { throw endFailure; });
+  const response = fakeUpstreamResponse();
+  outgoing.destroy = () => {
+    outgoing.destroyCalls += 1;
+    throw outgoingCleanup;
+  };
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    throw responseCleanup;
+  };
+  let cancelCalls = 0;
+  let clockReads = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: (_requestOptions, callback) => {
+      callback(response);
+      return outgoing;
+    },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    setTimeout: () => ({ active: true }),
+    clearTimeout: () => {
+      cancelCalls += 1;
+      throw cancelFailure;
+    },
+    dockerLogs: () => '',
+  }));
+
+  assert.deepEqual(causalErrors(failure), [endFailure, cancelFailure, outgoingCleanup, responseCleanup]);
+  assert.equal(cancelCalls, 1);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('absorbs late timer and response activity after outgoing end failure', async () => {
+  const endFailure = new Error('end failure with late activity');
+  const outgoing = new FakeOutgoingRequest(() => { throw endFailure; });
+  let timerCallback;
+  let requestCallback;
+  let clockReads = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: (_requestOptions, callback) => {
+      requestCallback = callback;
+      return outgoing;
+    },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    setTimeout(callback) {
+      timerCallback = callback;
+      return { active: true };
+    },
+    clearTimeout: (handle) => { handle.active = false; },
+    dockerLogs: () => '',
+  }));
+  assert.equal(causalErrors(failure)[0], endFailure);
+
+  timerCallback();
+  const response = fakeUpstreamResponse();
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    return response;
+  };
+  requestCallback(response);
+  response.emit('error', new Error('late response error'));
+  response.emit('end');
+  outgoing.emit('error', new Error('late outgoing error'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('cancels a synchronously fired timer after its handle is assigned', async () => {
+  const outgoingCleanup = new Error('synchronous timeout cleanup');
+  const outgoing = new FakeOutgoingRequest();
+  outgoing.destroy = () => {
+    outgoing.destroyCalls += 1;
+    throw outgoingCleanup;
+  };
+  let handle;
+  let cancelCalls = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: () => outgoing,
+    now: () => 0,
+    setTimeout(callback) {
+      handle = { active: true };
+      callback();
+      return handle;
+    },
+    clearTimeout(timer) {
+      cancelCalls += 1;
+      timer.active = false;
+    },
+    dockerLogs: () => '',
+  }));
+
+  assert.equal(failure.errors[0], failure.cause);
+  assert.deepEqual(failure.errors.slice(1), [outgoingCleanup]);
+  assert.equal(cancelCalls, 1);
+  assert.equal(handle.active, false);
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(outgoing.endCalls, 0);
+});
+
+test('retains request factory failures and cleans a synchronous callback response', async () => {
+  const factoryFailure = new Error('request factory identity');
+  let clockReads = 0;
+  const directFailure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: () => { throw factoryFailure; },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    dockerLogs: () => '',
+  }));
+  assert.equal(causalErrors(directFailure)[0], factoryFailure);
+
+  const callbackThenThrow = new Error('callback then throw identity');
+  const response = fakeUpstreamResponse();
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    return response;
+  };
+  clockReads = 0;
+  const callbackFailure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: (_requestOptions, callback) => {
+      callback(response);
+      throw callbackThenThrow;
+    },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    dockerLogs: () => '',
+  }));
+  assert.equal(causalErrors(callbackFailure)[0], callbackThenThrow);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('does not flatten an external AggregateError used as the primary observation', async () => {
+  const nestedFirst = new Error('external nested first');
+  const nestedSecond = new Error('external nested second');
+  const external = new AggregateError([nestedFirst, nestedSecond], 'external aggregate identity');
+  let clockReads = 0;
+  const failure = await captureRejection(waitForPostgrest(10080, 'key', 'container', {
+    request: () => { throw external; },
+    now: () => clockReads++ === 0 ? 0 : 15_000,
+    dockerLogs: () => '',
+  }));
+
+  assert.equal(failure.cause, external);
+  assert.deepEqual(failure.errors, [external]);
+  assert.deepEqual(external.errors, [nestedFirst, nestedSecond]);
 });

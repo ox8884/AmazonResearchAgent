@@ -98,16 +98,26 @@ function asError(value) {
   return value instanceof Error ? value : new Error(String(value));
 }
 
-function withSecondaryErrors(primary, secondaryErrors) {
-  if (secondaryErrors.length === 0) return primary;
-  return new AggregateError(
-    [primary, ...secondaryErrors.map(asError)],
+const helperCompositions = new WeakSet();
+const terminalSetupFailures = new WeakSet();
+
+function withSecondaryErrors(primaryValue, secondaryValues) {
+  const primary = asError(primaryValue);
+  const secondary = secondaryValues.map(asError);
+  if (secondary.length === 0) return primary;
+  const composition = new AggregateError(
+    [primary, ...secondary],
     `${primary.message} Additional cleanup or diagnostic failures occurred.`,
+    { cause: primary },
   );
+  helperCompositions.add(composition);
+  return composition;
 }
 
-function secondaryErrors(error) {
-  return error instanceof AggregateError ? error.errors.slice(1).map(asError) : [];
+function causalErrors(error) {
+  return error instanceof AggregateError && helperCompositions.has(error)
+    ? error.errors
+    : [error];
 }
 
 function readClock(now) {
@@ -155,13 +165,21 @@ function readinessRequest(targetPort, key, timeoutMs, options) {
     let outgoing;
     let upstreamResponse;
     let timer;
+    let scheduling = false;
+    let timerFiredSynchronously = false;
     let settled = false;
     let outgoingDestroyed = false;
     let responseDestroyed = false;
+
+    const timeoutFailure = () => {
+      const error = new Error(`PostgREST readiness request timed out after ${timeoutMs} ms.`);
+      terminalSetupFailures.add(error);
+      return error;
+    };
     const destroyOutgoing = () => {
-      if (outgoingDestroyed) return;
+      if (outgoingDestroyed || outgoing === undefined) return;
       outgoingDestroyed = true;
-      outgoing?.destroy();
+      outgoing.destroy();
     };
     const destroyResponse = () => {
       if (responseDestroyed || upstreamResponse === undefined) return;
@@ -169,35 +187,52 @@ function readinessRequest(targetPort, key, timeoutMs, options) {
       upstreamResponse.destroy?.();
     };
     const cancelTimer = () => {
-      if (timer !== undefined) cancel(timer);
+      if (timer === undefined) return;
+      const assignedTimer = timer;
+      timer = undefined;
+      cancel(assignedTimer);
     };
-    const settle = (complete, value) => {
+    const rejectWithCleanup = (primaryValue, cleanupTimer = true) => {
+      if (settled) return;
+      settled = true;
+      const cleanupErrors = [];
+      const cleanups = cleanupTimer
+        ? [cancelTimer, destroyOutgoing, destroyResponse]
+        : [destroyOutgoing, destroyResponse];
+      for (const cleanup of cleanups) {
+        try {
+          cleanup();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      reject(withSecondaryErrors(primaryValue, cleanupErrors));
+    };
+    const resolveResponse = (value) => {
       if (settled) return;
       settled = true;
       try {
         cancelTimer();
       } catch (error) {
-        if (complete === reject) {
-          reject(withSecondaryErrors(asError(value), [error]));
-        } else {
-          reject(asError(error));
-        }
+        reject(asError(error));
         return;
       }
-      complete(value);
+      resolve(value);
     };
     const onResponse = (response) => {
       upstreamResponse = response;
       const chunks = [];
-      response.on('error', (error) => settle(reject, error));
-      response.once('aborted', () => settle(reject, new Error('PostgREST readiness response aborted.')));
+      response.on('error', (error) => rejectWithCleanup(error));
+      response.once('aborted', () => rejectWithCleanup(
+        new Error('PostgREST readiness response aborted.'),
+      ));
       response.once('close', () => {
         if (!response.complete && !response.readableEnded) {
-          settle(reject, new Error('PostgREST readiness response closed prematurely.'));
+          rejectWithCleanup(new Error('PostgREST readiness response closed prematurely.'));
         }
       });
       response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => settle(resolve, {
+      response.on('end', () => resolveResponse({
         ok: response.statusCode !== undefined
           && response.statusCode >= 200
           && response.statusCode < 300,
@@ -208,10 +243,11 @@ function readinessRequest(targetPort, key, timeoutMs, options) {
         try {
           destroyResponse();
         } catch {
-          // The request outcome is already authoritative; late cleanup cannot replace it.
+          // The settled request remains authoritative; listeners absorb late errors.
         }
       }
     };
+
     try {
       outgoing = request(
         targetOptions(
@@ -223,24 +259,43 @@ function readinessRequest(targetPort, key, timeoutMs, options) {
         onResponse,
       );
     } catch (error) {
-      settle(reject, error);
+      const primary = asError(error);
+      terminalSetupFailures.add(primary);
+      rejectWithCleanup(primary, false);
       return;
     }
-    outgoing.on('error', (error) => settle(reject, error));
-    timer = schedule(() => {
-      if (settled) return;
-      const timeoutError = new Error(`PostgREST readiness request timed out after ${timeoutMs} ms.`);
-      settled = true;
-      const cleanupErrors = [];
-      for (const cleanup of [cancelTimer, destroyOutgoing, destroyResponse]) {
-        try {
-          cleanup();
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
+    outgoing.on('error', (error) => rejectWithCleanup(error));
+    if (settled) {
+      try {
+        destroyOutgoing();
+      } catch {
+        // A synchronous response already established the authoritative outcome.
       }
-      reject(withSecondaryErrors(timeoutError, cleanupErrors));
-    }, timeoutMs);
+      return;
+    }
+
+    scheduling = true;
+    try {
+      timer = schedule(() => {
+        if (settled) return;
+        if (scheduling) {
+          timerFiredSynchronously = true;
+          return;
+        }
+        rejectWithCleanup(timeoutFailure());
+      }, timeoutMs);
+    } catch (error) {
+      scheduling = false;
+      const primary = asError(error);
+      terminalSetupFailures.add(primary);
+      rejectWithCleanup(primary, false);
+      return;
+    }
+    scheduling = false;
+    if (timerFiredSynchronously) {
+      rejectWithCleanup(timeoutFailure());
+      return;
+    }
     if (settled) {
       try {
         cancelTimer();
@@ -249,7 +304,13 @@ function readinessRequest(targetPort, key, timeoutMs, options) {
       }
       return;
     }
-    outgoing.end();
+    try {
+      outgoing.end();
+    } catch (error) {
+      const primary = asError(error);
+      terminalSetupFailures.add(primary);
+      rejectWithCleanup(primary);
+    }
   });
 }
 
@@ -278,6 +339,8 @@ export async function waitForPostgrest(targetPort, key, containerName, options =
       lastObservation = `${response.status} ${response.body}`;
     } catch (error) {
       lastObservation = asError(error);
+      if (terminalSetupFailures.has(lastObservation)
+        || causalErrors(lastObservation).some((entry) => terminalSetupFailures.has(entry))) break;
     }
 
     let beforeDelay;
@@ -311,22 +374,23 @@ export async function waitForPostgrest(targetPort, key, containerName, options =
     }
   }
 
-  const observationMessage = lastObservation instanceof Error
-    ? lastObservation.message
-    : lastObservation;
-  const readinessFailure = new Error(
-    `Ephemeral PostgREST did not become ready: ${observationMessage}`,
-  );
-  const diagnostics = lastObservation instanceof Error
-    ? secondaryErrors(lastObservation)
-    : [];
+  const observation = lastObservation instanceof Error
+    ? lastObservation
+    : new Error(String(lastObservation));
+  const diagnostics = causalErrors(observation).slice();
+  const primary = diagnostics[0];
   if (clockFailure !== undefined) diagnostics.push(clockFailure);
+  let dockerLogs = '';
   try {
     const diagnostic = retrieveDockerLogs(containerName, options);
-    if (diagnostic.logs.length > 0) readinessFailure.message += `\n${diagnostic.logs}`;
+    dockerLogs = diagnostic.logs;
     if (diagnostic.error !== undefined) diagnostics.push(diagnostic.error);
   } catch (error) {
     diagnostics.push(asError(error));
   }
-  throw withSecondaryErrors(readinessFailure, diagnostics);
+  const message = `Ephemeral PostgREST did not become ready: ${primary.message}`
+    + (dockerLogs.length > 0 ? `\n${dockerLogs}` : '');
+  const failure = new AggregateError(diagnostics, message, { cause: primary });
+  helperCompositions.add(failure);
+  throw failure;
 }
