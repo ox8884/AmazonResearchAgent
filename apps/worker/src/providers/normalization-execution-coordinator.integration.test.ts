@@ -702,11 +702,24 @@ integration('normalization coordinator authority cutover', () => {
     }]);
   });
 
-  // Break: a staged subscription success is ignored after restart and executes a provider again.
+  // Break: restart replays a provider or finalizes domain values other than the durable staged output.
   it('reclaims a staged winner without provider replay or fake USD', async () => {
     const client = databaseClient();
     const codex = await seedReadyProvider(client, 'codex');
     const fixture = await seedExecution(client, codex);
+    const http = await seedHttpProvider(client);
+    const grok = await seedReadyProvider(client, 'grok');
+    const stagedNormalizationOutput: KeywordNormalization = {
+      classification: 'product_niche',
+      canonicalNiche: 'Crash-Recovered Copper Batter Funnel 9137',
+      canonicalEnglish: 'Crash-Recovered Copper Batter Funnel 9137 EN',
+      catalogPhrases: ['durable batter funnel 9137'],
+      aliases: ['staged copper funnel 9137'],
+      productFit: 'strong',
+      riskFlags: ['food_contact'],
+      confidence: 0.97,
+      reason: 'Durable staged winner 9137 supplied this exact decision.'
+    };
     const attempts = createProviderAttemptRepository(client);
     const staged = await attempts.begin({
       jobLease: fixture.jobLease,
@@ -731,7 +744,7 @@ integration('normalization coordinator authority cutover', () => {
       outputTokens: null,
       providerRequestCount: 1,
       safeMetadata: {},
-      output: normalizationOutput,
+      output: stagedNormalizationOutput,
       usage: {
         inputTokens: null,
         outputTokens: null,
@@ -739,13 +752,16 @@ integration('normalization coordinator authority cutover', () => {
         requestCount: 1
       }
     });
-    const executeCalls = { count: 0 };
+    const calls = { resolver: 0, http: 0, codex: 0, grok: 0 };
     const freshCoordinator = new NormalizationExecutionCoordinator({
       attempts: createProviderAttemptRepository(client),
       runtime: createProviderRuntimeRepository(client),
       semaphores: new AdapterSemaphoreRegistry(),
-      resolveTarget: async () => {
-        executeCalls.count += 1;
+      resolveTarget: async (selection) => {
+        calls.resolver += 1;
+        if (selection.providerId === http.providerId) calls.http += 1;
+        if (selection.providerId === codex.providerId) calls.codex += 1;
+        if (selection.providerId === grok.providerId) calls.grok += 1;
         throw new Error('A staged winner must bypass provider resolution.');
       }
     });
@@ -760,7 +776,9 @@ integration('normalization coordinator authority cutover', () => {
       prompt: 'normalize this keyword',
       inputHash: fixture.inputHash,
       catalog: executionCatalog([
-        { ...codex, billingType: 'subscription', priority: 0 }
+        { ...http, billingType: 'free', priority: 0 },
+        { ...codex, billingType: 'subscription', priority: 1 },
+        { ...grok, billingType: 'subscription', priority: 2 }
       ]),
       signal: new AbortController().signal
     })).resolves.toEqual({
@@ -768,7 +786,7 @@ integration('normalization coordinator authority cutover', () => {
       targetState: 'Ready for API Validation'
     });
 
-    expect(executeCalls.count).toBe(0);
+    expect(calls).toEqual({ resolver: 0, http: 0, codex: 0, grok: 0 });
     const { data: events, error: eventsError } = await client
       .from('provider_attempt_events')
       .select('attempt_id,attempt_sequence,event_type,provider_id,billing_type')
@@ -808,6 +826,54 @@ integration('normalization coordinator authority cutover', () => {
         totalTokens: null,
         requestCount: 1
       }
+    });
+    const { data: candidate, error: candidateError } = await client
+      .from('candidates')
+      .select('state,niche_cluster_id,rule_reasons')
+      .eq('id', fixture.candidateId)
+      .single();
+    if (candidateError) throw candidateError;
+    expect(candidate).toMatchObject({
+      state: 'Ready for API Validation',
+      rule_reasons: [
+        { code: 'RULE_PASS', detail: 'rule accepted' },
+        {
+          code: 'AI_PRODUCT_NICHE',
+          detail: 'Durable staged winner 9137 supplied this exact decision.'
+        }
+      ]
+    });
+    const { data: cluster, error: clusterError } = await client
+      .from('niche_clusters')
+      .select('canonical_key,canonical_name,canonical_english,aliases,catalog_phrases,state')
+      .eq('id', candidate.niche_cluster_id ?? '')
+      .single();
+    if (clusterError) throw clusterError;
+    expect(cluster).toEqual({
+      canonical_key: 'crash recovered copper batter funnel 9137',
+      canonical_name: 'Crash-Recovered Copper Batter Funnel 9137',
+      canonical_english: 'Crash-Recovered Copper Batter Funnel 9137 EN',
+      aliases: ['staged copper funnel 9137'],
+      catalog_phrases: ['durable batter funnel 9137'],
+      state: 'Ready for API Validation'
+    });
+    const { data: decision, error: decisionError } = await client
+      .from('decision_history')
+      .select('from_state,to_state,reasons,decided_by')
+      .eq('candidate_id', fixture.candidateId)
+      .single();
+    if (decisionError) throw decisionError;
+    expect(decision).toEqual({
+      from_state: 'AI Screening',
+      to_state: 'Ready for API Validation',
+      reasons: [
+        { code: 'RULE_PASS', detail: 'rule accepted' },
+        {
+          code: 'AI_PRODUCT_NICHE',
+          detail: 'Durable staged winner 9137 supplied this exact decision.'
+        }
+      ],
+      decided_by: 'niche-normalization-v1'
     });
   });
 });

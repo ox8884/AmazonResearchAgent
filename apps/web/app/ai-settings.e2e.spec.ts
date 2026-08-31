@@ -27,9 +27,12 @@ test('logs in and opens Korean and English AI settings', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1, name: 'AI provider settings' })).toBeVisible();
 });
 
-test('preserves write-only HTTP secrets without redisplaying plaintext', async ({ page }) => {
+// Break: browser edits hydrate plaintext, overwrite a secret with blank input, or retain an old key.
+
+test('preserves write-only HTTP secrets through blank and replacement edits', async ({ page }) => {
   let providers: unknown[] = [];
-  let submitted: Record<string, unknown> | null = null;
+  let secretLast4: string | null = null;
+  const submissions: Record<string, unknown>[] = [];
   await page.route('**/api/ai-providers', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({
@@ -39,7 +42,10 @@ test('preserves write-only HTTP secrets without redisplaying plaintext', async (
       });
       return;
     }
-    submitted = route.request().postDataJSON() as Record<string, unknown>;
+    const submitted = route.request().postDataJSON() as Record<string, unknown>;
+    submissions.push(submitted);
+    const submittedApiKey = typeof submitted.apiKey === 'string' ? submitted.apiKey.trim() : '';
+    if (submittedApiKey) secretLast4 = submittedApiKey.slice(-4);
     const provider = {
       id: 'mock-provider',
       product: 'openai_compatible_api',
@@ -47,14 +53,14 @@ test('preserves write-only HTTP secrets without redisplaying plaintext', async (
       name: 'My Provider',
       billingType: 'subscription',
       enabled: true,
-      priority: 100,
-      secretLast4: 'alue',
+      priority: typeof submitted.priority === 'number' ? submitted.priority : 100,
+      secretLast4,
       roles: ['niche_normalization'],
       baseUrl: 'http://127.0.0.1:4000/v1',
       networkScope: 'loopback',
       modelId: null,
       modelDiscovery: 'enabled',
-      settingsRevision: 1,
+      settingsRevision: submissions.length,
       models: []
     };
     providers = [provider];
@@ -77,13 +83,48 @@ test('preserves write-only HTTP secrets without redisplaying plaintext', async (
   await expect(page.getByText('secret-value')).toHaveCount(0);
   expect(JSON.stringify(providers)).not.toContain('secret-value');
   expect(providers[0]).not.toHaveProperty('apiKey');
-  expect(submitted).toMatchObject({
+  expect(submissions[0]).toMatchObject({
     product: 'openai_compatible_api',
     name: 'My Provider',
     apiKey: 'secret-value'
   });
-  expect(submitted).not.toHaveProperty('kind');
-  expect(submitted).not.toHaveProperty('commandProfileId');
+  expect(submissions[0]).not.toHaveProperty('kind');
+  expect(submissions[0]).not.toHaveProperty('commandProfileId');
+
+  await page.reload();
+  await expect(page.getByLabel('API Key')).toHaveValue('');
+  await page.getByLabel('Provider priority').fill('101');
+  await page.getByRole('button', { name: '저장' }).click();
+
+  expect(submissions[1]).toMatchObject({
+    id: 'mock-provider',
+    apiKey: '',
+    priority: 101,
+    settingsRevision: 1
+  });
+  await expect(page.getByText('••••alue')).toBeVisible();
+  await expect(page.getByText('secret-value')).toHaveCount(0);
+  expect(JSON.stringify(providers)).not.toContain('secret-value');
+
+  await page.reload();
+  await expect(page.getByLabel('API Key')).toHaveValue('');
+  await page.getByLabel('API Key').fill('replacement-secret');
+  await page.getByRole('button', { name: '저장' }).click();
+
+  expect(submissions[2]).toMatchObject({
+    id: 'mock-provider',
+    apiKey: 'replacement-secret',
+    settingsRevision: 2
+  });
+  await expect(page.getByText('••••cret')).toBeVisible();
+  await expect(page.getByText('••••alue')).toHaveCount(0);
+  await expect(page.getByText('replacement-secret')).toHaveCount(0);
+  expect(JSON.stringify(providers)).not.toContain('replacement-secret');
+  expect(providers[0]).not.toHaveProperty('apiKey');
+
+  await page.reload();
+  await expect(page.getByLabel('API Key')).toHaveValue('');
+  await expect(page.getByText('replacement-secret')).toHaveCount(0);
 });
 
 test('subscription products expose only safe status, Test, and Disable', async ({ page }) => {
