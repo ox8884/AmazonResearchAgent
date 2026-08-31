@@ -1,8 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JungleScoutClient, JungleScoutClientError } from './client';
+import { listenOnFetchSafeLoopback } from '../../../test-harness/safe-loopback-server.mjs';
 
 async function startMockServer(
   handler: (request: IncomingMessage, response: ServerResponse) => void
@@ -16,12 +15,10 @@ async function startMockServer(
     headers = incoming.headers;
     handler(incoming, response);
   });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address() as AddressInfo;
+  const address = await listenOnFetchSafeLoopback(server);
   return {
     server,
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: address.url,
     headers: () => headers
   };
 }

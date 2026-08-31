@@ -1,9 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { describe, expect, it, afterEach } from 'vitest';
 import { z } from 'zod';
 import { OpenAiHttpProvider, MODEL_LIST_MAX_BYTES, type OpenAiHttpProviderConfig } from './openai-http';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 const ClassificationSchema = z.object({
   classification: z.enum(['product_niche', 'brand_ip'])
@@ -26,12 +25,10 @@ async function startMockServer(
     authorization = incoming.headers.authorization;
     handler(incoming, response);
   });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address() as AddressInfo;
+  const address = await listenOnFetchSafeLoopback(server);
   return {
     server,
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `${address.url}/v1`,
     get authorization() {
       return authorization;
     }

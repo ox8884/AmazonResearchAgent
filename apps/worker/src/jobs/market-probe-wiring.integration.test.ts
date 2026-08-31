@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +8,7 @@ import { createServerDatabaseClient } from '@ara/db';
 import { ProductDatabasePageSchema } from '@ara/jungle-scout';
 import type { Job } from '@ara/queue';
 import { createJobHandlers, resolveJobHandler } from '../handlers';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -68,12 +67,10 @@ async function startFakeJungleScout(): Promise<{
     response.setHeader('content-type', 'application/vnd.api+json');
     response.end(JSON.stringify(fixture));
   });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address() as AddressInfo;
+  const address = await listenOnFetchSafeLoopback(server);
   return {
     server,
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: address.url,
     hits: () => hits
   };
 }

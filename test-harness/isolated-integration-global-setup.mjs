@@ -12,6 +12,7 @@ import {
   removeDockerContainer,
   withGlobalDdlLock,
 } from './harness-boundaries.mjs';
+import { listenOnFetchSafeLoopback } from './safe-loopback-server.mjs';
 
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -70,13 +71,8 @@ async function startProxy(targetPort) {
       response.end(error instanceof Error ? error.message : 'PostgREST proxy failure');
     });
   });
-  await new Promise((resolveListen, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolveListen);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Could not resolve proxy port.');
-  return { server, url: `http://127.0.0.1:${address.port}` };
+  const address = await listenOnFetchSafeLoopback(server);
+  return { server, url: address.url };
 }
 
 async function waitForPostgrest(url, key, containerName) {

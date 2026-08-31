@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +19,7 @@ import { createJobHandlers } from '../handlers';
 import { runJob } from '../main';
 import { runMarketProbe } from './market-probe';
 import { PostgresApiBudget } from './postgres-api-budget';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 
 
@@ -278,13 +277,11 @@ integration('market probe job', () => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(JSON.stringify(fixture));
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
-    const address = http.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(http);
     const jsClient = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
     try {
@@ -327,13 +324,11 @@ integration('market probe job', () => {
       response.statusCode = 500;
       response.end(JSON.stringify({ errors: [{ status: '500' }] }));
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
-    const address = http.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(http);
     const jsClient = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
     try {

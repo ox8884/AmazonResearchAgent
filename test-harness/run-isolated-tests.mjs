@@ -63,61 +63,54 @@ async function dropTemplateDatabase() {
   await cleanupRunDatabases(admin, runId);
 }
 
+const signalController = installSignalForwarding(process);
+
 async function run() {
   const executable = process.execPath;
-  let child;
-  let cancellationSignal;
-  const removeSignalListeners = installSignalForwarding(
-    process,
-    () => child,
-    (signal) => {
-      cancellationSignal = signal;
+  await createTemplateDatabase();
+  const child = spawn(
+    executable,
+    [resolve(root, 'node_modules/vitest/vitest.mjs'), 'run', '--passWithNoTests', '--config', resolve(import.meta.dirname, 'vitest.config.mjs')],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ARA_TEST_DATABASE_TEMPLATE: templateDatabase,
+        ARA_TEST_SHARED_DATABASE: sharedMode ? sharedDatabase : '',
+        ARA_TEST_HARNESS_REST: process.argv.includes('--rest') ? '1' : '0',
+        ARA_TEST_RUN_ID: runId,
+        TEST_DATABASE_URL: databaseUrl,
+      },
+      stdio: 'inherit',
     },
   );
-  try {
-    await createTemplateDatabase();
-    child = spawn(
-      executable,
-      [resolve(root, 'node_modules/vitest/vitest.mjs'), 'run', '--passWithNoTests', '--config', resolve(import.meta.dirname, 'vitest.config.mjs')],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          ARA_TEST_DATABASE_TEMPLATE: templateDatabase,
-          ARA_TEST_SHARED_DATABASE: sharedMode ? sharedDatabase : '',
-          ARA_TEST_HARNESS_REST: process.argv.includes('--rest') ? '1' : '0',
-          ARA_TEST_RUN_ID: runId,
-          TEST_DATABASE_URL: databaseUrl,
-        },
-        stdio: 'inherit',
-      },
-    );
-    if (cancellationSignal) {
-      child.kill(cancellationSignal);
-    }
-    return await new Promise((resolveExit, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => {
-        try {
-          resolveExit(childExitCode(code, signal, cancellationSignal));
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
-  } finally {
-    removeSignalListeners();
+  if (!signalController.assignChild(child)) {
+    throw new Error('isolated test child was already assigned');
   }
+  return new Promise((resolveExit, reject) => {
+    child.once('error', (error) => {
+      signalController.markChildExited(child);
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      signalController.markChildExited(child);
+      resolveExit({ code, signal });
+    });
+  });
 }
 
-const exitCode = await runWithCleanup(
+const childExit = await runWithCleanup(
   run,
   async () => {
     try {
-      await dropTemplateDatabase();
+      try {
+        await dropTemplateDatabase();
+      } finally {
+        await admin.end();
+      }
     } finally {
-      await admin.end();
+      signalController.dispose();
     }
   },
 );
-process.exitCode = exitCode;
+process.exitCode = childExitCode(childExit.code, childExit.signal, signalController.cancellationSignal);

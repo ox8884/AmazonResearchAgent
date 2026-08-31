@@ -1,6 +1,4 @@
 import { createServer, type Server } from 'node:http';
-import { once } from 'node:events';
-import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -9,6 +7,7 @@ import {
   OpenAiHttpProvider
 } from '@ara/ai-router';
 import { createPinnedProviderFetch } from './provider-url-policy';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 describe('pinned OpenAI HTTP provider byte cap', () => {
   let server: Server | undefined;
@@ -44,12 +43,10 @@ describe('pinned OpenAI HTTP provider byte cap', () => {
       };
       write();
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(server);
     const provider = new OpenAiHttpProvider({
       id: 'pinned-http',
-      baseUrl: `http://127.0.0.1:${address.port}`,
+      baseUrl: address.url,
       billingType: 'free',
       requiresSecret: false,
       fetch: createPinnedProviderFetch('loopback')
@@ -69,12 +66,10 @@ describe('pinned OpenAI HTTP provider byte cap', () => {
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify({ data: [{ id: 'cheap-model' }] }));
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(server);
     const provider = new OpenAiHttpProvider({
       id: 'pinned-http',
-      baseUrl: `http://127.0.0.1:${address.port}`,
+      baseUrl: address.url,
       billingType: 'free',
       requiresSecret: false,
       fetch: createPinnedProviderFetch('loopback')
@@ -93,12 +88,10 @@ describe('pinned OpenAI HTTP provider byte cap', () => {
         padding: 'x'.repeat(COMPLETION_MAX_BYTES)
       }));
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(server);
     const provider = new OpenAiHttpProvider({
       id: 'pinned-http',
-      baseUrl: `http://127.0.0.1:${address.port}`,
+      baseUrl: address.url,
       billingType: 'free',
       requiresSecret: false,
       fetch: createPinnedProviderFetch('loopback')

@@ -1,6 +1,4 @@
 import { createServer } from 'node:http';
-import { once } from 'node:events';
-import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   ProviderUrlPolicyError,
@@ -9,6 +7,7 @@ import {
   validateProviderBaseUrl,
   type ProviderAddressResolver
 } from './provider-url-policy';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 function resolver(...addresses: readonly string[]): ProviderAddressResolver {
   return async () => addresses.map((address) => ({ address }));
@@ -110,9 +109,7 @@ describe('worker provider URL policy', () => {
       response.statusCode = 200;
       response.end('{"ok":true}');
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address() as AddressInfo;
+    const address = await listenOnFetchSafeLoopback(server);
     const fetchPinned = createPinnedProviderFetch('loopback', async () => [
       { address: '127.0.0.1' }
     ]);

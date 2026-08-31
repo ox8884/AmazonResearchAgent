@@ -58,11 +58,10 @@ export function assertRunOwnedDatabase(databaseName, runId) {
 
 export async function withGlobalDdlLock(admin, action) {
   await admin.unsafe(`select pg_advisory_lock(${GLOBAL_DDL_LOCK})`);
-  try {
-    return await action();
-  } finally {
-    await admin.unsafe(`select pg_advisory_unlock(${GLOBAL_DDL_LOCK})`);
-  }
+  return runWithCleanup(
+    action,
+    async () => admin.unsafe(`select pg_advisory_unlock(${GLOBAL_DDL_LOCK})`),
+  );
 }
 
 export async function createDatabase(admin, databaseName, templateDatabase) {
@@ -141,10 +140,13 @@ export function assertContainerName(value) {
   return value;
 }
 
+function normalizedOutput(value) {
+  return typeof value === 'string' ? value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim() : '';
+}
+
 function verifiedAbsentContainer(result, containerName) {
-  if (result.status !== 1 || result.error !== undefined) return false;
-  const output = `${result.stderr ?? ''}\n${result.stdout ?? ''}`;
-  return output.includes(`No such container: ${containerName}`);
+  if (result.status !== 1 || result.error !== undefined || normalizedOutput(result.stdout) !== '') return false;
+  return normalizedOutput(result.stderr) === `Error response from daemon: No such container: ${containerName}`;
 }
 
 export function removeDockerContainer(containerName, spawnCommand = spawnSync) {
@@ -156,20 +158,48 @@ export function removeDockerContainer(containerName, spawnCommand = spawnSync) {
   throw new Error(`docker rm failed: ${String(detail).trim()}`);
 }
 
-export function installSignalForwarding(signalSource, getChild, onSignal = () => undefined) {
-  const forwardSigint = () => {
-    onSignal('SIGINT');
-    getChild()?.kill('SIGINT');
+export function installSignalForwarding(signalSource) {
+  let cancellationSignal;
+  let child;
+  let childExited = false;
+  let forwarded = false;
+  let disposed = false;
+
+  const forwardCancellation = () => {
+    if (cancellationSignal === undefined || child === undefined || childExited || forwarded) return;
+    forwarded = true;
+    child.kill(cancellationSignal);
   };
-  const forwardSigterm = () => {
-    onSignal('SIGTERM');
-    getChild()?.kill('SIGTERM');
+  const observeSignal = (signal) => {
+    cancellationSignal ??= signal;
+    forwardCancellation();
   };
-  signalSource.once('SIGINT', forwardSigint);
-  signalSource.once('SIGTERM', forwardSigterm);
-  return () => {
-    signalSource.removeListener('SIGINT', forwardSigint);
-    signalSource.removeListener('SIGTERM', forwardSigterm);
+  const forwardSigint = () => observeSignal('SIGINT');
+  const forwardSigterm = () => observeSignal('SIGTERM');
+  signalSource.on('SIGINT', forwardSigint);
+  signalSource.on('SIGTERM', forwardSigterm);
+
+  return {
+    get cancellationSignal() {
+      return cancellationSignal;
+    },
+    assignChild(ownedChild) {
+      if (child !== undefined) return false;
+      child = ownedChild;
+      forwardCancellation();
+      return true;
+    },
+    markChildExited(ownedChild) {
+      if (child !== ownedChild) return false;
+      childExited = true;
+      return true;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      signalSource.removeListener('SIGINT', forwardSigint);
+      signalSource.removeListener('SIGTERM', forwardSigterm);
+    },
   };
 }
 

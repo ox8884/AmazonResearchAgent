@@ -21,11 +21,13 @@ export function createIdempotentTeardown(
 ): (originalError?: unknown) => Promise<void>;
 export function assertContainerName(value: unknown): string;
 export function removeDockerContainer(containerName: unknown): void;
-export function installSignalForwarding(
-  signalSource: EventEmitter,
-  getChild: () => ChildProcess | undefined,
-  onSignal?: (signal: 'SIGINT' | 'SIGTERM') => void,
-): () => void;
+export interface SignalForwardingController {
+  readonly cancellationSignal: 'SIGINT' | 'SIGTERM' | undefined;
+  assignChild(child: ChildProcess): boolean;
+  markChildExited(child: ChildProcess): boolean;
+  dispose(): void;
+}
+export function installSignalForwarding(signalSource: EventEmitter): SignalForwardingController;
 export function childExitCode(
   code: number | null,
   signal: NodeJS.Signals | null,

@@ -1,9 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JungleScoutClient } from './client';
 import { buildKeywordRequest, queryKeywordMetrics } from './keywords';
+import { listenOnFetchSafeLoopback } from '../../../test-harness/safe-loopback-server.mjs';
 
 describe('Jungle Scout keyword adapter', () => {
   let server: Server | undefined;
@@ -39,14 +38,12 @@ describe('Jungle Scout keyword adapter', () => {
         })
       );
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
+    const address = await listenOnFetchSafeLoopback(http);
     server = http;
-    const address = http.address() as AddressInfo;
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     const result = await queryKeywordMetrics(client, {
       marketplace: 'us',
@@ -63,14 +60,12 @@ describe('Jungle Scout keyword adapter', () => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(JSON.stringify({ not: 'jsonapi' }));
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
+    const address = await listenOnFetchSafeLoopback(http);
     server = http;
-    const address = http.address() as AddressInfo;
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     await expect(
       queryKeywordMetrics(client, { marketplace: 'us', keyword: 'sink splash guard' })

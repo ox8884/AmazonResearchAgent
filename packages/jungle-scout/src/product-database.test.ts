@@ -1,6 +1,4 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +9,7 @@ import {
   buildProductDatabaseRequest,
   queryProductDatabase
 } from './product-database';
+import { listenOnFetchSafeLoopback } from '../../../test-harness/safe-loopback-server.mjs';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -108,14 +107,12 @@ describe('Jungle Scout Product Database adapter', () => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(JSON.stringify({ data: [] }));
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
+    const address = await listenOnFetchSafeLoopback(http);
     server = http;
-    const address = http.address() as AddressInfo;
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     const result = await queryProductDatabase(client, {
       marketplace: 'us',
@@ -135,14 +132,12 @@ describe('Jungle Scout Product Database adapter', () => {
       response.statusCode = 500;
       response.end(JSON.stringify({ errors: [{ status: '500' }] }));
     });
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
+    const address = await listenOnFetchSafeLoopback(http);
     server = http;
-    const address = http.address() as AddressInfo;
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
     await expect(
       queryProductDatabase(client, { marketplace: 'us', phrases: ['faucet mat'] })

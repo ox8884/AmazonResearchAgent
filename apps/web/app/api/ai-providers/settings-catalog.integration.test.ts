@@ -1,7 +1,5 @@
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { once } from 'node:events';
-import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createProviderAttemptRepository,
@@ -24,6 +22,7 @@ import {
   hashAdminPassword
 } from '../../../lib/server/admin-session';
 import { GET, POST } from './route';
+import { listenOnFetchSafeLoopback } from '../../../../../test-harness/safe-loopback-server.mjs';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -73,10 +72,8 @@ class MockOpenAiServer {
       response.statusCode = 404;
       response.end(JSON.stringify({ error: 'not found' }));
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address() as AddressInfo;
-    return new MockOpenAiServer(server, `http://127.0.0.1:${address.port}/v1`);
+    const address = await listenOnFetchSafeLoopback(server);
+    return new MockOpenAiServer(server, `${address.url}/v1`);
   }
 }
 

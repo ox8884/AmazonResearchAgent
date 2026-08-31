@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { listenOnFetchSafeLoopback } from '../test-harness/safe-loopback-server.mjs';
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -176,11 +177,10 @@ async function startMockHttpProvider() {
     response.statusCode = 404;
     response.end(JSON.stringify({ error: 'not found' }));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
+  const address = await listenOnFetchSafeLoopback(server);
   return {
     server,
-    baseUrl: `http://127.0.0.1:${address.port}/v1`
+    baseUrl: `${address.url}/v1`
   };
 }
 

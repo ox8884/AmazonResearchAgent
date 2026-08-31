@@ -84,28 +84,70 @@ test('cleanup targets valid current-run databases and refuses a catalog lookalik
   };
   await assert.rejects(cleanupRunDatabases(admin, runId), /(?:invalid harness database identifier|not owned by harness run)/u);
 });
-test('global DDL lock always brackets provisioning and unlocks after failure', async () => {
-  const observations = [];
-  const admin = {
-    unsafe: async (statement) => {
-      observations.push(statement);
-      return [];
-    },
-  };
+test('global DDL lock preserves acquisition, action, and unlock outcomes', async (t) => {
+  await t.test('does not unlock when acquisition fails', async () => {
+    const acquisitionError = new Error('lock failed');
+    const statements = [];
+    const admin = {
+      unsafe: async (statement) => {
+        statements.push(statement);
+        throw acquisitionError;
+      },
+    };
 
-  await assert.rejects(
-    withGlobalDdlLock(admin, async () => {
-      observations.push('provision');
-      throw new Error('provision failed');
-    }),
-    /provision failed/u,
-  );
+    await assert.rejects(withGlobalDdlLock(admin, async () => 'unreachable'), (error) => error === acquisitionError);
+    assert.deepEqual(statements, [`select pg_advisory_lock(${GLOBAL_DDL_LOCK})`]);
+  });
 
-  assert.deepEqual(observations, [
-    `select pg_advisory_lock(${GLOBAL_DDL_LOCK})`,
-    'provision',
-    `select pg_advisory_unlock(${GLOBAL_DDL_LOCK})`,
-  ]);
+  await t.test('returns the action value after a successful unlock', async () => {
+    const statements = [];
+    const admin = { unsafe: async (statement) => { statements.push(statement); return []; } };
+    assert.equal(await withGlobalDdlLock(admin, async () => 'created'), 'created');
+    assert.deepEqual(statements, [
+      `select pg_advisory_lock(${GLOBAL_DDL_LOCK})`,
+      `select pg_advisory_unlock(${GLOBAL_DDL_LOCK})`,
+    ]);
+  });
+
+  await t.test('throws an unlock failure after action success', async () => {
+    const unlockError = new Error('unlock failed');
+    let calls = 0;
+    const admin = {
+      unsafe: async () => {
+        calls += 1;
+        if (calls === 2) throw unlockError;
+        return [];
+      },
+    };
+    await assert.rejects(withGlobalDdlLock(admin, async () => 'created'), (error) => error === unlockError);
+  });
+
+  await t.test('preserves the action failure after a successful unlock', async () => {
+    const actionError = new Error('provision failed');
+    const admin = { unsafe: async () => [] };
+    await assert.rejects(withGlobalDdlLock(admin, async () => { throw actionError; }), (error) => error === actionError);
+  });
+
+  await t.test('aggregates action then unlock failures by identity', async () => {
+    const actionError = new Error('provision failed');
+    const unlockError = new Error('unlock failed');
+    let calls = 0;
+    const admin = {
+      unsafe: async () => {
+        calls += 1;
+        if (calls === 2) throw unlockError;
+        return [];
+      },
+    };
+    await assert.rejects(
+      withGlobalDdlLock(admin, async () => { throw actionError; }),
+      (error) => {
+        assert(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [actionError, unlockError]);
+        return true;
+      },
+    );
+  });
 });
 
 test('teardown aggregates failures while attempting every stage and is idempotent', async () => {
@@ -153,63 +195,127 @@ test('setup failure remains visible alongside teardown failure', async () => {
   });
 });
 
-test('Docker removal tolerates only verified absence', () => {
-  const calls = [];
-  const absent = (command, args) => {
-    calls.push([command, args]);
-    return { status: 1, error: undefined, stdout: '', stderr: 'Error response from daemon: No such container: ara_it_1234_abcdef12_deadbeefcafe_pgrst' };
-  };
-  assert.doesNotThrow(() => removeDockerContainer('ara_it_1234_abcdef12_deadbeefcafe_pgrst', absent));
+test('Docker removal accepts only the exact daemon absence response', async (t) => {
+  const containerName = 'ara_it_1234_abcdef12_deadbeefcafe_pgrst';
+  const absence = `Error response from daemon: No such container: ${containerName}`;
+  const cases = [
+    { name: 'pure stderr absence', result: { status: 1, error: undefined, stdout: '', stderr: absence }, accepted: true },
+    { name: 'normalized stderr absence', result: { status: 1, error: undefined, stdout: '', stderr: `\r\n  ${absence}  \r\n` }, accepted: true },
+    { name: 'permission plus absence', result: { status: 1, error: undefined, stdout: '', stderr: `permission denied\n${absence}` }, accepted: false },
+    { name: 'absence plus warning', result: { status: 1, error: undefined, stdout: '', stderr: `${absence}\nwarning: daemon degraded` }, accepted: false },
+    { name: 'mismatched name', result: { status: 1, error: undefined, stdout: '', stderr: 'Error response from daemon: No such container: ara_it_1234_abcdef12_badc0ffee000_pgrst' }, accepted: false },
+    { name: 'stdout-only absence', result: { status: 1, error: undefined, stdout: absence, stderr: '' }, accepted: false },
+    { name: 'spawn error', result: { status: 1, error: new Error('spawn failed'), stdout: '', stderr: absence }, accepted: false },
+    { name: 'null status', result: { status: null, error: undefined, stdout: '', stderr: absence }, accepted: false },
+    { name: 'status two', result: { status: 2, error: undefined, stdout: '', stderr: absence }, accepted: false },
+    { name: 'successful removal', result: { status: 0, error: undefined, stdout: '', stderr: '' }, accepted: true },
+  ];
 
-  const denied = () => ({ status: 1, error: undefined, stdout: '', stderr: 'permission denied' });
+  for (const scenario of cases) {
+    await t.test(scenario.name, () => {
+      const remove = () => removeDockerContainer(containerName, () => scenario.result);
+      if (scenario.accepted) assert.doesNotThrow(remove);
+      else assert.throws(remove, /docker rm failed/u);
+    });
+  }
+
   assert.throws(
-    () => removeDockerContainer('ara_it_1234_abcdef12_deadbeefcafe_pgrst', denied),
-    /docker rm failed: permission denied/u,
+    () => removeDockerContainer('foreign-container', () => { throw new Error('Docker must not run'); }),
+    /invalid harness container name/u,
   );
-  assert.deepEqual(calls, [['docker', ['rm', '-f', 'ara_it_1234_abcdef12_deadbeefcafe_pgrst']]]);
 });
 
-test('signal forwarding requests the exact signal, cancels success, and removes exact listeners', () => {
+test('signal controller is first-signal-wins before child assignment', async (t) => {
+  for (const [first, later] of [['SIGINT', 'SIGTERM'], ['SIGTERM', 'SIGINT']]) {
+    await t.test(`${first} then ${later}`, () => {
+      const source = new EventEmitter();
+      const requested = [];
+      const controller = installSignalForwarding(source);
+
+      source.emit(first);
+      source.emit(later);
+      assert.equal(controller.cancellationSignal, first);
+      assert.equal(controller.assignChild({ kill: (signal) => { requested.push(signal); return true; } }), true);
+      assert.deepEqual(requested, [first]);
+      controller.dispose();
+    });
+  }
+});
+
+test('signal controller handles assignment boundary and repeated pre-child signal', () => {
   const source = new EventEmitter();
   const requested = [];
-  let cancellationSignal;
-  const uninstall = installSignalForwarding(
-    source,
-    () => ({
-      kill(signal) {
-        requested.push(signal);
-        return true;
-      },
-    }),
-    (signal) => {
-      cancellationSignal = signal;
+  const controller = installSignalForwarding(source);
+
+  source.emit('SIGINT');
+  source.emit('SIGINT');
+  assert.deepEqual(requested, []);
+  assert.equal(controller.assignChild({ kill: (signal) => { requested.push(signal); return true; } }), true);
+  assert.deepEqual(requested, ['SIGINT']);
+  controller.dispose();
+});
+
+test('signal controller supervises repeated and mixed signals without retargeting', () => {
+  const source = new EventEmitter();
+  const requested = [];
+  const replacementRequested = [];
+  const child = {
+    kill(signal) {
+      requested.push(signal);
+      source.emit('SIGTERM');
+      return true;
     },
-  );
+  };
+  const controller = installSignalForwarding(source);
+  assert.equal(controller.assignChild(child), true);
 
   source.emit('SIGINT');
-  assert.throws(() => childExitCode(0, null, cancellationSignal), /signal SIGINT/u);
-  source.emit('SIGTERM');
-  uninstall();
   source.emit('SIGINT');
   source.emit('SIGTERM');
+  assert.equal(controller.assignChild({ kill: (signal) => { replacementRequested.push(signal); return true; } }), false);
 
-  assert.deepEqual(requested, ['SIGINT', 'SIGTERM']);
+  assert.equal(controller.cancellationSignal, 'SIGINT');
+  assert.deepEqual(requested, ['SIGINT']);
+  assert.deepEqual(replacementRequested, []);
+  assert.equal(source.listenerCount('SIGINT'), 1);
+  assert.equal(source.listenerCount('SIGTERM'), 1);
+  controller.dispose();
+});
+
+test('signal controller supervises cleanup without signaling an exited child', () => {
+  const source = new EventEmitter();
+  const requested = [];
+  const child = { kill: (signal) => { requested.push(signal); return true; } };
+  const controller = installSignalForwarding(source);
+  controller.assignChild(child);
+  controller.markChildExited(child);
+
+  source.emit('SIGTERM');
+  source.emit('SIGINT');
+  assert.deepEqual(requested, []);
+  assert.equal(controller.cancellationSignal, 'SIGTERM');
+  assert.throws(() => childExitCode(0, null, controller.cancellationSignal), /signal SIGTERM/u);
+  assert.equal(source.listenerCount('SIGINT'), 1);
+  assert.equal(source.listenerCount('SIGTERM'), 1);
+
+  controller.dispose();
+  controller.dispose();
   assert.equal(source.listenerCount('SIGINT'), 0);
   assert.equal(source.listenerCount('SIGTERM'), 0);
 });
 
-test('cancellation remains non-success while parent cleanup runs', async () => {
-  let cleaned = false;
+test('cancellation remains non-success while parent cleanup runs once', async () => {
+  let cleanupCalls = 0;
   await assert.rejects(
     runWithCleanup(
       async () => childExitCode(0, null, 'SIGTERM'),
       async () => {
-        cleaned = true;
+        cleanupCalls += 1;
       },
     ),
     /signal SIGTERM/u,
   );
-  assert.equal(cleaned, true);
+  assert.equal(cleanupCalls, 1);
 });
 
 test('parent runner preserves action and cleanup failures', async () => {

@@ -1,6 +1,4 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JungleScoutClient } from './client';
 import {
@@ -9,6 +7,7 @@ import {
 } from './historical-search-volume';
 import { buildSalesEstimatesRequest, querySalesEstimates } from './sales-estimates';
 import { buildShareOfVoiceRequest, queryShareOfVoice } from './share-of-voice';
+import { listenOnFetchSafeLoopback } from '../../../test-harness/safe-loopback-server.mjs';
 
 
 describe('Jungle Scout Task 11 adapters', () => {
@@ -22,14 +21,12 @@ describe('Jungle Scout Task 11 adapters', () => {
     handler: (request: IncomingMessage, response: ServerResponse) => void
   ): Promise<JungleScoutClient> {
     const http = createServer(handler);
-    http.listen(0, '127.0.0.1');
-    await once(http, 'listening');
+    const address = await listenOnFetchSafeLoopback(http);
     server = http;
-    const address = http.address() as AddressInfo;
     return new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: `http://127.0.0.1:${address.port}`
+      baseUrl: address.url
     });
   }
 
