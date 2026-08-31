@@ -99,6 +99,62 @@ const readinessOptions = (timing, requestImpl) => ({
   dockerLogs: () => 'deterministic docker log',
 });
 
+const errorMessages = (error) => error instanceof AggregateError
+  ? error.errors.flatMap(errorMessages)
+  : [error instanceof Error ? error.message : String(error)];
+
+const assertPrimaryFailure = (error, primary, secondary) => {
+  const messages = errorMessages(error);
+  assert.match(messages[0], primary);
+  if (secondary !== undefined) assert.match(messages.slice(1).join('\n'), secondary);
+  return true;
+};
+
+const adversarialTiming = ({ advance = true } = {}) => {
+  let current = 0;
+  let rejectCallback;
+  const callbackFailure = new Promise((_, reject) => {
+    rejectCallback = reject;
+  });
+  return {
+    now: () => current,
+    setTimeout(callback, milliseconds) {
+      const handle = { active: true };
+      setImmediate(() => {
+        if (!handle.active) return;
+        if (advance) current += milliseconds;
+        try {
+          callback();
+        } catch (error) {
+          rejectCallback(error);
+        }
+      });
+      return handle;
+    },
+    clearTimeout(handle) {
+      handle.active = false;
+    },
+    callbackFailure,
+  };
+};
+
+const immediateObservation = () => (_options, callback) => {
+  const outgoing = new FakeOutgoingRequest(() => queueMicrotask(() => callback(
+    fakeUpstreamResponse({ statusCode: 503, body: 'warming' }),
+  )));
+  return outgoing;
+};
+
+const requestWithResponse = (outgoing, response) => (_options, callback) => {
+  outgoing.onEnd = () => queueMicrotask(() => callback(response));
+  return outgoing;
+};
+
+const rejectWithCallbackGuard = (timing, operation, validator) => assert.rejects(
+  Promise.race([operation, timing.callbackFailure]),
+  validator,
+);
+
 test('uses Node HTTP for target port 10080 while preserving the PostgREST wire contract', async () => {
   const observed = [];
   const target = createServer((incoming, outgoing) => {
@@ -439,4 +495,242 @@ test('still succeeds when readiness becomes healthy before the deadline', async 
   await waitForPostgrest(10080, 'key', 'container', readinessOptions(timing, requestImpl));
   assert.equal(calls, 2);
   assert.deepEqual(timing.scheduled, [15_000, 50, 14_950]);
+});
+
+test('keeps timeout primary when request and response cleanup fail or re-enter', async () => {
+  const cases = [
+    { name: 'outgoing destroy throws', outgoingThrow: new Error('outgoing cleanup failed') },
+    { name: 'outgoing destroy emits error', outgoingEmit: new Error('reentrant outgoing error') },
+    { name: 'response destroy throws', responseThrow: new Error('response cleanup failed') },
+    {
+      name: 'both destroys fail and re-enter',
+      outgoingThrow: new Error('outgoing cleanup failed'),
+      outgoingEmit: new Error('reentrant outgoing error'),
+      responseThrow: new Error('response cleanup failed'),
+      responseEmit: new Error('reentrant response error'),
+    },
+  ];
+
+  for (const scenario of cases) {
+    const timing = adversarialTiming();
+    const outgoing = new FakeOutgoingRequest();
+    const response = fakeUpstreamResponse();
+    let responseDestroyCalls = 0;
+    outgoing.destroy = () => {
+      outgoing.destroyCalls += 1;
+      if (scenario.outgoingEmit) outgoing.emit('error', scenario.outgoingEmit);
+      if (scenario.outgoingThrow) throw scenario.outgoingThrow;
+    };
+    response.destroy = () => {
+      responseDestroyCalls += 1;
+      if (scenario.responseEmit) response.emit('error', scenario.responseEmit);
+      if (scenario.responseThrow) throw scenario.responseThrow;
+      return response;
+    };
+
+    await rejectWithCallbackGuard(
+      timing,
+      waitForPostgrest(
+        10080,
+        'key',
+        'container',
+        readinessOptions(timing, requestWithResponse(outgoing, response)),
+      ),
+      (error) => assertPrimaryFailure(
+        error,
+        /PostgREST readiness request timed out after 15000 ms/u,
+        scenario.outgoingThrow || scenario.responseThrow ? /cleanup failed/u : undefined,
+      ),
+    );
+    assert.equal(outgoing.destroyCalls, 1, scenario.name);
+    assert.equal(responseDestroyCalls, 1, scenario.name);
+  }
+});
+
+test('attempts both destroys once when timer cancellation throws', async () => {
+  const timing = adversarialTiming();
+  const outgoing = new FakeOutgoingRequest();
+  const response = fakeUpstreamResponse();
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    return response;
+  };
+  const options = readinessOptions(timing, requestWithResponse(outgoing, response));
+  options.clearTimeout = () => {
+    throw new Error('timer cancellation failed');
+  };
+
+  await rejectWithCallbackGuard(
+    timing,
+    waitForPostgrest(10080, 'key', 'container', options),
+    (error) => assertPrimaryFailure(
+      error,
+      /PostgREST readiness request timed out after 15000 ms/u,
+      /timer cancellation failed/u,
+    ),
+  );
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
+});
+
+test('keeps readiness failure primary when injected Docker-log retrieval throws', async () => {
+  const timing = deterministicTiming();
+  const options = readinessOptions(timing, () => new FakeOutgoingRequest());
+  options.dockerLogs = () => {
+    throw new Error('docker log retrieval failed');
+  };
+
+  await assert.rejects(
+    waitForPostgrest(10080, 'key', 'container', options),
+    (error) => assertPrimaryFailure(
+      error,
+      /PostgREST readiness request timed out after 15000 ms/u,
+      /docker log retrieval failed/u,
+    ),
+  );
+});
+
+test('keeps readiness failure primary for failed or malformed Docker command results', async () => {
+  const cases = [
+    { result: { error: new Error('spawn failed') }, secondary: /spawn failed/u },
+    {
+      result: { error: new Error('spawn failed'), stderr: 'useful docker stderr' },
+      secondary: /spawn failed/u,
+      log: /useful docker stderr/u,
+    },
+    { result: null, secondary: /invalid result/u },
+    { result: { stderr: { secret: 'must not format' }, stdout: 42 }, secondary: /invalid output/u },
+  ];
+  for (const scenario of cases) {
+    const timing = deterministicTiming();
+    const options = readinessOptions(timing, () => new FakeOutgoingRequest());
+    delete options.dockerLogs;
+    options.spawnSync = () => scenario.result;
+    await assert.rejects(
+      waitForPostgrest(10080, 'key', 'container', options),
+      (error) => {
+        if (scenario.log) assert.match(error.message, scenario.log);
+        return assertPrimaryFailure(
+          error,
+          /PostgREST readiness request timed out after 15000 ms/u,
+          scenario.secondary,
+        );
+      },
+    );
+  }
+});
+
+test('stops after one observation when a scheduled delay makes no clock progress', async () => {
+  let clockReads = 0;
+  let requests = 0;
+  const timing = adversarialTiming({ advance: false });
+  timing.now = () => {
+    clockReads += 1;
+    if (clockReads > 8) throw new Error('old loop sentinel');
+    return 0;
+  };
+  const options = readinessOptions(timing, (...args) => {
+    requests += 1;
+    return immediateObservation()(...args);
+  });
+
+  await assert.rejects(
+    waitForPostgrest(10080, 'key', 'container', options),
+    (error) => assertPrimaryFailure(error, /503 warming/u, /clock did not advance/u),
+  );
+  assert.equal(requests, 1);
+});
+
+test('stops after one observation when the injected clock moves backward', async () => {
+  let current = 0;
+  let clockReads = 0;
+  let requests = 0;
+  const timing = {
+    now: () => {
+      clockReads += 1;
+      if (clockReads > 8) throw new Error('old loop sentinel');
+      return current;
+    },
+    setTimeout(callback) {
+      const handle = { active: true };
+      setImmediate(() => {
+        if (!handle.active) return;
+        current -= 1;
+        callback();
+      });
+      return handle;
+    },
+    clearTimeout(handle) {
+      handle.active = false;
+    },
+  };
+  const options = readinessOptions(timing, (...args) => {
+    requests += 1;
+    return immediateObservation()(...args);
+  });
+
+  await assert.rejects(
+    waitForPostgrest(10080, 'key', 'container', options),
+    (error) => assertPrimaryFailure(error, /503 warming/u, /clock moved backward/u),
+  );
+  assert.equal(requests, 1);
+});
+
+test('rejects invalid injected clock values without issuing a request', async () => {
+  for (const value of [NaN, Infinity, 'not-a-number']) {
+    let requests = 0;
+    await assert.rejects(
+      waitForPostgrest(10080, 'key', 'container', {
+        now: () => value,
+        request: () => {
+          requests += 1;
+          return new FakeOutgoingRequest();
+        },
+        dockerLogs: () => 'deterministic docker log',
+      }),
+      (error) => assertPrimaryFailure(error, /no response/u, /clock returned/u),
+    );
+    assert.equal(requests, 0);
+  }
+});
+
+test('keeps readiness context when the injected clock throws', async () => {
+  await assert.rejects(
+    waitForPostgrest(10080, 'key', 'container', {
+      now: () => { throw new Error('clock read failed'); },
+      request: () => { throw new Error('request must not run'); },
+      dockerLogs: () => 'deterministic docker log',
+    }),
+    (error) => assertPrimaryFailure(error, /no response/u, /clock read failed/u),
+  );
+});
+
+test('absorbs a late response callback and error after timeout settlement', async () => {
+  const timing = deterministicTiming();
+  const outgoing = new FakeOutgoingRequest();
+  let requestCallback;
+  const requestImpl = (_options, callback) => {
+    requestCallback = callback;
+    return outgoing;
+  };
+
+  await assert.rejects(
+    waitForPostgrest(10080, 'key', 'container', readinessOptions(timing, requestImpl)),
+    /PostgREST readiness request timed out after 15000 ms/u,
+  );
+
+  const response = fakeUpstreamResponse();
+  let responseDestroyCalls = 0;
+  response.destroy = () => {
+    responseDestroyCalls += 1;
+    throw new Error('late response cleanup failed');
+  };
+  requestCallback(response);
+  response.emit('error', new Error('late response error'));
+  response.emit('end');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(outgoing.destroyCalls, 1);
+  assert.equal(responseDestroyCalls, 1);
 });
