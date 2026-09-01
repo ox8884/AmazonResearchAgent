@@ -686,7 +686,7 @@ async function postStageReplacementRunner(root) {
   const runner = join(root, 'post-stage-replacement-runner.sh');
   await writeFile(runner, `#!/usr/bin/env bash
 export ARA_FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT=1
-exec "$@"
+exec bash "$@"
 `);
   return `./${basename(root)}/post-stage-replacement-runner.sh`;
 }
