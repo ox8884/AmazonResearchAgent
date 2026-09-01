@@ -35,6 +35,11 @@ function state(overrides: Partial<SubscriptionUnitState> = {}): SubscriptionUnit
   };
 }
 
+async function createExactInvocationDirectory(path: string): Promise<void> {
+  await mkdir(path, { mode: 0o2770 });
+  await chmod(path, 0o2770);
+}
+
 class FakeController implements SubscriptionSandboxController {
   readonly events: string[] = [];
   readonly states: SubscriptionUnitState[] = [];
@@ -143,7 +148,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
     let path = '';
     let attemptId = '';
     const controller = new FakeController({
-      onStart: async () => mkdir(path, { mode: 0o770 }),
+      onStart: async () => createExactInvocationDirectory(path),
       onShow: async (count) => {
         if (count === 3) await publishResult(path, attemptId);
       }
@@ -181,7 +186,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
     let path = '';
     let requestObserved = '';
     const controller = new FakeController({
-      onStart: async () => mkdir(path, { mode: 0o770 }),
+      onStart: async () => createExactInvocationDirectory(path),
       onShow: async (count) => {
         if (count === 2) requestObserved = await readFile(join(path, 'request.json'), 'utf8');
       }
@@ -201,7 +206,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   // Break: MAIN/provider execution is inferred before start-pre completes and READY is accepted.
   it('MAIN waits for ExecStartPre completion', async () => {
     let path = '';
-    const controller = new FakeController({ onStart: async () => mkdir(path, { mode: 0o770 }) });
+    const controller = new FakeController({ onStart: async () => createExactInvocationDirectory(path) });
     const f = await fixture(controller);
     path = f.invocationPath;
     controller.states.push(
@@ -219,7 +224,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   // Break: STATUS=result-published is treated as READY while Type=notify is still activating.
   it('READY follows MAIN sandbox validation', async () => {
     let path = '';
-    const controller = new FakeController({ onStart: async () => mkdir(path, { mode: 0o770 }) });
+    const controller = new FakeController({ onStart: async () => createExactInvocationDirectory(path) });
     const f = await fixture(controller);
     path = f.invocationPath;
     controller.states.push(
@@ -235,7 +240,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
     let path = '';
     let attemptId = '';
     const controller = new FakeController({
-      onStart: async () => mkdir(path, { mode: 0o770 }),
+      onStart: async () => createExactInvocationDirectory(path),
       onShow: async (count) => {
         if (count === 3) await publishResult(path, attemptId);
       }
@@ -265,7 +270,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
       let path = '';
       const controller = new FakeController({
         onStart: async () => {
-          if (scenario[1]) await mkdir(path, { mode: 0o770 });
+          if (scenario[1]) await createExactInvocationDirectory(path);
           if (!scenario[1]) abort.abort();
         },
         onShow: async (count) => {
@@ -293,7 +298,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   // Break: failed startup after root directory creation skips stop/ExecStopPost cleanup.
   it('start failure after directory removes directory', async () => {
     let path = '';
-    const controller = new FakeController({ onStart: async () => mkdir(path, { mode: 0o770 }) });
+    const controller = new FakeController({ onStart: async () => createExactInvocationDirectory(path) });
     const f = await fixture(controller);
     path = f.invocationPath;
     controller.states.push(state({ activeState: 'failed', subState: 'failed' }));
@@ -306,7 +311,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   it('invalid request fails startup and cleans', async () => {
     let path = '';
     const controller = new FakeController({ onStart: async () => {
-      await mkdir(path, { mode: 0o770 });
+      await createExactInvocationDirectory(path);
       await writeFile(join(path, 'request.json'), '{');
     } });
     const f = await fixture(controller);
@@ -329,7 +334,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
   // Break: start waits synchronously for ExecStartPre instead of returning control for publication.
   it('nonblocking start avoids request publication deadlock', async () => {
     let path = '';
-    const controller = new FakeController({ onStart: async () => mkdir(path, { mode: 0o770 }) });
+    const controller = new FakeController({ onStart: async () => createExactInvocationDirectory(path) });
     const f = await fixture(controller);
     path = f.invocationPath;
     controller.states.push(state(), state({ activeState: 'failed', subState: 'failed' }));
@@ -346,7 +351,7 @@ describe('SystemdSubscriptionSandbox start and lifecycle', () => {
     let path = '';
     let attemptId = '';
     const controller = new FakeController({
-      onStart: async () => mkdir(path, { mode: 0o770 }),
+      onStart: async () => createExactInvocationDirectory(path),
       onShow: async (count) => {
         if (count === 3) await publishResult(path, attemptId);
       }

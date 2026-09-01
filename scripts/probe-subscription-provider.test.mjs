@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -465,7 +465,7 @@ describe('installer full preflight', () => {
     await assert.rejects(stat(join(installRoot, 'etc/systemd/system/amazon-research-codex@.service')), { code: 'ENOENT' });
   });
 
-  it('rolls back every created file and parent after a late atomic publication failure', async () => {
+  it('rolls back every created file and parent after a late atomic publication failure', { skip: process.platform === 'win32' }, async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const root = await mkdtemp(join(sourceRoot, '.task14-rollback-'));
     roots.push(root);
@@ -479,7 +479,7 @@ describe('installer full preflight', () => {
       'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
       '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.',
       '--fail-at', 'publish-6'
-    ], { cwd: sourceRoot, encoding: 'utf8' });
+    ], { cwd: sourceRoot, encoding: 'utf8', env: { ...process.env, TMPDIR: root } });
     assert.notEqual(child.status, 0, child.stdout + child.stderr);
     assert.match(child.stderr, /injected publication failure 6/u);
     for (const relative of [
@@ -491,6 +491,21 @@ describe('installer full preflight', () => {
       await assert.rejects(stat(join(installRoot, relative)), { code: 'ENOENT' }, `rollback residue: ${relative}`);
     }
     await assert.rejects(stat(join(installRoot, 'usr/local/libexec')), { code: 'ENOENT' });
+    assert.deepEqual(await readdir(root), ['target'], 'ordinary rollback leaves no transaction staging residue');
+  });
+
+  // Break: an unlinked owned file can reuse its inode for an unrelated replacement on ext4.
+  it('demonstrates immediate inode reuse after unlink', { skip: process.platform !== 'linux' }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ara-task14-inode-reuse-'));
+    roots.push(root);
+    const original = join(root, 'original');
+    const replacement = join(root, 'replacement');
+    await writeFile(original, 'owned\n');
+    const owned = await stat(original, { bigint: true });
+    await rm(original);
+    await writeFile(replacement, 'competitor\n');
+    const competitor = await stat(replacement, { bigint: true });
+    assert.equal(`${competitor.dev}:${competitor.ino}`, `${owned.dev}:${owned.ino}`, 'native Linux filesystem did not immediately reuse the unlinked inode');
   });
 
   // Break: rollback ledgers a target before link publication and deletes the concurrent winner.
@@ -518,7 +533,7 @@ describe('installer full preflight', () => {
   });
 
   // Break: rollback deletes a target that no longer has the invocation-owned inode.
-  it('preserves a published target replaced before rollback', async () => {
+  it('preserves a published target replaced before rollback', { skip: process.platform === 'win32' }, async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const root = await mkdtemp(join(sourceRoot, '.task14-replaced-'));
     roots.push(root);
@@ -654,25 +669,49 @@ async function lockAuthorityFixture(kind) {
     await symlink(helperSource, helper);
   } else if (kind === 'wrong-mode') {
     await writeFile(helper, await readFile(helperSource), { mode: 0o600 });
-  } else if (kind === 'wrong-digest') {
-    await writeFile(helper, malicious, { mode: 0o500 });
   } else {
-    await writeFile(helper, malicious, { mode: 0o500 });
+    await writeFile(helper, kind === 'post-validation-swap' || kind === 'untrusted-parent'
+      ? await readFile(helperSource)
+      : malicious, { mode: 0o644 });
+  }
+  const environment = { ...process.env, ARA_REPOSITORY_ROOT: repository, ARA_INSTALL_ROOT: installRoot, ARA_FIXTURE_MODE: '1' };
+  if (kind === 'post-validation-swap') {
+    const bin = join(root, 'bin');
+    const node = join(bin, 'node');
+    await mkdir(bin);
+    await writeFile(node, `#!/usr/bin/env bash
+if [[ "$1" == *"subscription-install-lock.mjs" ]]; then
+  printf wrapper >"$ARA_TEST_MARKER"
+  cat >"$1" <<'EOF'
+${malicious}
+EOF
+fi
+exec ${JSON.stringify(process.execPath)} "$@"
+`, { mode: 0o755 });
+    await chmod(node, 0o755);
+    const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    environment.ARA_TEST_MARKER = `./${basename(root)}/executed`;
+    environment[pathKey] = [bin, environment[pathKey]].filter((value) => value !== undefined).join(delimiter);
+  }
+  if (kind === 'untrusted-parent') {
+    const parent = join(installRoot, 'run/lock');
+    await mkdir(parent, { recursive: true, mode: 0o777 });
+    await chmod(parent, 0o777);
   }
   const fixtureRoot = `./${basename(root)}`;
   const child = spawnSync('bash', [installerSource, 'install', '--fixture-root', `${fixtureRoot}/target`, '--repository-root', `${fixtureRoot}/repo`], {
     cwd: sourceRoot,
     encoding: 'utf8',
-    env: { ...process.env, ARA_REPOSITORY_ROOT: repository, ARA_INSTALL_ROOT: installRoot, ARA_FIXTURE_MODE: '1' }
+    env: environment
   });
   return { child, marker };
 }
 
 describe('subscription lock helper install authority', () => {
   const helperAttacks = [
-    ['missing', /invalid regular file/u],
+    ['missing', /lock helper descriptor rejected/u],
     ['substituted', /lock helper digest rejected/u],
-    ['symlink', /invalid regular file/u],
+    ['symlink', /lock helper descriptor rejected/u],
     ...(process.platform === 'win32' ? [] : [['wrong-mode', /lock helper mode rejected/u]]),
     ['wrong-digest', /lock helper digest rejected/u]
   ];
@@ -691,6 +730,22 @@ describe('subscription lock helper install authority', () => {
     const { child, marker } = await lockAuthorityFixture('pre-verification');
     assert.notEqual(child.status, 0, child.stdout + child.stderr);
     assert.match(child.stderr, /lock helper digest rejected/u);
+    await assert.rejects(stat(marker), { code: 'ENOENT' });
+  });
+
+  // Break: a release-tree helper can be replaced after pathname validation and before Node reopens it.
+  it('never executes a helper replaced after validation', async () => {
+    const { child, marker } = await lockAuthorityFixture('post-validation-swap');
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /invalid regular file/u);
+    await assert.rejects(stat(marker), { code: 'ENOENT' });
+  });
+
+  // Break: a writable staging parent lets another principal replace the verified staged helper.
+  it('rejects an untrusted lock staging parent before helper execution', { skip: process.platform === 'win32' }, async () => {
+    const { child, marker } = await lockAuthorityFixture('untrusted-parent');
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /transaction staging parent rejected/u);
     await assert.rejects(stat(marker), { code: 'ENOENT' });
   });
   const lockPath = '/usr/local/libexec/amazon-research/subscription-install-lock.mjs';

@@ -72,6 +72,36 @@ verify_target_parent() {
   fi
 }
 
+verify_transaction_staging_parent() {
+  local parent="$1" owner_mode mode
+  [[ -d "$parent" && ! -L "$parent" ]] || fail 'transaction staging parent rejected'
+  if [[ "$FIXTURE_MODE" == 1 ]]; then
+    case "$(stat -fc %T -- "$parent")" in v9fs|drvfs) return ;; esac
+  fi
+  owner_mode="$(stat -c '%u:%g:%a' -- "$parent")"
+  mode="${owner_mode##*:}"
+  if [[ "$FIXTURE_MODE" == 1 ]]; then
+    (( ( 8#$mode & 022 ) == 0 )) || fail 'transaction staging parent rejected'
+  else
+    [[ "$owner_mode" == '0:0:755' ]] || fail 'transaction staging parent rejected'
+  fi
+}
+
+verify_publication_parent() {
+  local parent="$1" owner_mode mode
+  [[ -d "$parent" && ! -L "$parent" ]] || fail "unsafe final parent: $parent"
+  if [[ "$FIXTURE_MODE" == 1 ]]; then
+    case "$(stat -fc %T -- "$parent")" in v9fs|drvfs) return ;; esac
+  fi
+  owner_mode="$(stat -c '%u:%g:%a' -- "$parent")"
+  mode="${owner_mode##*:}"
+  if [[ "$FIXTURE_MODE" == 1 ]]; then
+    (( ( 8#$mode & 022 ) == 0 )) || fail "unsafe final parent: $parent"
+  else
+    [[ "$owner_mode" == 0:0:* ]] || fail "unsafe final parent: $parent"
+  fi
+}
+
 verify_installed() {
   local source="$1" target="$2" mode="$3" metadata="${4:-installed}" owner
   verify_regular "$target"
@@ -85,12 +115,6 @@ verify_installed() {
 readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$FIXTURE_AUTHORITY" || printf '%s' "$HOST_AUTHORITY")"
 readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
 verify_regular "$PROBE"
-verify_regular "$LOCK_HELPER"
-[[ "$(sha "$LOCK_HELPER")" == "$LOCK_HELPER_SHA256" ]] || fail 'lock helper digest rejected'
-case "$(stat -fc %T -- "$LOCK_HELPER")" in
-  v9fs|drvfs) ;;
-  *) [[ "$(stat -c '%a' -- "$LOCK_HELPER")" == "$LOCK_HELPER_MODE" ]] || fail 'lock helper mode rejected' ;;
-esac
 verify_regular "$AUTHORITY"
 if [[ "$ENVIRONMENT" == oracle ]]; then
   [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
@@ -100,13 +124,70 @@ readonly TRANSACTION_LOCK="$(root_path /run/lock/amazon-research-subscription-in
 if [[ "$MODE" == install ]]; then
   lock_parent="$(dirname -- "$TRANSACTION_LOCK")"
   if [[ "$FIXTURE_MODE" == 1 ]]; then
-    install -d -m 0755 -- "$lock_parent"
-  else
-    [[ -d "$lock_parent" && ! -L "$lock_parent" && "$(stat -c '%u:%g:%a' -- "$lock_parent")" == '0:0:755' ]] || fail 'transaction lock parent rejected'
+    if [[ ! -e "$lock_parent" && ! -L "$lock_parent" ]]; then install -d -m 0755 -- "$lock_parent"; fi
   fi
+  verify_transaction_staging_parent "$lock_parent"
   if [[ -z "${ARA_TRANSACTION_LOCK_FD:-}" ]]; then
-    owner_mode="$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || printf root)"
-    exec node "$LOCK_HELPER" "$TRANSACTION_LOCK" "$owner_mode" bash "$0" "$@"
+    bootstrap_stage="$(mktemp -d --tmpdir="$lock_parent" .ara-subscription-lock.XXXXXX)" || fail 'transaction staging boundary rejected'
+    chmod 0700 -- "$bootstrap_stage"
+    bootstrap_helper_mode="$LOCK_HELPER_MODE"
+    if [[ "$FIXTURE_MODE" == 1 ]]; then
+      case "$(stat -fc %T -- "$lock_parent")" in v9fs|drvfs) bootstrap_helper_mode=fixture ;; esac
+    fi
+    node --input-type=module --eval '
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const [helper, expectedDigest, expectedModeText, stage, expectedStageUidText, ...command] = process.argv.slice(1);
+let handle;
+try {
+  if (!Number.isInteger(constants.O_NOFOLLOW)) throw new TypeError("lock helper descriptor rejected");
+  try {
+    handle = await open(helper, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new TypeError("lock helper descriptor rejected");
+  }
+  const before = await handle.stat({ bigint: true });
+  const expectedMode = expectedModeText === "fixture" ? undefined : BigInt(`0o${expectedModeText}`);
+  const fixtureFilesystem = expectedModeText === "fixture";
+  if (!before.isFile() || before.isSymbolicLink()) throw new TypeError("lock helper descriptor rejected");
+  if (expectedMode !== undefined && (before.mode & 0o777n) !== expectedMode) throw new TypeError("lock helper mode rejected");
+  const bytes = await handle.readFile();
+  const after = await handle.stat({ bigint: true });
+  if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode || before.size !== after.size) {
+    throw new TypeError("lock helper descriptor identity rejected");
+  }
+  if (createHash("sha256").update(bytes).digest("hex") !== expectedDigest) throw new TypeError("lock helper digest rejected");
+  const expectedStageUid = expectedStageUidText === "fixture" ? undefined : BigInt(expectedStageUidText);
+  const stageInfo = await lstat(stage, { bigint: true });
+  if (!stageInfo.isDirectory() || stageInfo.isSymbolicLink() || (expectedStageUid !== undefined && stageInfo.uid !== expectedStageUid) || (!fixtureFilesystem && (stageInfo.mode & 0o777n) !== 0o700n)) {
+    throw new TypeError("transaction staging boundary rejected");
+  }
+  const stagedHelper = join(stage, "subscription-install-lock.mjs");
+  await writeFile(stagedHelper, bytes, { flag: "wx", mode: 0o500 });
+  const stagedInfo = await lstat(stagedHelper, { bigint: true });
+  if (!stagedInfo.isFile() || stagedInfo.isSymbolicLink() || (expectedStageUid !== undefined && stagedInfo.uid !== expectedStageUid) || (!fixtureFilesystem && (stagedInfo.mode & 0o777n) !== 0o500n) ||
+      createHash("sha256").update(await readFile(stagedHelper)).digest("hex") !== expectedDigest) {
+    throw new TypeError("transaction staging boundary rejected");
+  }
+  await handle.close();
+  handle = undefined;
+  process.exitCode = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [stagedHelper, ...command], { stdio: "inherit", windowsHide: true });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve(signal === null ? (code ?? 1) : 1));
+  });
+} catch (error) {
+  process.stderr.write(`install-systemd-sandbox: ${error instanceof Error ? error.message : "lock helper bootstrap rejected"}\n`);
+  process.exitCode = 1;
+} finally {
+  await handle?.close();
+  await rm(stage, { recursive: true, force: true });
+}
+' "$LOCK_HELPER" "$LOCK_HELPER_SHA256" "$bootstrap_helper_mode" "$bootstrap_stage" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || id -u)" "$TRANSACTION_LOCK" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || printf root)" bash "$0" "$@"
+    exit "$?"
   fi
   [[ "$ARA_TRANSACTION_LOCK_FD" =~ ^[0-9]+$ ]] || fail 'transaction lock descriptor rejected'
   flock -n "$ARA_TRANSACTION_LOCK_FD" || fail 'installation transaction is busy'
@@ -164,16 +245,22 @@ if [[ "$MODE" == dry-run ]]; then
   exit 0
 fi
 
-declare -a CREATED_FILES=() CREATED_FILE_DEVS=() CREATED_FILE_INOS=() CREATED_DIRS=() TEMP_FILES=()
+declare -a CREATED_FILES=() ROLLBACK_TOKENS=() CREATED_DIRS=() TEMP_FILES=()
 rollback() {
-  local path index current
+  local path token index current token_identity
   for path in "${TEMP_FILES[@]}"; do rm -f -- "$path"; done
   for ((index=${#CREATED_FILES[@]}-1; index>=0; index--)); do
     path="${CREATED_FILES[$index]}"
-    if [[ -f "$path" && ! -L "$path" ]]; then
+    token="${ROLLBACK_TOKENS[$index]}"
+    if [[ -f "$token" && ! -L "$token" && -f "$path" && ! -L "$path" ]]; then
       current="$(stat -c '%d:%i' -- "$path")"
-      [[ "$current" == "${CREATED_FILE_DEVS[$index]}:${CREATED_FILE_INOS[$index]}" ]] && rm -f -- "$path"
+      token_identity="$(stat -c '%d:%i' -- "$token")"
+      if [[ "$current" == "$token_identity" ]]; then
+        verify_publication_parent "$(dirname -- "$path")"
+        rm -f -- "$path"
+      fi
     fi
+    rm -f -- "$token"
   done
   for ((index=${#CREATED_DIRS[@]}-1; index>=0; index--)); do rmdir -- "${CREATED_DIRS[$index]}" 2>/dev/null || true; done
 }
@@ -191,10 +278,10 @@ ensure_parent() {
     CREATED_DIRS+=("$path")
     install -d -m 0755 -- "$path"
   done
-  [[ -d "$parent" && ! -L "$parent" && -w "$parent" ]] || fail "unsafe final parent: $parent"
+  verify_publication_parent "$parent"
 }
 publish_absent() {
-  local source="$1" target="$2" mode="$3" ordinal="$4" parent temporary identity
+  local source="$1" target="$2" mode="$3" ordinal="$4" parent temporary token identity
   ensure_parent "$target"
   parent="$(dirname -- "$target")"
   temporary="$(mktemp --tmpdir="$parent" .ara-subscription-install.XXXXXX)"
@@ -209,10 +296,10 @@ publish_absent() {
   ln -- "$temporary" "$target"
   identity="$(stat -c '%d:%i' -- "$temporary")"
   [[ "$(stat -c '%d:%i' -- "$target")" == "$identity" ]] || fail "published inode identity rejected: $target"
+  token="$temporary"
   CREATED_FILES+=("$target")
-  CREATED_FILE_DEVS+=("${identity%%:*}")
-  CREATED_FILE_INOS+=("${identity##*:}")
-  rm -f -- "$temporary"
+  ROLLBACK_TOKENS+=("$token")
+  unset "TEMP_FILES[$((${#TEMP_FILES[@]} - 1))]"
   sync -- "$parent"
   if [[ "$FIXTURE_RACE_AT" == "rollback-$ordinal" ]]; then
     rm -f -- "$target"
@@ -242,6 +329,7 @@ else
 fi
 for index in "${!SOURCES[@]}"; do verify_installed "${SOURCES[$index]}" "${TARGETS[$index]}" "${MODES[$index]}"; done
 verify_installed "$STAGE/policy.nft" "$NFT_TARGET" 0444
+for token in "${ROLLBACK_TOKENS[@]}"; do rm -f -- "$token"; done
 [[ "$FIXTURE_MODE" == 1 ]] || systemctl daemon-reload
 for parent in "$(dirname -- "$NFT_TARGET")" "$(dirname -- "${TARGETS[0]}")" "$(dirname -- "${TARGETS[2]}")"; do sync -- "$parent"; done
 trap - EXIT
