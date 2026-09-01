@@ -26,6 +26,94 @@ test('logs in and opens Korean and English AI settings', async ({ page }) => {
   await expect(page).toHaveURL(/\/en\/settings\/ai$/u);
   await expect(page.getByRole('heading', { level: 1, name: 'AI provider settings' })).toBeVisible();
 });
+// Break: a successful OpenAI-compatible connection test is misattributed to every compatible provider card.
+
+test('renders OpenAI-compatible connection test results without secrets', async ({ page }) => {
+  const provider = {
+    id: 'openai-compatible-fixture-a',
+    product: 'openai_compatible_api',
+    productLabel: 'OpenAI-Compatible API',
+    name: 'Fixture Provider A',
+    billingType: 'subscription',
+    enabled: true,
+    priority: 100,
+    secretLast4: null,
+    roles: ['niche_normalization'],
+    baseUrl: 'https://provider.example/v1',
+    networkScope: 'public',
+    modelId: null,
+    modelDiscovery: 'enabled',
+    settingsRevision: 1,
+    models: []
+  };
+  const secondProvider = {
+    ...provider,
+    id: 'openai-compatible-fixture-b',
+    name: 'Fixture Provider B'
+  };
+  const refreshedProvider = { ...provider };
+  const testRequests: Record<string, unknown>[] = [];
+  const providerGets: unknown[] = [];
+
+  await page.route('**/api/ai-providers', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    providerGets.push(providerGets.length === 0 ? [provider, secondProvider] : [refreshedProvider, secondProvider]);
+    const listedProviders = providerGets.at(-1) as readonly typeof provider[];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ providers: listedProviders })
+    });
+  });
+  await page.route('**/api/ai-providers/test', async (route) => {
+    testRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ jobId: 'job-openai-compatible', status: 'queued' })
+    });
+  });
+  await page.route('**/api/ai-provider-tests/job-openai-compatible', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId: 'job-openai-compatible',
+        status: 'completed',
+        result: {
+          providerTest: {
+            available: true,
+            models: ['openai/gpt-5.6-terra', 'openai/gpt-5.6-mini']
+          }
+        },
+        errorCategory: null
+      })
+    });
+  });
+
+  await loginAsAdmin(page, 'ko');
+  const testedCard = page.locator('section.provider-result').filter({ hasText: provider.name });
+  const otherCard = page.locator('section.provider-result').filter({ hasText: secondProvider.name });
+  await testedCard.getByRole('button', { name: '연결 테스트' }).click();
+
+  await expect.poll(() => testRequests).toEqual([{ providerId: provider.id }]);
+  const status = testedCard.getByRole('status');
+  await expect(status).toBeVisible();
+  await expect(status).toContainText('openai/gpt-5.6-terra');
+  await expect(status).toContainText('openai/gpt-5.6-mini');
+  await expect(otherCard.getByRole('status')).toHaveCount(0);
+  await expect(otherCard).not.toContainText('openai/gpt-5.6-terra');
+  await expect(otherCard).not.toContainText('openai/gpt-5.6-mini');
+  await expect(page.getByLabel('API Key')).toHaveValue('');
+  expect(JSON.stringify(provider)).not.toContain('plaintext-secret-fixture');
+  expect(provider).not.toHaveProperty('apiKey');
+  expect(JSON.stringify(secondProvider)).not.toContain('plaintext-secret-fixture');
+  expect(secondProvider).not.toHaveProperty('apiKey');
+});
+
 
 // Break: browser edits hydrate plaintext, overwrite a secret with blank input, or retain an old key.
 

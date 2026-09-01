@@ -108,7 +108,12 @@ type FormStatus =
   | { readonly kind: 'saved' }
   | { readonly kind: 'error'; readonly message: string }
   | { readonly kind: 'testing' }
-  | { readonly kind: 'tested'; readonly available: boolean; readonly models: readonly string[] };
+  | {
+      readonly kind: 'tested';
+      readonly providerId: string;
+      readonly available: boolean;
+      readonly models: readonly string[];
+    };
 
 function delay(milliseconds: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -278,7 +283,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
       const listed = await loadProviders();
       const refreshed = listed.find((item) => item.id === provider.id);
       if (refreshed) selectProvider(refreshed);
-      setStatus({ kind: 'tested', available: result.available, models: result.models });
+      setStatus({ kind: 'tested', providerId: provider.id, available: result.available, models: result.models });
     } catch (error) {
       if (error instanceof Error) {
         setStatus({ kind: 'error', message: copy.connectionUnavailable });
@@ -450,6 +455,14 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
           <button className="button button--secondary" type="button" onClick={() => void testConnection(provider)} disabled={status.kind === 'testing'}>
             {status.kind === 'testing' ? copy.uploadingFiles : copy.testConnection}
           </button>
+          {status.kind === 'tested' && status.providerId === provider.id ? (
+            <p className={status.available ? 'notice notice--success' : 'notice notice--error'} role="status">
+              {status.available ? copy.connectionReady : copy.connectionUnavailable}
+              {status.available && status.models.length > 0 ? (
+                <>{' '}<span>{status.models.join(', ')}</span></>
+              ) : null}
+            </p>
+          ) : null}
         </section>
       ) : (
         <section className="provider-result" aria-labelledby={`provider-${provider.id}`} key={provider.id}>
