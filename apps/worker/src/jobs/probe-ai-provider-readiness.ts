@@ -14,6 +14,13 @@ import {
   type ContainmentProbeRunner
 } from '../providers/containment-probe';
 
+export interface ApprovedProviderTermsEvidence {
+  readonly adapter: SubscriptionAdapter;
+  readonly digest: string;
+  readonly version: string;
+  readonly reference: string;
+}
+
 export interface ProviderProbeTarget {
   readonly providerId: string;
   readonly adapter: SubscriptionAdapter;
@@ -23,6 +30,7 @@ export interface ProviderProbeTarget {
   readonly expectedSettingsRevision: number;
   readonly expectedAuthGeneration: number;
   readonly expectedExecutionFingerprint: string;
+  readonly approvedTermsEvidence?: ApprovedProviderTermsEvidence | undefined;
 }
 
 export interface ProviderInspectionEvidence {
@@ -54,13 +62,33 @@ interface ProbeDependencies {
 
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
+function approvedTermsEvidence(
+  target: ProviderProbeTarget
+): ApprovedProviderTermsEvidence {
+  const evidence = target.approvedTermsEvidence;
+  if (
+    evidence === undefined ||
+    evidence.adapter !== target.adapter ||
+    !DIGEST_PATTERN.test(evidence.digest) ||
+    evidence.version.trim() === '' ||
+    evidence.reference.trim() === ''
+  ) {
+    throw new ProviderTermsEvidenceRequiredError();
+  }
+  return Object.freeze({ ...evidence });
+}
+
 function validateInspectionEvidence(
-  evidence: ProviderInspectionEvidence
+  evidence: ProviderInspectionEvidence,
+  approvedTerms: ApprovedProviderTermsEvidence
 ): ProviderInspectionEvidence {
   for (const digest of Object.values(evidence)) {
     if (!DIGEST_PATTERN.test(digest)) {
       throw new TypeError('Provider inspection evidence must contain SHA-256 digests.');
     }
+  }
+  if (evidence.termsDigest !== approvedTerms.digest) {
+    throw new ProviderTermsEvidenceRequiredError();
   }
   return evidence;
 }
@@ -81,6 +109,15 @@ export class ProviderSetupRequiredError extends Error {
   }
 }
 
+export class ProviderTermsEvidenceRequiredError extends Error {
+  readonly state = 'setup_required' as const;
+
+  constructor() {
+    super('Approved provider terms evidence is required.');
+    this.name = 'ProviderTermsEvidenceRequiredError';
+  }
+}
+
 function resultObject(value: Json): Record<string, Json | undefined> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Provider runtime result must be a JSON object.');
@@ -95,13 +132,15 @@ async function collectEvidence(
   readonly containmentDigest: string;
   readonly evidence: Json;
 }> {
+  const approvedTerms = approvedTermsEvidence(dependencies.target);
   return dependencies.semaphores.withPermit(
     dependencies.target.adapter,
     dependencies.signal,
     async () => {
       dependencies.signal.throwIfAborted();
       const inspection = validateInspectionEvidence(
-        await dependencies.inspector.inspect(dependencies.signal)
+        await dependencies.inspector.inspect(dependencies.signal),
+        approvedTerms
       );
       dependencies.signal.throwIfAborted();
       const containment = await runContainmentProbe(

@@ -103,6 +103,12 @@ describe('Codex subscription execution profile', () => {
     expect(Object.isFrozen(CODEX_SUBSCRIPTION_MANIFEST)).toBe(true);
   });
 
+  // Break: failed Gate 1 evidence is represented as a production terms attestation.
+  it('keeps Codex disabled without approved terms evidence', () => {
+    expect(CODEX_SUBSCRIPTION_MANIFEST).not.toHaveProperty('approvedTermsEvidence');
+    expect(CODEX_SUBSCRIPTION_MANIFEST.activation).toBe('disabled');
+  });
+
   // Break: profile digest no longer identifies the committed Task-5 artifacts.
   it('pins the current Codex sandbox artifact digest', async () => {
     const policy = await loadSubscriptionSandboxArtifacts(repositoryRoot, 'codex');

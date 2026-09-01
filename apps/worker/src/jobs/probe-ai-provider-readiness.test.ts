@@ -4,6 +4,7 @@ import {
   ProbeBindingMismatchError,
   runProviderAcceptanceProbe,
   runProviderReadinessProbe,
+  type ApprovedProviderTermsEvidence,
   type ProviderProbeInspector,
   type ProviderProbeTarget
 } from './probe-ai-provider-readiness';
@@ -14,6 +15,13 @@ const bindings = {
   expectedAuthGeneration: 2,
   expectedExecutionFingerprint: 'fingerprint-a'
 };
+
+const approvedCodexTermsEvidence: ApprovedProviderTermsEvidence = Object.freeze({
+  adapter: 'codex',
+  digest: '1'.repeat(64),
+  version: 'task-15-gate-1',
+  reference: 'docs/verification/subscription-provider-terms.md'
+});
 
 function target(overrides: Partial<ProviderProbeTarget> = {}): ProviderProbeTarget {
   return {
@@ -68,7 +76,7 @@ describe('subscription readiness orchestration', () => {
   it('persists disabled acceptance evidence without committing Ready', async () => {
     const runtime = repository();
     const result = await runProviderAcceptanceProbe({
-      target: target({ enabled: false }),
+      target: target({ enabled: false, approvedTermsEvidence: approvedCodexTermsEvidence }),
       inspector: inspector(),
       runtime,
       semaphores: new AdapterSemaphoreRegistry(),
@@ -84,6 +92,50 @@ describe('subscription readiness orchestration', () => {
       securityProfileDigest: '0'.repeat(64),
       containmentDigest: expect.stringMatching(/^[0-9a-f]{64}$/u)
     }));
+  });
+
+  // Break: a disabled acceptance probe accepts a profile without Gate 1 terms evidence.
+  it('rejects profiles without approved terms evidence', async () => {
+    const runtime = repository();
+    const inspect = vi.fn(inspector().inspect);
+    await expect(runProviderAcceptanceProbe({
+      target: target({ enabled: false }),
+      inspector: { ...inspector(), inspect },
+      runtime,
+      semaphores: new AdapterSemaphoreRegistry(),
+      signal: new AbortController().signal
+    })).rejects.toThrow('Approved provider terms evidence');
+    expect(inspect).not.toHaveBeenCalled();
+    expect(runtime.commitAcceptanceProbe).not.toHaveBeenCalled();
+  });
+
+  // Break: a probe accepts a stale, cross-adapter, or mismatched terms digest.
+  it('accepts only the matching adapter terms digest', async () => {
+    const runtime = repository();
+    await expect(runProviderAcceptanceProbe({
+      target: target({ enabled: false, approvedTermsEvidence: approvedCodexTermsEvidence }),
+      inspector: inspector(),
+      runtime,
+      semaphores: new AdapterSemaphoreRegistry(),
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({ mode: 'acceptance', accepted: true });
+    expect(runtime.commitAcceptanceProbe).toHaveBeenCalledWith(expect.objectContaining({
+      termsDigest: approvedCodexTermsEvidence.digest
+    }));
+
+    const mismatches: readonly ApprovedProviderTermsEvidence[] = [
+      { ...approvedCodexTermsEvidence, adapter: 'grok' },
+      { ...approvedCodexTermsEvidence, digest: '7'.repeat(64) }
+    ];
+    for (const approvedTermsEvidence of mismatches) {
+      await expect(runProviderAcceptanceProbe({
+        target: target({ enabled: false, approvedTermsEvidence }),
+        inspector: inspector(),
+        runtime: repository(),
+        semaphores: new AdapterSemaphoreRegistry(),
+        signal: new AbortController().signal
+      })).rejects.toThrow('Approved provider terms evidence');
+    }
   });
 
   // Break: a full probe can Ready a disabled or unaccepted provider.
@@ -130,7 +182,7 @@ describe('subscription readiness orchestration', () => {
     const runtime = repository();
     const result = await runProviderReadinessProbe({
       payload,
-      target: target(),
+      target: target({ approvedTermsEvidence: approvedCodexTermsEvidence }),
       currentProbeGeneration: 9,
       inspector: inspector(),
       runtime,
@@ -158,7 +210,7 @@ describe('subscription readiness orchestration', () => {
     const onReady = vi.fn(async () => undefined);
     await runProviderReadinessProbe({
       payload,
-      target: target(),
+      target: target({ approvedTermsEvidence: approvedCodexTermsEvidence }),
       currentProbeGeneration: 9,
       inspector: inspector(),
       runtime: repository(),
@@ -192,7 +244,7 @@ describe('subscription readiness orchestration', () => {
       }
       await expect(runProviderReadinessProbe({
         payload,
-        target: target(),
+        target: target({ approvedTermsEvidence: approvedCodexTermsEvidence }),
         currentProbeGeneration: 9,
         inspector: item.probeInspector,
         runtime,
@@ -208,7 +260,7 @@ describe('subscription readiness orchestration', () => {
     const runtime = repository();
     const attempt = vi.fn(async () => true);
     await expect(runProviderAcceptanceProbe({
-      target: target({ enabled: false }),
+      target: target({ enabled: false, approvedTermsEvidence: approvedCodexTermsEvidence }),
       inspector: inspector({
         async inspect() {
           return {
