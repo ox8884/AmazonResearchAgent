@@ -98,7 +98,7 @@ verify_publication_parent() {
   if [[ "$FIXTURE_MODE" == 1 ]]; then
     (( ( 8#$mode & 022 ) == 0 )) || fail "unsafe final parent: $parent"
   else
-    [[ "$owner_mode" == 0:0:* ]] || fail "unsafe final parent: $parent"
+    [[ "$owner_mode" == 0:0:* ]] && (( ( 8#$mode & 022 ) == 0 )) || fail "unsafe final parent: $parent"
   fi
 }
 
@@ -138,6 +138,7 @@ if [[ "$MODE" == install ]]; then
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import { join } from "node:path";
 
 const [helper, expectedDigest, expectedModeText, stage, expectedStageUidText, ...command] = process.argv.slice(1);

@@ -550,7 +550,8 @@ describe('installer full preflight', () => {
     assert.equal(await readFile(join(installRoot, 'usr/local/libexec/amazon-research/subscription-supervisor.mjs'), 'utf8'), 'replacement\n');
   });
 
-  it('verifies installed fixture bytes and rejects installed unit or nft drift', async () => {
+  // Break: first fixture installation fails before lock-helper bootstrap, descriptor verification, staging, and publication.
+  it('completes first fixture installation through the lock-helper bootstrap and rejects installed unit or nft drift', async () => {
     const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
     const root = await mkdtemp(join(sourceRoot, '.task14-installed-'));
     roots.push(root);
@@ -568,6 +569,7 @@ describe('installer full preflight', () => {
     ];
     const installed = spawnSync('bash', [installer, 'install', ...fixtureArguments], { cwd: sourceRoot, encoding: 'utf8' });
     assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    assert.match(installed.stdout, /^PASS mode=install artifacts=11 /u);
     const runFixtureVerify = () => spawnSync('bash', [
       verifier, 'verify', 'codex',
       '--fixture-root', `./${basename(root)}/target`,
@@ -590,6 +592,40 @@ describe('installer full preflight', () => {
     await writeFile(policy, 'table inet drift {}\n');
     const policyDrift = runFixtureVerify();
     assert.notEqual(policyDrift.status, 0);
+  });
+
+  // Break: a group/other-writable fixture final parent permits untrusted publication-path substitution.
+  it('rejects a group/other-writable fixture final publication parent', { skip: process.platform === 'win32' }, async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-final-parent-'));
+    roots.push(root);
+    const installRoot = join(root, 'target');
+    const finalParent = join(installRoot, 'usr/local/libexec/amazon-research');
+    await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+    await mkdir(finalParent, { recursive: true, mode: 0o777 });
+    await chmod(finalParent, 0o777);
+    await writeFile(
+      join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'),
+      await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json'))
+    );
+
+    const child = spawnSync('bash', [
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'install',
+      '--fixture-root', `./${basename(root)}/target`, '--repository-root', '.'
+    ], { cwd: sourceRoot, encoding: 'utf8' });
+
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /unsafe final parent/u);
+    await assert.rejects(stat(join(finalParent, 'subscription-supervisor.mjs')), { code: 'ENOENT' });
+  });
+
+  // Break: production final publication accepts root-owned group/other-writable parents.
+  it('requires root ownership and no group/other write bits for production final publication parents', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const installer = await readFile(join(sourceRoot, 'ops/subscription-providers/install-systemd-sandbox.sh'), 'utf8');
+    const predicate = installer.match(/verify_publication_parent\(\) \{[\s\S]*?\n\}/u)?.[0] ?? '';
+
+    assert.match(predicate, /\[\[ "\$owner_mode" == 0:0:\* \]\] && \(\( \( 8#\$mode & 022 \) == 0 \)\) \|\| fail/u);
   });
   // Break: opening the fixed lock follows a symlink and truncates its referent before validation.
   it('rejects a symlink lock without changing its referent', async () => {
