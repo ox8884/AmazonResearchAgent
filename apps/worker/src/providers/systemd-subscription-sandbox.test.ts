@@ -389,6 +389,17 @@ describe('Task-14 local evidence executes Task-5 owners', () => {
     expect(report.oracleHostVerified).toBe(false);
     expect(report.liveProviderVerified).toBe(false);
   });
+  it.skipIf(process.platform === 'win32')('establishes exact 02770 under a restrictive umask', async () => {
+    const previous = process.umask(0o027);
+    try {
+      const report = await runLocalSubscriptionEvidence('codex');
+      expect(report.ok).toBe(true);
+      expect(report.events.find((event) => event.kind === 'directory-created')?.observed.mode).toBe(0o2770);
+    } finally {
+      process.umask(previous);
+    }
+  });
+
 
   it.each([
     'missing-ready', 'status-before-ready', 'result-before-ready', 'start-failure',

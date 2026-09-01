@@ -20,6 +20,19 @@ import {
 import { verifyInstalledAuthority, openNoFollow } from './probe-subscription-provider.mjs';
 import { assertActiveNftMatches, assertAuthorityActiveNftMatches, expectedNftRuleset } from './subscription-nft-semantics.mjs';
 import { verifyInstalledArtifactsCore } from './installed-artifact-verifier.mjs';
+const gcDecisionPath = fileURLToPath(new URL('../ops/subscription-providers/subscription-gc-decision.mjs', import.meta.url));
+
+describe('subscription GC module entrypoint', () => {
+  // Break: the POSIX absolute argv path is converted to a four-slash file URL and skips the CLI body.
+  it('executes as a CLI and remains inert when imported', () => {
+    const cli = spawnSync(process.execPath, [gcDecisionPath, 'inactive', '11'], { encoding: 'utf8' });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(cli.stdout, 'remove\n');
+    const imported = spawnSync(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(new URL('../ops/subscription-providers/subscription-gc-decision.mjs', import.meta.url).href)})`], { encoding: 'utf8' });
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.equal(imported.stdout, '');
+  });
+});
 const nobleFixturePath = fileURLToPath(new URL('../tests/fixtures/nftables-noble-1.0.9-parser.json', import.meta.url));
 
 const fixtureAuthority = () => ({
@@ -618,7 +631,68 @@ describe('installer full preflight', () => {
   });
 
 });
+async function lockAuthorityFixture(kind) {
+  const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+  const root = await mkdtemp(join(sourceRoot, '.task14-lock-authority-'));
+  roots.push(root);
+  const repository = join(root, 'repo');
+  const installRoot = join(root, 'target');
+  const marker = join(root, 'executed');
+  await mkdir(join(repository, 'scripts'), { recursive: true });
+  await writeFile(join(repository, 'scripts/probe-subscription-provider.mjs'), await readFile(join(sourceRoot, 'scripts/probe-subscription-provider.mjs')));
+  const installerSource = 'ops/subscription-providers/install-systemd-sandbox.sh';
+  const helperSource = join(sourceRoot, 'scripts/subscription-install-lock.mjs');
+  await mkdir(join(repository, 'ops/subscription-providers'), { recursive: true });
+  await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
+  await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
+  await writeFile(join(repository, 'ops/subscription-providers/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
+  const helper = join(repository, 'scripts/subscription-install-lock.mjs');
+  const malicious = `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'executed');\nprocess.exit(91);\n`;
+  if (kind === 'missing') {
+    // leave absent
+  } else if (kind === 'symlink') {
+    await symlink(helperSource, helper);
+  } else if (kind === 'wrong-mode') {
+    await writeFile(helper, await readFile(helperSource), { mode: 0o600 });
+  } else if (kind === 'wrong-digest') {
+    await writeFile(helper, malicious, { mode: 0o500 });
+  } else {
+    await writeFile(helper, malicious, { mode: 0o500 });
+  }
+  const fixtureRoot = `./${basename(root)}`;
+  const child = spawnSync('bash', [installerSource, 'install', '--fixture-root', `${fixtureRoot}/target`, '--repository-root', `${fixtureRoot}/repo`], {
+    cwd: sourceRoot,
+    encoding: 'utf8',
+    env: { ...process.env, ARA_REPOSITORY_ROOT: repository, ARA_INSTALL_ROOT: installRoot, ARA_FIXTURE_MODE: '1' }
+  });
+  return { child, marker };
+}
+
 describe('subscription lock helper install authority', () => {
+  const helperAttacks = [
+    ['missing', /invalid regular file/u],
+    ['substituted', /lock helper digest rejected/u],
+    ['symlink', /invalid regular file/u],
+    ...(process.platform === 'win32' ? [] : [['wrong-mode', /lock helper mode rejected/u]]),
+    ['wrong-digest', /lock helper digest rejected/u]
+  ];
+  for (const [kind, rejection] of helperAttacks) {
+    // Break: an unverified repository helper executes before release authority validation.
+    it(`rejects ${kind} helper before execution`, async () => {
+      const { child, marker } = await lockAuthorityFixture(kind);
+      assert.notEqual(child.status, 0, child.stdout + child.stderr);
+      assert.match(child.stderr, rejection);
+      await assert.rejects(stat(marker), { code: 'ENOENT' });
+    });
+  }
+
+  // Break: helper-controlled code runs before any authoritative byte check.
+  it('never permits a pre-verification helper marker', async () => {
+    const { child, marker } = await lockAuthorityFixture('pre-verification');
+    assert.notEqual(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stderr, /lock helper digest rejected/u);
+    await assert.rejects(stat(marker), { code: 'ENOENT' });
+  });
   const lockPath = '/usr/local/libexec/amazon-research/subscription-install-lock.mjs';
 
   it('proves the installer dry-run artifact count includes the lock helper', async () => {

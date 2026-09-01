@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from 'node:url';
+
 export function subscriptionGcDecision(activeState, ageMinutes) {
   if (!Number.isFinite(ageMinutes) || ageMinutes < 0) throw new TypeError('Invalid invocation age.');
   if (!['active', 'activating', 'deactivating', 'inactive', 'failed', 'unknown'].includes(activeState)) {
@@ -10,7 +12,7 @@ export function subscriptionGcDecision(activeState, ageMinutes) {
     : 'retain';
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file:///${process.argv[1].replaceAll('\\', '/')}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const age = Number(process.argv[3]);
   process.stdout.write(`${subscriptionGcDecision(process.argv[2] ?? '', age)}\n`);
 }

@@ -46,7 +46,10 @@ class LocalEvidenceController implements SubscriptionSandboxController {
     this.event('start-no-block', { unitName });
     if (this.scenario === 'start-failure') throw new Error('injected start failure');
     await mkdir(this.invocationPath, { mode: 0o2770 });
-    this.event('directory-created', { relativePath: this.attemptId, mode: 0o2770 });
+    await chmod(this.invocationPath, 0o2770);
+    const observedMode = (await lstat(this.invocationPath)).mode & 0o7777;
+    if (process.platform !== 'win32' && observedMode !== 0o2770) throw new TypeError('Invocation directory exact mode rejected.');
+    this.event('directory-created', { relativePath: this.attemptId, mode: observedMode });
   }
 
   async show(): Promise<SubscriptionUnitState> {
@@ -98,10 +101,10 @@ const GC_MATRIX = [
   { activeState: 'inactive', ageMinutes: 11, decision: 'remove' }
 ] as const;
 const keysEqual = (value: object, keys: readonly string[]): boolean => JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
-function expectedEvents(adapter: SubscriptionAdapter, attemptId: string): readonly EvidenceEvent[] {
+function expectedEvents(adapter: SubscriptionAdapter, attemptId: string, directoryMode: number): readonly EvidenceEvent[] {
   return [
     { kind: 'start-no-block', observed: { unitName: `amazon-research-${adapter}@${attemptId}.service` } },
-    { kind: 'directory-created', observed: { relativePath: attemptId, mode: 0o2770 } },
+    { kind: 'directory-created', observed: { relativePath: attemptId, mode: directoryMode } },
     { kind: 'unit-state', observed: { sequence: 1 } }, { kind: 'unit-state', observed: { sequence: 2 } },
     { kind: 'request-observed', observed: { adapter, attemptId } },
     { kind: 'ready-observed', observed: { activeState: 'active', subState: 'running', statusText: '' } },
@@ -118,7 +121,9 @@ function expectedEvents(adapter: SubscriptionAdapter, attemptId: string): readon
 function exactLocalEvidence(report: Readonly<Record<string, unknown>>): boolean {
   const events = report['events']; const gc = report['gc']; const request = report['request']; const result = report['result']; const cleanup = report['cleanup'];
   const adapter = report['adapter']; const attemptId = report['attemptId'];
-  if ((adapter !== 'codex' && adapter !== 'grok') || typeof attemptId !== 'string' || JSON.stringify(events) !== JSON.stringify(expectedEvents(adapter, attemptId)) || JSON.stringify(gc) !== JSON.stringify(GC_MATRIX)) return false;
+  const directoryMode = Array.isArray(events) && events[1]?.kind === 'directory-created' && typeof events[1].observed?.mode === 'number' ? events[1].observed.mode : -1;
+  if ((adapter !== 'codex' && adapter !== 'grok') || typeof attemptId !== 'string' || JSON.stringify(events) !== JSON.stringify(expectedEvents(adapter, attemptId, directoryMode)) || JSON.stringify(gc) !== JSON.stringify(GC_MATRIX)) return false;
+  if (process.platform !== 'win32' && directoryMode !== 0o2770) return false;
   if (!request || typeof request !== 'object' || !result || typeof result !== 'object' || !cleanup || typeof cleanup !== 'object') return false;
   if (!keysEqual(request, ['relativePath', 'adapter', 'attemptId', 'size', 'sha256', 'expectedMode', 'observedMode', 'atomic']) ||
       !keysEqual(result, ['relativePath', 'adapter', 'attemptId', 'size', 'sha256', 'expectedMode', 'observedMode', 'atomic', 'rawOutputSha256']) ||

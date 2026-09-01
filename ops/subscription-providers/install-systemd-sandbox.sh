@@ -9,6 +9,8 @@ readonly REPOSITORY_ROOT="${FIXTURE_REPOSITORY_ARG:-${ARA_REPOSITORY_ROOT:-$(cd 
 readonly PREFIX="${FIXTURE_ROOT_ARG:-${ARA_INSTALL_ROOT:-}}"
 readonly PROBE="$REPOSITORY_ROOT/scripts/probe-subscription-provider.mjs"
 readonly LOCK_HELPER="$REPOSITORY_ROOT/scripts/subscription-install-lock.mjs"
+readonly LOCK_HELPER_SHA256='e1ec5095b4135c09f08a1e99b0601ce0a974488d52dd1d0df12f62bbf0d9a946'
+readonly LOCK_HELPER_MODE='644'
 readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint-bindings.json"
 readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
 readonly FIXTURE_FAIL_AT="$([[ "${6:-}" == --fail-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_FAIL_AT:-}")"
@@ -84,6 +86,11 @@ readonly AUTHORITY="$([[ "$MODE" == dry-run ]] && printf '%s' "$FIXTURE_AUTHORIT
 readonly ENVIRONMENT="$([[ "$MODE" == dry-run || "$FIXTURE_MODE" == 1 ]] && printf local-fixture || printf oracle)"
 verify_regular "$PROBE"
 verify_regular "$LOCK_HELPER"
+[[ "$(sha "$LOCK_HELPER")" == "$LOCK_HELPER_SHA256" ]] || fail 'lock helper digest rejected'
+case "$(stat -fc %T -- "$LOCK_HELPER")" in
+  v9fs|drvfs) ;;
+  *) [[ "$(stat -c '%a' -- "$LOCK_HELPER")" == "$LOCK_HELPER_MODE" ]] || fail 'lock helper mode rejected' ;;
+esac
 verify_regular "$AUTHORITY"
 if [[ "$ENVIRONMENT" == oracle ]]; then
   [[ "$(stat -c '%u:%g:%a' -- "$AUTHORITY")" == '0:0:444' ]] || fail 'endpoint authority must be root:root 0444'
