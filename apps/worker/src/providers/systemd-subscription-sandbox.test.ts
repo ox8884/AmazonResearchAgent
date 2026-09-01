@@ -16,6 +16,7 @@ import { loadSubscriptionSandboxArtifacts } from './subscription-sandbox-policy'
 import { runLocalSubscriptionEvidence, type LocalEvidenceScenario } from '../commands/subscription-local-evidence';
 
 const roots: string[] = [];
+const sealedDirectories: string[] = [];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const execFileAsync = promisify(execFile);
 const supervisorPath = join(
@@ -139,6 +140,7 @@ async function publishResult(path: string, attemptId: string): Promise<void> {
 }
 
 afterEach(async () => {
+  await Promise.allSettled(sealedDirectories.splice(0).map((directory) => chmod(directory, 0o750)));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -440,14 +442,6 @@ describe('subscription supervisor request boundary', () => {
     const invocation = join(adapterRoot, attemptId);
     const approvedRoot = join(adapterRoot, '.approved');
     const approved = join(approvedRoot, attemptId);
-    await mkdir(adapterRoot, { recursive: true, mode: 0o750 });
-    await chmod(adapterRoot, 0o750);
-    await mkdir(invocation, { mode: 0o2770 });
-    await chmod(invocation, 0o2770);
-    await mkdir(approvedRoot, { mode: 0o750 });
-    await chmod(approvedRoot, 0o750);
-    await mkdir(approved, { mode: 0o2550 });
-    await chmod(approved, 0o2550);
     const request = {
       version: 1,
       adapter: 'codex',
@@ -460,8 +454,20 @@ describe('subscription supervisor request boundary', () => {
       inputHash: 'a'.repeat(64),
       ...overrides
     };
+    await mkdir(adapterRoot, { recursive: true, mode: 0o750 });
+    await chmod(adapterRoot, 0o750);
+    await mkdir(invocation, { mode: 0o2770 });
+    await chmod(invocation, 0o2770);
+    await mkdir(approvedRoot, { mode: 0o750 });
+    await chmod(approvedRoot, 0o750);
+    await mkdir(approved, { mode: 0o750 });
+    await chmod(approved, 0o750);
     await writeFile(join(invocation, 'request.json'), JSON.stringify(request), { mode: 0o640 });
     await chmod(join(invocation, 'request.json'), 0o640);
+    await writeFile(join(approved, 'request.json'), JSON.stringify(request), { mode: 0o440 });
+    await chmod(join(approved, 'request.json'), 0o440);
+    await chmod(approved, 0o2550);
+    sealedDirectories.push(approved);
     const uid = String(process.getuid?.() ?? 0);
     const gid = String(process.getgid?.() ?? 0);
     return {
@@ -513,12 +519,43 @@ describe('subscription supervisor request boundary', () => {
     }
   });
 
-  it('seals and independently validates only the exact Codex request identity', async () => {
+  it('binds root pre-start approval to the unprivileged read-only service handoff', async () => {
+    const [manager, codexUnit, grokUnit] = await Promise.all([
+      readFile(join(repositoryRoot, 'ops/subscription-providers/manage-invocation.sh'), 'utf8'),
+      readFile(join(repositoryRoot, 'ops/systemd/amazon-research-codex@.service'), 'utf8'),
+      readFile(join(repositoryRoot, 'ops/systemd/amazon-research-grok@.service'), 'utf8')
+    ]);
+    expect(manager).toContain('install -d -o root -g "$SERVICE_GROUP" -m 2550 -- "$APPROVED"');
+    expect(manager).toContain('root:$SERVICE_GROUP:2550');
+    expect(manager).toContain('--approve-request "$ADAPTER" "$INSTANCE" "$SERVICE_GID"');
+    expect(manager).toContain('root:$SERVICE_GROUP:440');
+    for (const [adapter, serviceUser, unit] of [
+      ['codex', 'ara-codex', codexUnit],
+      ['grok', 'ara-grok', grokUnit]
+    ] as const) {
+      expect(unit).toContain(
+        `ExecStartPre=+/usr/local/libexec/amazon-research/manage-invocation.sh prepare-and-wait ${adapter} %i`
+      );
+      expect(unit).toContain(`User=${serviceUser}`);
+      expect(unit).toContain(
+        `ExecStart=/usr/bin/node /usr/local/libexec/amazon-research/subscription-supervisor.mjs ${adapter} %i`
+      );
+      expect(unit).toContain(`ReadOnlyPaths=/run/amazon-research/subscription/${adapter}/.approved/%i`);
+    }
+  });
+
+  it('validates the fixture-owner sealed request with the exact Codex identity', async () => {
     const fixture = await supervisorFixture();
-    await expect(approve(fixture)).resolves.toBeUndefined();
-    await expect(lstat(join(fixture.invocation, 'request.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(JSON.parse(await readFile(join(fixture.approved, 'request.json'), 'utf8'))).toEqual(fixture.request);
     await expect(validateApproved(fixture)).resolves.toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects non-root approval without publishing or deleting', async () => {
+    const fixture = await supervisorFixture();
+    await expect(approve(fixture)).rejects.toMatchObject({ stderr: expect.stringContaining('EACCES') });
+    expect(JSON.parse(await readFile(join(fixture.invocation, 'request.json'), 'utf8'))).toEqual(fixture.request);
+    expect(JSON.parse(await readFile(join(fixture.approved, 'request.json'), 'utf8'))).toEqual(fixture.request);
+    await expect(lstat(join(fixture.approved, 'request.tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([
@@ -535,41 +572,43 @@ describe('subscription supervisor request boundary', () => {
     await expect(approve(fixture)).rejects.toBeDefined();
   });
 
-  it('ignores source replacement between root approval and MAIN validation', async () => {
+  it('ignores source replacement after the sealed artifact is constructed', async () => {
     const fixture = await supervisorFixture();
-    await approve(fixture);
     await writeFile(join(fixture.invocation, 'request.json'), JSON.stringify({ command: '/bin/sh' }));
     await expect(validateApproved(fixture)).resolves.toBeUndefined();
     expect(JSON.parse(await readFile(join(fixture.approved, 'request.json'), 'utf8'))).toEqual(fixture.request);
   });
 
-  it('rejects a changed sealed request inode', async () => {
+  it.skipIf(process.platform === 'win32')('rejects a changed sealed request inode', async () => {
     const fixture = await supervisorFixture();
-    await approve(fixture);
     const path = join(fixture.approved, 'request.json');
-    await chmod(path, 0o640);
-    await writeFile(path, JSON.stringify({ ...fixture.request, profileId: 'alternate-profile' }));
-    await chmod(path, 0o440);
+    const temporary = join(fixture.approved, 'request.replacement');
+    await chmod(fixture.approved, 0o750);
+    await writeFile(temporary, JSON.stringify({ ...fixture.request, profileId: 'alternate-profile' }), { mode: 0o440 });
+    await chmod(temporary, 0o440);
+    await rename(temporary, path);
+    await chmod(fixture.approved, 0o2550);
     await expect(validateApproved(fixture)).rejects.toBeDefined();
   });
 
   it('rejects approved directory substitution', async () => {
     const fixture = await supervisorFixture();
-    await approve(fixture);
     const displaced = `${fixture.approved}-displaced`;
+    sealedDirectories.push(displaced);
     await rename(fixture.approved, displaced);
-    await mkdir(fixture.approved, { mode: 0o2550 });
-    await chmod(fixture.approved, 0o2550);
+    await mkdir(fixture.approved, { mode: 0o750 });
+    await chmod(fixture.approved, 0o750);
     const path = join(fixture.approved, 'request.json');
     await writeFile(path, JSON.stringify({ ...fixture.request, modelId: 'alternate-model' }), { mode: 0o440 });
     await chmod(path, 0o440);
+    await chmod(fixture.approved, 0o2550);
     await expect(validateApproved(fixture)).rejects.toBeDefined();
   });
 
   it.skipIf(process.platform === 'win32')('rejects approved directory symlink substitution', async () => {
     const fixture = await supervisorFixture();
-    await approve(fixture);
     const displaced = `${fixture.approved}-displaced`;
+    sealedDirectories.push(displaced);
     await rename(fixture.approved, displaced);
     await symlink(displaced, fixture.approved, 'dir');
     await expect(validateApproved(fixture)).rejects.toBeDefined();
