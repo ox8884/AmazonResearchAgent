@@ -15,6 +15,7 @@ readonly FIXTURE_AUTHORITY="$REPOSITORY_ROOT/ops/subscription-providers/endpoint
 readonly HOST_AUTHORITY="${PREFIX}/etc/amazon-research/subscription/endpoint-bindings.json"
 readonly FIXTURE_FAIL_AT="$([[ "${6:-}" == --fail-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_FAIL_AT:-}")"
 readonly FIXTURE_RACE_AT="$([[ "${6:-}" == --race-at ]] && printf '%s' "${7:-}" || printf '%s' "${ARA_FIXTURE_RACE_AT:-}")"
+readonly FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT="${ARA_FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT:-}"
 
 fail() { printf 'install-systemd-sandbox: %s\n' "$1" >&2; exit 1; }
 root_path() { printf '%s%s' "$PREFIX" "$1"; }
@@ -46,6 +47,8 @@ command -v ln >/dev/null || fail 'ln required'
 command -v sync >/dev/null || fail 'sync required'
 command -v flock >/dev/null || fail 'flock required'
 [[ ( -z "$FIXTURE_FAIL_AT" && -z "$FIXTURE_RACE_AT" ) || "$FIXTURE_MODE" == 1 ]] || fail 'fixture injection requires fixture mode'
+[[ -z "$FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT" || "$FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT" == 1 ]] || fail 'closed fixture replacement rejected'
+[[ -z "$FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT" || "$FIXTURE_MODE" == 1 ]] || fail 'fixture post-stage lock helper replacement rejected'
 
 readonly ARTIFACTS=(
   'ops/subscription-providers/subscription-supervisor.mjs|/usr/local/libexec/amazon-research/subscription-supervisor.mjs|0500'
@@ -141,7 +144,7 @@ import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 
-const [helper, expectedDigest, expectedModeText, stage, expectedStageUidText, ...command] = process.argv.slice(1);
+const [helper, expectedDigest, expectedModeText, stage, expectedStageUidText, fixturePostStageReplacement, ...command] = process.argv.slice(1);
 let handle;
 try {
   if (!Number.isInteger(constants.O_NOFOLLOW)) throw new TypeError("lock helper descriptor rejected");
@@ -173,6 +176,18 @@ try {
       createHash("sha256").update(await readFile(stagedHelper)).digest("hex") !== expectedDigest) {
     throw new TypeError("transaction staging boundary rejected");
   }
+  if (fixturePostStageReplacement === "1") {
+    if (expectedStageUidText !== "fixture") throw new TypeError("fixture post-stage lock helper replacement rejected");
+    const hostileMarker = `${helper}.post-validation-hostile-executed`;
+    await writeFile(helper, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(hostileMarker)}, "executed");
+process.exit(91);
+`);
+    const replacementInfo = await lstat(helper, { bigint: true });
+    if (!replacementInfo.isFile() || replacementInfo.isSymbolicLink()) throw new TypeError("fixture post-stage lock helper replacement rejected");
+    process.stdout.write("fixture post-stage lock helper replacement completed\n");
+  }
   await handle.close();
   handle = undefined;
   process.exitCode = await new Promise((resolve, reject) => {
@@ -187,7 +202,7 @@ try {
   await handle?.close();
   await rm(stage, { recursive: true, force: true });
 }
-' "$LOCK_HELPER" "$LOCK_HELPER_SHA256" "$bootstrap_helper_mode" "$bootstrap_stage" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || id -u)" "$TRANSACTION_LOCK" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || printf root)" bash "$0" "$@"
+' "$LOCK_HELPER" "$LOCK_HELPER_SHA256" "$bootstrap_helper_mode" "$bootstrap_stage" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || id -u)" "$FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT" "$TRANSACTION_LOCK" "$([[ "$FIXTURE_MODE" == 1 ]] && printf fixture || printf root)" bash "$0" "$@"
     exit "$?"
   fi
   [[ "$ARA_TRANSACTION_LOCK_FD" =~ ^[0-9]+$ ]] || fail 'transaction lock descriptor rejected'

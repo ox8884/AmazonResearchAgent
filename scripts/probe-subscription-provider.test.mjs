@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -682,6 +682,15 @@ describe('installer full preflight', () => {
   });
 
 });
+async function postStageReplacementRunner(root) {
+  const runner = join(root, 'post-stage-replacement-runner.sh');
+  await writeFile(runner, `#!/usr/bin/env bash
+export ARA_FIXTURE_POST_STAGE_LOCK_HELPER_REPLACEMENT=1
+exec "$@"
+`);
+  return `./${basename(root)}/post-stage-replacement-runner.sh`;
+}
+
 async function lockAuthorityFixture(kind) {
   const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
   const root = await mkdtemp(join(sourceRoot, '.task14-lock-authority-'));
@@ -690,15 +699,37 @@ async function lockAuthorityFixture(kind) {
   const installRoot = join(root, 'target');
   const marker = join(root, 'executed');
   await mkdir(join(repository, 'scripts'), { recursive: true });
-  await writeFile(join(repository, 'scripts/probe-subscription-provider.mjs'), await readFile(join(sourceRoot, 'scripts/probe-subscription-provider.mjs')));
+  const fixtureSources = [
+    'scripts/probe-subscription-provider.mjs',
+    'scripts/subscription-nft-semantics.mjs',
+    'scripts/installed-artifact-verifier.mjs',
+    'ops/subscription-providers/endpoint-bindings.json',
+    'ops/subscription-providers/subscription-supervisor.mjs',
+    'ops/subscription-providers/manage-invocation.sh',
+    'ops/systemd/amazon-research-codex@.service',
+    'ops/systemd/amazon-research-grok@.service',
+    'ops/systemd/amazon-research-subscription-gc.service',
+    'ops/systemd/amazon-research-subscription-gc.timer',
+    'ops/polkit/50-amazon-research-subscription.rules',
+    'ops/subscription-providers/subscription-gc-decision.mjs',
+    'ops/nftables/amazon-research-subscription.nft'
+  ];
+  await Promise.all(fixtureSources.map(async (sourceRelative) => {
+    const destination = join(repository, sourceRelative);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, await readFile(join(sourceRoot, sourceRelative)));
+  }));
   const installerSource = 'ops/subscription-providers/install-systemd-sandbox.sh';
   const helperSource = join(sourceRoot, 'scripts/subscription-install-lock.mjs');
-  await mkdir(join(repository, 'ops/subscription-providers'), { recursive: true });
   await mkdir(join(installRoot, 'etc/amazon-research/subscription'), { recursive: true });
   await writeFile(join(installRoot, 'etc/amazon-research/subscription/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
-  await writeFile(join(repository, 'ops/subscription-providers/endpoint-bindings.json'), await readFile(join(sourceRoot, 'ops/subscription-providers/endpoint-bindings.json')));
   const helper = join(repository, 'scripts/subscription-install-lock.mjs');
-  const malicious = `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'executed');\nprocess.exit(91);\n`;
+  const hostileMarker = `${helper}.post-validation-hostile-executed`;
+  const malicious = `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(marker)}, 'executed');
+process.exit(91);
+`;
   if (kind === 'missing') {
     // leave absent
   } else if (kind === 'symlink') {
@@ -711,36 +742,21 @@ async function lockAuthorityFixture(kind) {
       : malicious, { mode: 0o644 });
   }
   const environment = { ...process.env, ARA_REPOSITORY_ROOT: repository, ARA_INSTALL_ROOT: installRoot, ARA_FIXTURE_MODE: '1' };
-  if (kind === 'post-validation-swap') {
-    const bin = join(root, 'bin');
-    const node = join(bin, 'node');
-    await mkdir(bin);
-    await writeFile(node, `#!/usr/bin/env bash
-if [[ "$1" == *"subscription-install-lock.mjs" ]]; then
-  printf wrapper >"$ARA_TEST_MARKER"
-  cat >"$1" <<'EOF'
-${malicious}
-EOF
-fi
-exec ${JSON.stringify(process.execPath)} "$@"
-`, { mode: 0o755 });
-    await chmod(node, 0o755);
-    const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
-    environment.ARA_TEST_MARKER = `./${basename(root)}/executed`;
-    environment[pathKey] = [bin, environment[pathKey]].filter((value) => value !== undefined).join(delimiter);
-  }
   if (kind === 'untrusted-parent') {
     const parent = join(installRoot, 'run/lock');
     await mkdir(parent, { recursive: true, mode: 0o777 });
     await chmod(parent, 0o777);
   }
   const fixtureRoot = `./${basename(root)}`;
-  const child = spawnSync('bash', [installerSource, 'install', '--fixture-root', `${fixtureRoot}/target`, '--repository-root', `${fixtureRoot}/repo`], {
+  const installerArguments = [installerSource, 'install', '--fixture-root', `${fixtureRoot}/target`, '--repository-root', `${fixtureRoot}/repo`];
+  const child = spawnSync('bash', kind === 'post-validation-swap'
+    ? [await postStageReplacementRunner(root), ...installerArguments]
+    : installerArguments, {
     cwd: sourceRoot,
     encoding: 'utf8',
     env: environment
   });
-  return { child, marker };
+  return { child, helper, hostileMarker, marker };
 }
 
 describe('subscription lock helper install authority', () => {
@@ -769,12 +785,29 @@ describe('subscription lock helper install authority', () => {
     await assert.rejects(stat(marker), { code: 'ENOENT' });
   });
 
-  // Break: a release-tree helper can be replaced after pathname validation and before Node reopens it.
-  it('never executes a helper replaced after validation', async () => {
-    const { child, marker } = await lockAuthorityFixture('post-validation-swap');
+  // Break: reopening the source helper after staging would execute the controlled hostile replacement.
+  it('executes the verified staged helper after source replacement', async () => {
+    const { child, helper, hostileMarker } = await lockAuthorityFixture('post-validation-swap');
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    assert.match(child.stdout, /fixture post-stage lock helper replacement completed/u);
+    assert.match(child.stdout, /PASS mode=install artifacts=11 .*production_activation=false/u);
+    assert.match(await readFile(helper, 'utf8'), /post-validation-hostile-executed/u);
+    await assert.rejects(stat(hostileMarker), { code: 'ENOENT' });
+  });
+
+  it('rejects post-stage helper replacement injection outside fixture mode', async () => {
+    const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+    const root = await mkdtemp(join(sourceRoot, '.task14-lock-authority-'));
+    roots.push(root);
+    const child = spawnSync('bash', [
+      await postStageReplacementRunner(root),
+      'ops/subscription-providers/install-systemd-sandbox.sh', 'dry-run'
+    ], {
+      cwd: sourceRoot,
+      encoding: 'utf8'
+    });
     assert.notEqual(child.status, 0, child.stdout + child.stderr);
-    assert.match(child.stderr, /invalid regular file/u);
-    await assert.rejects(stat(marker), { code: 'ENOENT' });
+    assert.match(child.stderr, /fixture post-stage lock helper replacement rejected/u);
   });
 
   // Break: a writable staging parent lets another principal replace the verified staged helper.
