@@ -12,7 +12,7 @@ export const CODEX_SUBSCRIPTION_IDENTITY = Object.freeze({
   authHomePath: '/var/lib/amazon-research/subscription/codex',
   invocationRoot: '/run/amazon-research/subscription/codex',
   unitTemplate: 'amazon-research-codex@.service' as const,
-  policyDigest: '4006a1b3a1cf484d328be15825778f38a608a5e16637a8bed87b2a8f9683708a'
+  policyDigest: '8f183ef5014eeba2804ece94c4816ea39c2e7bdd33b051cdfbe5e962ae928678'
 });
 
 export interface CodexBinaryIdentity {
