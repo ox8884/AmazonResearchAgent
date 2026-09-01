@@ -440,10 +440,13 @@ describe('subscription supervisor request boundary', () => {
     const invocation = join(adapterRoot, attemptId);
     const approvedRoot = join(adapterRoot, '.approved');
     const approved = join(approvedRoot, attemptId);
-    await mkdir(invocation, { recursive: true, mode: 0o2770 });
+    await mkdir(adapterRoot, { recursive: true, mode: 0o750 });
+    await chmod(adapterRoot, 0o750);
+    await mkdir(invocation, { mode: 0o2770 });
     await chmod(invocation, 0o2770);
-    await mkdir(approved, { recursive: true, mode: 0o2550 });
+    await mkdir(approvedRoot, { mode: 0o750 });
     await chmod(approvedRoot, 0o750);
+    await mkdir(approved, { mode: 0o2550 });
     await chmod(approved, 0o2550);
     const request = {
       version: 1,
@@ -495,6 +498,20 @@ describe('subscription supervisor request boundary', () => {
       fixture.attemptId
     ], { env: fixture.environment });
   }
+
+  // Break: recursive fixture setup creates an unwritable approved parent before its attempt child.
+  it.skipIf(process.platform === 'win32')('creates authority parents independently under a restrictive umask', async () => {
+    const previous = process.umask(0o027);
+    try {
+      const fixture = await supervisorFixture();
+      expect((await lstat(dirname(fixture.invocation))).mode & 0o7777).toBe(0o750);
+      expect((await lstat(dirname(fixture.approved))).mode & 0o7777).toBe(0o750);
+      expect((await lstat(fixture.invocation)).mode & 0o7777).toBe(0o2770);
+      expect((await lstat(fixture.approved)).mode & 0o7777).toBe(0o2550);
+    } finally {
+      process.umask(previous);
+    }
+  });
 
   it('seals and independently validates only the exact Codex request identity', async () => {
     const fixture = await supervisorFixture();
