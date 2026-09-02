@@ -178,7 +178,33 @@ export type CopyKey =
   | 'stateWaitingForAiCapacity'
   | 'stateNeedsAttention'
   | 'researchNowOverride'
-  | 'researchNowOverrideConfirm';
+  | 'researchNowOverrideConfirm'
+  | 'briefingBasis'
+  | 'briefingUnavailable'
+  | 'briefingNeedsReview'
+  | 'briefingInProgress'
+  | 'briefingRecorded'
+  | 'queueTitle'
+  | 'queueOrderNote'
+  | 'openCandidate'
+  | 'noReasonRecorded'
+  | 'queueEmptyHint'
+  | 'pulseTitle'
+  | 'pulseUnitNote'
+  | 'pulseStageImports'
+  | 'pulseStageDiscovery'
+  | 'pulseStageValidation'
+  | 'pulseStageDecided'
+  | 'pulseNeedsReview'
+  | 'pulseEmpty'
+  | 'statusUnavailable'
+  | 'jobsTitle'
+  | 'jobsZero'
+  | 'budgetNoRecord'
+  | 'budgetZero'
+  | 'budgetBlocked'
+  | 'budgetRemainingLabel'
+  | 'researchNowPending';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -341,7 +367,33 @@ export const COPY = {
     stateWaitingForAiCapacity: 'AI 용량 대기',
     stateNeedsAttention: '확인 필요',
     researchNowOverride: '예약 예산 사용',
-    researchNowOverrideConfirm: '예약 API 예산을 사용해서 지금 리서치를 실행할까요?'
+    researchNowOverrideConfirm: '예약 API 예산을 사용해서 지금 리서치를 실행할까요?',
+    briefingBasis: '데이터 기준',
+    briefingUnavailable: '연구 현황을 표시할 수 없습니다.',
+    briefingNeedsReview: '검토가 필요한 후보가 {count}개 있습니다.',
+    briefingInProgress: '진행 중인 후보가 {count}개 있습니다.',
+    briefingRecorded: '기록된 후보가 총 {count}개 있습니다.',
+    queueTitle: '결정 대기열',
+    queueOrderNote: '확인이 필요한 상태를 먼저 보여 주고, 이어서 preliminary score가 높은 순으로 정렬합니다.',
+    openCandidate: '후보 열기',
+    noReasonRecorded: '기록된 근거가 없습니다.',
+    queueEmptyHint: 'CSV를 가져오면 Opportunity Finder 키워드가 후보로 등록됩니다.',
+    pulseTitle: '파이프라인 현황',
+    pulseUnitNote: '가져오기는 실행 건수이고, 이후 단계는 후보 수입니다.',
+    pulseStageImports: '가져오기',
+    pulseStageDiscovery: '발견',
+    pulseStageValidation: '검증·준비',
+    pulseStageDecided: '결정 완료',
+    pulseNeedsReview: '검토·확인 필요',
+    pulseEmpty: '파이프라인이 비어 있습니다. CSV를 가져오면 후보가 만들어집니다.',
+    statusUnavailable: '상태를 확인할 수 없습니다.',
+    jobsTitle: '작업 대기열',
+    jobsZero: '대기 중인 작업이 없습니다.',
+    budgetNoRecord: '오늘 예산 기록이 없습니다.',
+    budgetZero: '오늘 사용 가능한 API 예산이 0입니다.',
+    budgetBlocked: '예산이 소진되어 후보 {count}개가 대기 중입니다.',
+    budgetRemainingLabel: '잔여',
+    researchNowPending: '대기열에 추가하는 중…'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -501,7 +553,33 @@ export const COPY = {
     stateWaitingForAiCapacity: 'Waiting for AI capacity',
     stateNeedsAttention: 'Needs attention',
     researchNowOverride: 'Use reserved budget',
-    researchNowOverrideConfirm: 'Run Research Now using the reserved API budget?'
+    researchNowOverrideConfirm: 'Run Research Now using the reserved API budget?',
+    briefingBasis: 'Data as of',
+    briefingUnavailable: 'Research status is unavailable.',
+    briefingNeedsReview: '{count} candidates need review.',
+    briefingInProgress: '{count} candidates are in progress.',
+    briefingRecorded: '{count} candidates are on record.',
+    queueTitle: 'Decision queue',
+    queueOrderNote: 'Needs-review states appear first, then candidates are ordered by preliminary score.',
+    openCandidate: 'Open candidate',
+    noReasonRecorded: 'No recorded rationale.',
+    queueEmptyHint: 'Import a CSV to register Opportunity Finder keywords as candidates.',
+    pulseTitle: 'Pipeline pulse',
+    pulseUnitNote: 'Imports count runs; the stages that follow count candidates.',
+    pulseStageImports: 'Imports',
+    pulseStageDiscovery: 'Discovery',
+    pulseStageValidation: 'Validation prep',
+    pulseStageDecided: 'Decided',
+    pulseNeedsReview: 'Needs review',
+    pulseEmpty: 'The pipeline is empty. Import a CSV to create candidates.',
+    statusUnavailable: 'Status is unavailable.',
+    jobsTitle: 'Job queue',
+    jobsZero: 'No jobs are waiting.',
+    budgetNoRecord: 'No budget record for today.',
+    budgetZero: 'No API budget is available for today.',
+    budgetBlocked: 'Budget is exhausted; {count} candidates are waiting.',
+    budgetRemainingLabel: 'Remaining',
+    researchNowPending: 'Queueing…'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

@@ -12,12 +12,14 @@ const ResearchNowResponseSchema = z.object({
 
 export function ResearchNowButton({ locale }: { locale: Locale }) {
   const copy = getCopy(locale);
-  const [status, setStatus] = useState<'idle' | 'queued' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'pending' | 'queued' | 'error'>('idle');
+  const pending = status === 'pending';
 
   async function enqueue(mode: 'normal' | 'override-reserve'): Promise<void> {
     if (mode === 'override-reserve' && !window.confirm(copy.researchNowOverrideConfirm)) {
       return;
     }
+    setStatus('pending');
     try {
       const payload = await ky
         .post('/api/research-now', {
@@ -38,15 +40,18 @@ export function ResearchNowButton({ locale }: { locale: Locale }) {
       <button
         type="button"
         className="button button--primary"
+        disabled={pending}
+        aria-busy={pending}
         onClick={() => {
           void enqueue('normal');
         }}
       >
-        {copy.researchNow}
+        {pending ? copy.researchNowPending : copy.researchNow}
       </button>
       <button
         type="button"
-        className="button button--secondary"
+        className="button button--ghost"
+        disabled={pending}
         onClick={() => {
           void enqueue('override-reserve');
         }}

@@ -23,6 +23,7 @@ export type CandidateSummary = Pick<
 
 export interface DashboardData {
   readonly imports: readonly ImportSummary[];
+  /** Decision-queue rows: review-needed states first, then top preliminary scores. */
   readonly candidates: readonly CandidateSummary[];
   readonly totals: {
     readonly imports: number;
@@ -41,9 +42,11 @@ export class DashboardQueryError extends Error {
 
 export async function getDashboardData(): Promise<DashboardData> {
   const { client } = getServerDatabaseContext();
+  const candidateFields = 'id,keyword,preliminary_score,rule_passed,rule_reasons,state';
   const [
     importsResult,
-    candidatesResult,
+    reviewResult,
+    topResult,
     importCountResult,
     candidateCountResult,
     aggregateResult
@@ -55,7 +58,13 @@ export async function getDashboardData(): Promise<DashboardData> {
       .limit(6),
     client
       .from('candidates')
-      .select('id,keyword,preliminary_score,rule_passed,rule_reasons,state')
+      .select(candidateFields)
+      .in('state', ['Needs Review', 'Needs Attention'])
+      .order('preliminary_score', { ascending: false, nullsFirst: false })
+      .limit(8),
+    client
+      .from('candidates')
+      .select(candidateFields)
       .order('preliminary_score', { ascending: false, nullsFirst: false })
       .limit(8),
     client.from('import_runs').select('*', { count: 'exact', head: true }),
@@ -66,8 +75,11 @@ export async function getDashboardData(): Promise<DashboardData> {
   if (importsResult.error) {
     throw new DashboardQueryError('recent imports', importsResult.error);
   }
-  if (candidatesResult.error) {
-    throw new DashboardQueryError('recent candidates', candidatesResult.error);
+  if (reviewResult.error) {
+    throw new DashboardQueryError('review-needed candidates', reviewResult.error);
+  }
+  if (topResult.error) {
+    throw new DashboardQueryError('recent candidates', topResult.error);
   }
   if (importCountResult.error) {
     throw new DashboardQueryError('import count', importCountResult.error);
@@ -87,9 +99,21 @@ export async function getDashboardData(): Promise<DashboardData> {
     { accepted: 0, rejected: 0 }
   );
 
+  // Decision queue order: review-needed states first (score desc), then top
+  // scores. Only existing status/score data is used; no business ranking is
+  // invented here.
+  const candidates: CandidateSummary[] = [];
+  const seenIds = new Set<string>();
+  for (const row of [...reviewResult.data, ...topResult.data]) {
+    if (seenIds.has(row.id)) continue;
+    seenIds.add(row.id);
+    candidates.push(row);
+    if (candidates.length >= 8) break;
+  }
+
   return {
     imports: importsResult.data,
-    candidates: candidatesResult.data,
+    candidates,
     totals: {
       imports: importCountResult.count ?? 0,
       candidates: candidateCountResult.count ?? 0,
@@ -155,7 +179,7 @@ const UUID_PATTERN =
 export type JobCounts = {
   readonly queued: number;
   readonly running: number;
-  readonly waiting: number;
+  readonly failed: number;
   readonly completed: number;
 };
 
@@ -163,7 +187,10 @@ export type ApiBudgetMeter = {
   readonly used: number;
   readonly dailyLimit: number;
   readonly reservedLimit: number;
+  readonly hasRecord: boolean;
 };
+
+export type CandidateStateCounts = Record<string, number>;
 
 export type CandidateDetail = {
   readonly id: string;
@@ -186,7 +213,7 @@ export type ResearchRunSummary = {
 };
 
 function emptyJobCounts(): JobCounts {
-  return { queued: 0, running: 0, waiting: 0, completed: 0 };
+  return { queued: 0, running: 0, failed: 0, completed: 0 };
 }
 
 export async function getJobCounts(): Promise<JobCounts> {
@@ -196,6 +223,7 @@ export async function getJobCounts(): Promise<JobCounts> {
   return (data ?? []).reduce<JobCounts>((counts, job) => {
     if (job.status === 'queued') return { ...counts, queued: counts.queued + 1 };
     if (job.status === 'running') return { ...counts, running: counts.running + 1 };
+    if (job.status === 'failed') return { ...counts, failed: counts.failed + 1 };
     if (job.status === 'completed') return { ...counts, completed: counts.completed + 1 };
     return counts;
   }, emptyJobCounts());
@@ -218,8 +246,20 @@ export async function getApiBudgetMeter(): Promise<ApiBudgetMeter> {
   return {
     used: data?.used_count ?? 0,
     dailyLimit: data?.daily_limit ?? 0,
-    reservedLimit: data?.reserved_limit ?? 0
+    reservedLimit: data?.reserved_limit ?? 0,
+    hasRecord: data !== null
   };
+}
+
+export async function getCandidateStateCounts(): Promise<CandidateStateCounts> {
+  const { client } = getServerDatabaseContext();
+  const { data, error } = await client.from('candidates').select('state');
+  if (error) throw new DashboardQueryError('candidate state counts', error);
+  return (data ?? []).reduce<CandidateStateCounts>((counts, row) => {
+    const key = row.state ?? 'unknown';
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 export async function getCandidates(): Promise<readonly CandidateSummary[]> {
@@ -321,7 +361,16 @@ export function getJobCountsView(): Promise<JobCounts> {
 }
 
 export function getApiBudgetMeterView(): Promise<ApiBudgetMeter> {
-  return safe(getApiBudgetMeter, { used: 0, dailyLimit: 0, reservedLimit: 0 });
+  return safe(getApiBudgetMeter, {
+    used: 0,
+    dailyLimit: 0,
+    reservedLimit: 0,
+    hasRecord: false
+  });
+}
+
+export function getCandidateStateCountsView(): Promise<CandidateStateCounts> {
+  return safe(getCandidateStateCounts, {});
 }
 
 export function getCandidatesView(): Promise<readonly CandidateSummary[]> {

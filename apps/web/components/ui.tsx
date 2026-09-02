@@ -67,7 +67,7 @@ const candidateStateLabels: Readonly<Record<string, CopyKey>> = {
   'Needs Attention': 'stateNeedsAttention'
 };
 
-function toneForState(value: string): 'neutral' | 'accent' | 'waiting' | 'strong' | 'reject' {
+export function toneForState(value: string): 'neutral' | 'accent' | 'waiting' | 'strong' | 'reject' {
   if (value === 'Strong' || value === 'completed') return 'strong';
   if (value === 'Reject' || value === 'failed') return 'reject';
   if (

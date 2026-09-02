@@ -5,6 +5,7 @@
 - Evidence: the current shell has no active location, the dashboard repeats nine equal cards, and detail pages hide payloads behind raw identifiers.
 - Decision: organize every surface around **evidence → decision → action**; use a restrained rail, ledger rows, semantic status labels, and one clear action per context.
 - Adaptation: retain a warm, Korean-safe light canvas for long review sessions, then add ink chrome and shallow elevation so panels have hierarchy without glass or gradients.
+- Second pass (2026-09-02, dashboard decision queue): the dashboard leads with a data-derived briefing header, a decision queue as the hero surface, a compact pipeline pulse, and one lightweight evidence strip; briefing sentences, ordering, and alerts may only be derived from recorded candidate states, scores, and counts.
 - Non-goals: no new product workflow, API route, provider fallback, storage format, or business rule.
 
 ## 1. Atmosphere & Identity
@@ -73,6 +74,18 @@ Base unit: 4px. Keep the existing `--space-*` scale and add only tokens required
 
 ### Stat lede and operational band
 `stat-lede` gives one dominant value context; `stat-row` holds compact companions with ruled separators; `meter` pairs a labelled progress bar with used/limit/reserve values. This replaces repeated identical metric-card walls.
+
+### Dashboard briefing
+`briefing` replaces the dashboard page heading: a small data-as-of meta line, one briefing sentence as the H1, short purpose copy, and the action row. The briefing sentence may only be derived from recorded candidate-state counts (review-needed first, then in-progress, then total; a neutral line when empty or unavailable). Exactly one primary action (Research Now) and one secondary action (New import); the reserved-budget variant is a quiet ghost action still guarded by its confirm dialog. Buttons expose pending, queued, and error states without inventing results.
+
+### Decision queue
+`decision-queue` is the dashboard hero panel. Each `queue-row` carries a state-toned decision rail (3px marker colored by the state tone, never color-only because the text badge is always present), the keyword as a link, the localized state badge, the recorded rationale (rule-reason codes, or an explicit "no recorded rationale" line), a tabular preliminary score, and one explicit `Open candidate` action. Ordering uses only recorded data: review-needed states first, then preliminary score, and the ordering rule is stated in the UI. The empty state explains that no candidates exist yet and links to the import action.
+
+### Pipeline pulse
+`pulse` is a compact inset strip beside or below the queue. It lists the pipeline stages (imports, discovery, validation prep, AI screening, decided, rejected) as text labels with counts; imports count runs while stages count candidates, and the unit difference is stated. When no candidates exist the pulse says the pipeline is empty instead of listing zero stages. Job-queue counts appear as a compact line, or an explicit "no jobs waiting" line. Budget appears as a quiet detail (or "no budget record for today" when no row exists) and only becomes a visible alert when the remaining budget blocks waiting candidates.
+
+### Supporting evidence strip
+The dashboard keeps one supporting-evidence surface: the three most recent imports in an inset panel without shadow, showing date, localized status, and file/row counts. Import UUIDs are not rendered on the dashboard. Recent runs and state changes stay on their own pages.
 
 ### Ledger row
 `ledger`, `ledger__head`, and `ledger__row` provide table-like alignment for candidates, runs, and imports. Rows carry a state rail and visible status badge. Empty, loading, error, long-content, and populated states are explicit.
