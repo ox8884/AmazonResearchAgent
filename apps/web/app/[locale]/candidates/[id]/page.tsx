@@ -1,9 +1,18 @@
 import { getCopy } from '@ara/shared';
 import { CandidateScoreCard } from '../../../../components/candidate-score-card';
-import { parseLocale } from '../../../../lib/locale';
+import { CandidateStateBadge } from '../../../../components/ui';
+import { localizedHref, parseLocale } from '../../../../lib/locale';
 import { getCandidateDetailView } from '../../../../lib/server/dashboard-data';
 
 export const dynamic = 'force-dynamic';
+
+function evidenceValue(value: unknown): string {
+  if (value === null) return '—';
+  if (typeof value === 'string') return value.length > 120 ? `${value.slice(0, 117)}…` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} items`;
+  return 'structured data';
+}
 
 export default async function CandidateDetailPage({
   params
@@ -16,9 +25,15 @@ export default async function CandidateDetailPage({
   const candidate = await getCandidateDetailView(id);
   return (
     <div className="content-stack">
-      <header className="page-heading">
-        <h1>{candidate.keyword ?? copy.candidateTitle}</h1>
-        <p>{candidate.state ?? id}</p>
+      <a className="back-link" href={localizedHref(locale, '/candidates')}>{copy.navCandidates}</a>
+      <header className="page-heading candidate-detail-heading">
+        <div>
+          <h1>{candidate.keyword ?? copy.candidateTitle}</h1>
+        </div>
+        <div className="candidate-detail-heading__meta">
+          <CandidateStateBadge state={candidate.state ?? 'Discovered'} locale={locale} />
+          <code>{id}</code>
+        </div>
       </header>
       <CandidateScoreCard
         locale={locale}
@@ -27,16 +42,37 @@ export default async function CandidateDetailPage({
         margin={candidate.margin}
         differentiation={candidate.differentiation}
       />
-      {candidate.evidence.length > 0 ? (
-        <section className="panel">
-          <h2>{copy.decisionReasonLabel}</h2>
-          <ul>
-            {candidate.evidence.map((item) => (
-              <li key={item.kind}>{item.kind}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <section className="panel evidence-panel" aria-labelledby="evidence-title">
+        <div className="section-heading">
+          <h2 id="evidence-title">{copy.evidenceLabel}</h2>
+          <span className="section-count">{candidate.evidence.length}</span>
+        </div>
+        {candidate.evidence.length === 0 ? (
+          <p className="empty-state">{copy.noEvidence}</p>
+        ) : (
+          <div className="evidence-list">
+            {candidate.evidence.map((item, index) => {
+              const payload: readonly (readonly [string, unknown])[] =
+                item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+                  ? Object.entries(item.payload).slice(0, 6)
+                  : [['value', item.payload]];
+              return (
+                <article className="evidence-item" key={`${item.kind}-${index}`}>
+                  <h3><code>{item.kind}</code></h3>
+                  <dl>
+                    {payload.map(([key, value]) => (
+                      <div key={key}>
+                        <dt>{key}</dt>
+                        <dd>{evidenceValue(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { getCopy, type Locale } from '@ara/shared';
 import type { JobCounts } from '../lib/server/dashboard-data';
-import { MetricCard } from './ui';
 
 export function ResearchActivity({
   locale,
@@ -11,11 +10,13 @@ export function ResearchActivity({
 }) {
   const copy = getCopy(locale);
   return (
-    <section className="metric-grid" aria-label={copy.runsTitle}>
-      <MetricCard label={copy.queuedLabel} value={counts.queued} />
-      <MetricCard label={copy.runningLabel} value={counts.running} />
-      <MetricCard label={copy.waitingLabel} value={counts.waiting} />
-      <MetricCard label={copy.completedLabel} value={counts.completed} />
-    </section>
+    <div className="operations-stats" aria-label={copy.runsTitle}>
+      <div className="stat-row">
+        <span><strong>{counts.queued}</strong>{copy.queuedLabel}</span>
+        <span><strong>{counts.running}</strong>{copy.runningLabel}</span>
+        <span><strong>{counts.waiting}</strong>{copy.waitingLabel}</span>
+        <span><strong>{counts.completed}</strong>{copy.completedLabel}</span>
+      </div>
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 import { getCopy } from '@ara/shared';
-import { EmptyState, localeDate } from '../../../components/ui';
-import { parseLocale } from '../../../lib/locale';
+import { EmptyState, localeDate, RunStatusBadge } from '../../../components/ui';
+import { localizedHref, parseLocale } from '../../../lib/locale';
 import { getResearchRunsView } from '../../../lib/server/dashboard-data';
 
 export const dynamic = 'force-dynamic';
@@ -15,23 +15,42 @@ export default async function RunsPage({
   const runs = await getResearchRunsView();
   return (
     <div className="content-stack">
-      <header className="page-heading">
-        <h1>{copy.runsTitle}</h1>
+      <header className="page-heading page-heading--split">
+        <div>
+          <h1>{copy.runsTitle}</h1>
+          <p>{copy.statusLabel}: {runs.length}</p>
+        </div>
+        <a className="button button--secondary" href={localizedHref(locale, '/dashboard')}>
+          {copy.navDashboard}
+        </a>
       </header>
-      <section className="panel">
+      <section className="panel" aria-labelledby="runs-ledger-title">
+        <div className="section-heading">
+          <h2 id="runs-ledger-title">{copy.runsTitle}</h2>
+          <span className="section-count">{runs.length}</span>
+        </div>
         {runs.length === 0 ? (
           <EmptyState>{copy.noRuns}</EmptyState>
         ) : (
-          <div className="import-list">
+          <div className="ledger runs-ledger">
+            <div className="ledger__head" aria-hidden="true">
+              <span>{copy.createdAt}</span>
+              <span>{copy.statusLabel}</span>
+              <span>{copy.sourceManual}</span>
+            </div>
             {runs.map((run) => (
-              <article className="import-row" key={run.id}>
-                <div>
-                  <p className="import-row__title">{run.source}</p>
-                  <p className="import-row__meta">
-                    {run.logicalRunDate} · {localeDate(run.createdAt, locale)}
-                  </p>
+              <article className="ledger__row" key={run.id}>
+                <div className="ledger__primary">
+                  <strong>{run.logicalRunDate}</strong>
+                  <code>{run.id}</code>
                 </div>
-                <span>{run.status}</span>
+                <div className="ledger__state">
+                  <RunStatusBadge status={run.status} locale={locale} />
+                </div>
+                <div className="ledger__meta">
+                  {run.source === 'scheduled' ? copy.sourceScheduled : copy.sourceManual}
+                  <span>{localeDate(run.createdAt, locale)}</span>
+                </div>
               </article>
             ))}
           </div>

@@ -2,7 +2,13 @@ import { getCopy, RuleReasonSchema } from '@ara/shared';
 import { ApiUsageMeter } from '../../components/api-usage-meter';
 import { ResearchActivity } from '../../components/research-activity';
 import { ResearchNowButton } from '../../components/research-now-button';
-import { ButtonLink, EmptyState, localeDate, LocalizedStatusBadge, MetricCard } from '../../components/ui';
+import {
+  ButtonLink,
+  CandidateStateBadge,
+  EmptyState,
+  localeDate,
+  LocalizedStatusBadge
+} from '../../components/ui';
 import { localizedHref, parseLocale } from '../../lib/locale';
 import {
   getApiBudgetMeterView,
@@ -25,6 +31,7 @@ export default async function DashboardPage({
     getApiBudgetMeterView()
   ]);
   const data = dashboard.data;
+  const total = Math.max(data.totals.candidates, 1);
   return (
     <div className="content-stack">
       <header className="page-heading page-heading--split">
@@ -32,56 +39,61 @@ export default async function DashboardPage({
           <h1>{copy.homeTitle}</h1>
           <p>{copy.homeDescription}</p>
         </div>
-        <div className="cluster">
-          <ResearchNowButton locale={locale} />
-          <ButtonLink href={localizedHref(locale, '/imports/new')}>{copy.newImport}</ButtonLink>
-        </div>
+        <ButtonLink href={localizedHref(locale, '/imports/new')} variant="secondary">
+          {copy.newImport}
+        </ButtonLink>
       </header>
 
       {dashboard.kind === 'unavailable' ? (
         <p className="notice notice--error" role="status">{copy.dataUnavailable}</p>
       ) : null}
 
-      <section aria-label={copy.technicalDetails} className="metric-grid">
-        <MetricCard label={copy.totalImports} value={data.totals.imports} />
-        <MetricCard label={copy.totalCandidates} value={data.totals.candidates} />
-        <MetricCard label={copy.acceptedLabel} value={data.totals.accepted} />
-        <MetricCard label={copy.rejectedLabel} value={data.totals.rejected} />
-      </section>
-      <ResearchActivity locale={locale} counts={jobCounts} />
-      <section className="metric-grid" aria-label={copy.apiBudgetLabel}>
-        <ApiUsageMeter locale={locale} meter={apiBudget} />
+      <section className="panel operations-panel" aria-labelledby="operations-title">
+        <div className="section-heading">
+          <div>
+            <h2 id="operations-title">{copy.researchNow}</h2>
+          </div>
+          <ResearchNowButton locale={locale} />
+        </div>
+        <div className="operations-panel__body">
+          <ResearchActivity locale={locale} counts={jobCounts} />
+          <ApiUsageMeter locale={locale} meter={apiBudget} />
+        </div>
       </section>
 
-      <section className="panel" aria-labelledby="recent-imports-title">
+      <section className="panel decision-funnel" aria-labelledby="decision-funnel-title">
         <div className="section-heading">
-          <h2 id="recent-imports-title">{copy.recentImports}</h2>
-          <a href={localizedHref(locale, '/imports')}>{copy.viewAllImports}</a>
-        </div>
-        {data.imports.length === 0 ? (
-          <EmptyState>{copy.noImports}</EmptyState>
-        ) : (
-          <div className="import-list">
-            {data.imports.map((importRun) => (
-              <article className="import-row" key={importRun.id}>
-                <div>
-                  <p className="import-row__title">{importRun.id}</p>
-                  <p className="import-row__meta">{localeDate(importRun.created_at, locale)}</p>
-                </div>
-                <LocalizedStatusBadge status={importRun.status} locale={locale} />
-                <div className="import-row__counts">
-                  <span>{importRun.file_count} {copy.fileCount}</span>
-                  <span>{importRun.total_row_count} {copy.rowCount}</span>
-                </div>
-              </article>
-            ))}
+          <div>
+            <h2 id="decision-funnel-title">{copy.totalCandidates}</h2>
           </div>
-        )}
+        </div>
+        <ol className="funnel-list">
+          <li>
+            <span>{copy.totalImports}</span>
+            <strong>{data.totals.imports}</strong>
+          </li>
+          <li>
+            <span>{copy.totalCandidates}</span>
+            <strong>{data.totals.candidates}</strong>
+            <progress max={total} value={Math.min(data.totals.candidates, total)} />
+          </li>
+          <li>
+            <span>{copy.acceptedLabel}</span>
+            <strong>{data.totals.accepted}</strong>
+            <progress max={total} value={Math.min(data.totals.accepted, total)} />
+          </li>
+          <li>
+            <span>{copy.rejectedLabel}</span>
+            <strong>{data.totals.rejected}</strong>
+            <progress max={total} value={Math.min(data.totals.rejected, total)} />
+          </li>
+        </ol>
       </section>
 
       <section className="panel" aria-labelledby="recent-candidates-title">
         <div className="section-heading">
           <h2 id="recent-candidates-title">{copy.recentCandidates}</h2>
+          <a href={localizedHref(locale, '/candidates')}>{copy.navCandidates}</a>
         </div>
         {data.candidates.length === 0 ? (
           <EmptyState>{copy.noCandidates}</EmptyState>
@@ -93,7 +105,7 @@ export default async function DashboardPage({
                 <article className="data-row" key={candidate.id}>
                   <div className="data-row__primary">
                     <strong>{candidate.keyword}</strong>
-                    <span className="data-row__meta">{candidate.state}</span>
+                    <CandidateStateBadge state={candidate.state} locale={locale} />
                   </div>
                   <div className="data-row__score">
                     <span>{copy.scoreLabel}</span>
@@ -111,6 +123,32 @@ export default async function DashboardPage({
                 </article>
               );
             })}
+          </div>
+        )}
+      </section>
+
+      <section className="panel" aria-labelledby="recent-imports-title">
+        <div className="section-heading">
+          <h2 id="recent-imports-title">{copy.recentImports}</h2>
+          <a href={localizedHref(locale, '/imports')}>{copy.viewAllImports}</a>
+        </div>
+        {data.imports.length === 0 ? (
+          <EmptyState>{copy.noImports}</EmptyState>
+        ) : (
+          <div className="import-list">
+            {data.imports.map((importRun) => (
+              <article className="import-row" key={importRun.id}>
+                <div>
+                  <p className="import-row__title">{localeDate(importRun.created_at, locale)}</p>
+                  <p className="import-row__meta">{importRun.id}</p>
+                </div>
+                <LocalizedStatusBadge status={importRun.status} locale={locale} />
+                <div className="import-row__counts">
+                  <span>{importRun.file_count} {copy.fileCount}</span>
+                  <span>{importRun.total_row_count} {copy.rowCount}</span>
+                </div>
+              </article>
+            ))}
           </div>
         )}
       </section>

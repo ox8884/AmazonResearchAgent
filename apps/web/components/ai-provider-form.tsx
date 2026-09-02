@@ -4,6 +4,7 @@ import {
   AiRoleSchema,
   BillingTypeSchema,
   getCopy,
+  type CopyKey,
   type Locale
 } from '@ara/shared';
 import {
@@ -45,6 +46,7 @@ const HttpProviderSchema = z.object({
   networkScope: z.enum(['public', 'private', 'loopback']).nullable(),
   modelId: z.string().nullable(),
   modelDiscovery: z.enum(['enabled', 'disabled']).default('enabled'),
+  openRouterProvider: z.literal('z-ai').nullable().default(null),
   settingsRevision: z.number().default(1),
   models: z.array(ProviderModelSchema)
 });
@@ -102,6 +104,7 @@ const ConnectionResultSchema = z.object({
 type SavedProvider = z.infer<typeof SavedProviderSchema>;
 type HttpProvider = z.infer<typeof HttpProviderSchema>;
 type SubscriptionProvider = z.infer<typeof SubscriptionProviderSchema>;
+type CopyDictionary = Readonly<Record<CopyKey, string>>;
 type FormStatus =
   | { readonly kind: 'idle' }
   | { readonly kind: 'saving' }
@@ -113,6 +116,7 @@ type FormStatus =
       readonly providerId: string;
       readonly available: boolean;
       readonly models: readonly string[];
+      readonly errorCategory: string | null;
     };
 
 function delay(milliseconds: number): Promise<void> {
@@ -124,6 +128,7 @@ function delay(milliseconds: number): Promise<void> {
 function providerResult(value: unknown): {
   readonly available: boolean;
   readonly models: readonly string[];
+  readonly errorCategory: string | null;
 } | null {
   if (typeof value !== 'object' || value === null || !('providerTest' in value)) return null;
   const providerTest = value.providerTest;
@@ -134,9 +139,19 @@ function providerResult(value: unknown): {
     !('models' in providerTest) ||
     typeof providerTest.available !== 'boolean' ||
     !Array.isArray(providerTest.models) ||
+    ('errorCategory' in providerTest &&
+      providerTest.errorCategory !== null &&
+      typeof providerTest.errorCategory !== 'string') ||
     !providerTest.models.every((model) => typeof model === 'string')
   ) return null;
-  return { available: providerTest.available, models: providerTest.models };
+  return {
+    available: providerTest.available,
+    models: providerTest.models,
+    errorCategory:
+      'errorCategory' in providerTest && typeof providerTest.errorCategory === 'string'
+        ? providerTest.errorCategory
+        : null
+  };
 }
 
 async function waitForProviderTest(jobId: string) {
@@ -148,15 +163,15 @@ async function waitForProviderTest(jobId: string) {
     );
     const result = providerResult(response.result);
     if (response.status === 'completed' && result) return result;
-    if (response.status === 'failed') return { available: false, models: [] };
+    if (response.status === 'failed') return { available: false, models: [], errorCategory: response.errorCategory };
     await delay(500);
   }
-  return { available: false, models: [] };
+  return { available: false, models: [], errorCategory: null };
 }
 
 function subscriptionStatusLabel(
   provider: SubscriptionProvider,
-  copy: ReturnType<typeof getCopy>
+  copy: CopyDictionary
 ): string {
   if (provider.setupStatus === 'ready') return copy.connectionReady;
   if (provider.setupStatus === 'expired') return copy.authorizationExpired;
@@ -174,7 +189,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
   const [saved, setSaved] = useState<SavedProvider | null>(null);
   const [product, setProduct] = useState<AiProviderProduct>('codex_subscription');
   const [status, setStatus] = useState<FormStatus>({ kind: 'idle' });
-
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   async function loadProviders(): Promise<readonly SavedProvider[]> {
     const result = ProviderListSchema.parse(
       await ky.get('/api/ai-providers', { credentials: 'same-origin' }).json<unknown>()
@@ -185,8 +200,8 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
 
   useEffect(() => {
     void loadProviders()
-      .then((loaded) => {
-        const first = loaded[0];
+      .then((listed) => {
+        const first = listed[0];
         if (first) {
           setSaved(first);
           setProduct(first.product);
@@ -229,6 +244,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
         modelDiscovery: isNewManual
           ? 'disabled'
           : (savedHttp?.modelDiscovery ?? (submittedModelId ? 'disabled' : 'enabled')),
+        ...(formData.get('openRouterProvider') === 'z-ai' ? { openRouterProvider: 'z-ai' } : {}),
         modelEnabled: isNewManual || formData.get('modelEnabled') === 'on',
         modelPriority: isNewManual ? 100 : Number(formData.get('modelPriority') ?? 100),
         roles: formData.getAll('roles').filter((value): value is string => typeof value === 'string'),
@@ -270,6 +286,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
 
   async function testConnection(provider: SavedProvider): Promise<void> {
     if (status.kind === 'testing') return;
+    setTestingProviderId(provider.id);
     setStatus({ kind: 'testing' });
     try {
       const queued = ConnectionJobResponseSchema.parse(
@@ -283,8 +300,16 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
       const listed = await loadProviders();
       const refreshed = listed.find((item) => item.id === provider.id);
       if (refreshed) selectProvider(refreshed);
-      setStatus({ kind: 'tested', providerId: provider.id, available: result.available, models: result.models });
+      setStatus({
+        kind: 'tested',
+        providerId: provider.id,
+        available: result.available,
+        models: result.models,
+        errorCategory: result.errorCategory
+      });
+      setTestingProviderId(null);
     } catch (error) {
+      setTestingProviderId(null);
       if (error instanceof Error) {
         setStatus({ kind: 'error', message: copy.connectionUnavailable });
         return;
@@ -313,28 +338,58 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
   }
 
   const savedHttp: HttpProvider | null = saved?.product === 'openai_compatible_api' ? saved : null;
+  const listedProviders = saved
+    ? [saved, ...providers.filter((provider) => provider.id !== saved.id)]
+    : providers;
   const visibility = productFieldVisibility(product);
   const errorMessage = status.kind === 'error' ? status.message : null;
 
   return (
     <div className="provider-admin">
-      <section className="provider-list" aria-labelledby="saved-providers-title">
-        <h2 id="saved-providers-title">{copy.aiSettingsTitle}</h2>
-        {providers.length === 0 ? <p>{copy.noProviders}</p> : (
-          <ul>
-            {providers.map((provider) => (
+      <aside className="provider-list" aria-labelledby="saved-providers-title">
+        <div className="provider-list__header">
+          <h2 id="saved-providers-title">{copy.savedProviders}</h2>
+          <span className="section-count">{listedProviders.length}</span>
+        </div>
+        <button
+          className="button button--secondary"
+          type="button"
+          onClick={() => {
+            setSaved(null);
+            setProduct('openai_compatible_api');
+            setStatus({ kind: 'idle' });
+          }}
+        >
+          {copy.newOpenAiProvider}
+        </button>
+        {listedProviders.length === 0 ? <p>{copy.noProviders}</p> : (
+          <ul className="provider-list__items">
+            {listedProviders.map((provider) => (
               <li key={provider.id}>
-                <button className="button button--secondary" type="button" onClick={() => selectProvider(provider)}>
-                  {provider.productLabel}
+                <button
+                  aria-label={`${provider.name} ${copy.editProvider}`}
+                  aria-pressed={saved?.id === provider.id}
+                  className="provider-list__item"
+                  type="button"
+                  onClick={() => selectProvider(provider)}
+                >
+                  <span className="provider-list__product">{provider.productLabel}</span>
+                  <strong>{provider.name}</strong>
+                  <span className="provider-list__action">{copy.editProvider}</span>
                 </button>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </aside>
 
-      <form className="ai-provider-form" onSubmit={submit} key={buildProviderFormKey(saved)}>
-        <div className="form-grid">
+      <div className="provider-editor">
+        <header className="provider-editor__heading">
+          <p>{saved ? saved.productLabel : copy.newOpenAiProvider}</p>
+          <h2>{saved ? `${saved.name} ${copy.editProvider}` : copy.newOpenAiProvider}</h2>
+        </header>
+        <form className="ai-provider-form" onSubmit={submit} key={buildProviderFormKey(saved)}>
+          <div className="form-grid">
           <div className="field-stack">
             <label htmlFor="provider-product">{copy.providerProduct}</label>
             <select
@@ -424,6 +479,17 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
                 <label htmlFor="api-key">{copy.apiKey}</label>
                 <input id="api-key" name="apiKey" type="password" autoComplete="new-password" />
               </div>
+              {savedHttp?.baseUrl && new URL(savedHttp.baseUrl).hostname === 'openrouter.ai' ? (
+                <label className="checkbox-field field-stack--wide">
+                  <input
+                    name="openRouterProvider"
+                    type="checkbox"
+                    value="z-ai"
+                    defaultChecked={savedHttp.openRouterProvider === 'z-ai'}
+                  />
+                  <span>{copy.openRouterZaiOnly}</span>
+                </label>
+              ) : null}
             </>
           ) : null}
           {visibility.roleSelection ? (
@@ -437,55 +503,83 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
               ))}
             </fieldset>
           ) : null}
-        </div>
-
-        <p className="privacy-note">{copy.privacyNote}</p>
-        <button className="button button--primary" type="submit" disabled={status.kind === 'saving'}>
-          {status.kind === 'saving' ? copy.uploadingFiles : copy.saveProvider}
-        </button>
-        {errorMessage ? <p className="notice notice--error" role="alert">{errorMessage}</p> : null}
-        {status.kind === 'saved' ? <p role="status">{copy.providerSaved}</p> : null}
-      </form>
-
-      {providers.map((provider) => provider.product === 'openai_compatible_api' ? (
-        <section className="provider-result" aria-labelledby={`provider-${provider.id}`} key={provider.id}>
-          <h2 id={`provider-${provider.id}`}>{provider.productLabel} · {provider.name}</h2>
-          {provider.secretLast4 ? <p className="import-id"><span>{copy.secretStored}</span> <code>••••{provider.secretLast4}</code></p> : null}
-          <p className="privacy-note">{copy.httpTestCostWarning}</p>
-          <button className="button button--secondary" type="button" onClick={() => void testConnection(provider)} disabled={status.kind === 'testing'}>
-            {status.kind === 'testing' ? copy.uploadingFiles : copy.testConnection}
-          </button>
-          {status.kind === 'tested' && status.providerId === provider.id ? (
-            <p className={status.available ? 'notice notice--success' : 'notice notice--error'} role="status">
-              {status.available ? copy.connectionReady : copy.connectionUnavailable}
-              {status.available && status.models.length > 0 ? (
-                <>{' '}<span>{status.models.join(', ')}</span></>
-              ) : null}
-            </p>
-          ) : null}
-        </section>
-      ) : (
-        <section className="provider-result" aria-labelledby={`provider-${provider.id}`} key={provider.id}>
-          <h2 id={`provider-${provider.id}`}>{provider.productLabel}</h2>
-          <dl>
-            <div><dt>{copy.billingType}</dt><dd>{copy.subscriptionLabel}</dd></div>
-            <div><dt>{copy.subscriptionStatus}</dt><dd>{subscriptionStatusLabel(provider, copy)}</dd></div>
-            <div><dt>{copy.subscriptionModel}</dt><dd>{provider.modelLabel}</dd></div>
-            <div><dt>{copy.subscriptionRole}</dt><dd><code>{provider.role}</code></dd></div>
-            <div><dt>{copy.providerPriority}</dt><dd>{provider.priority}</dd></div>
-            <div><dt>{copy.lastProbe}</dt><dd>{provider.lastCheckedAt ?? '—'}</dd></div>
-          </dl>
-          <p className="privacy-note">{copy.operatorAuthorizationGuidance}</p>
-          <div className="button-row">
-            <button className="button button--secondary" type="button" onClick={() => void testConnection(provider)} disabled={status.kind === 'testing'}>
-              {status.kind === 'testing' ? copy.uploadingFiles : copy.testConnection}
-            </button>
-            <button className="button button--secondary" type="button" onClick={() => void disableSubscription(provider)}>
-              {copy.disableProvider}
-            </button>
           </div>
-        </section>
-      ))}
+
+          <p className="privacy-note">{copy.privacyNote}</p>
+          <button className="button button--primary" type="submit" disabled={status.kind === 'saving'}>
+            {status.kind === 'saving' ? copy.savingProvider : copy.saveProvider}
+          </button>
+          {errorMessage ? <p className="notice notice--error" role="alert">{errorMessage}</p> : null}
+          {status.kind === 'saved' ? <p role="status">{copy.providerSaved}</p> : null}
+        </form>
+        <div className="provider-results" aria-label={copy.testConnection}>
+          {listedProviders.map((provider) =>
+            provider.product === 'openai_compatible_api' ? (
+              <section className="provider-result" key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+                <h3 id={`provider-${provider.id}`}>{provider.name}</h3>
+                <p className="provider-result__product">{provider.productLabel}</p>
+                {provider.secretLast4 ? (
+                  <p className="import-id"><span>{copy.secretStored}</span> <code>••••{provider.secretLast4}</code></p>
+                ) : null}
+                <p className="privacy-note">{copy.httpTestCostWarning}</p>
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  onClick={() => void testConnection(provider)}
+                  disabled={status.kind === 'testing'}
+                >
+                  {status.kind === 'testing' && testingProviderId === provider.id
+                    ? copy.testingConnection
+                    : copy.testConnection}
+                </button>
+                {status.kind === 'tested' && status.providerId === provider.id ? (
+                  <p className={status.available ? 'notice notice--success' : 'notice notice--error'} role="status">
+                    {status.available
+                      ? copy.connectionReady
+                      : status.errorCategory === 'provider_response_invalid'
+                        ? copy.connectionResponseInvalid
+                        : status.errorCategory === 'provider_request_rejected'
+                          ? copy.connectionRequestRejected
+                          : copy.connectionUnavailable}
+                    {status.available && status.models.length > 0 ? (
+                      <>{' '}<span>{status.models.join(', ')}</span></>
+                    ) : null}
+                  </p>
+                ) : null}
+              </section>
+            ) : (
+              <section className="provider-result" key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+                <h3 id={`provider-${provider.id}`}>{provider.name}</h3>
+                <p className="provider-result__product">{provider.productLabel}</p>
+                <p className="status status--tone-neutral">{subscriptionStatusLabel(provider, copy)}</p>
+                <dl>
+                  <div><dt>{copy.billingType}</dt><dd>{copy.subscriptionLabel}</dd></div>
+                  <div><dt>{copy.subscriptionModel}</dt><dd>{provider.modelLabel}</dd></div>
+                  <div><dt>{copy.subscriptionRole}</dt><dd><code>{provider.role}</code></dd></div>
+                  <div><dt>{copy.providerPriority}</dt><dd>{provider.priority}</dd></div>
+                  <div><dt>{copy.lastProbe}</dt><dd>{provider.lastCheckedAt ?? '—'}</dd></div>
+                </dl>
+                <p className="privacy-note">{copy.operatorAuthorizationGuidance}</p>
+                <div className="button-row">
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => void testConnection(provider)}
+                    disabled={status.kind === 'testing'}
+                  >
+                    {status.kind === 'testing' && testingProviderId === provider.id
+                      ? copy.testingConnection
+                      : copy.testConnection}
+                  </button>
+                  <button className="button button--secondary" type="button" onClick={() => void disableSubscription(provider)}>
+                    {copy.disableProvider}
+                  </button>
+                </div>
+              </section>
+            )
+          )}
+        </div>
+      </div>
     </div>
   );
 }

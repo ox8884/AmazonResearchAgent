@@ -13,28 +13,50 @@ export default async function SettingsPage({
   const locale = parseLocale((await params).locale);
   const copy = getCopy(locale);
   const settings = await getResearchSettingsView();
+  const configuredLocale = settings?.locale === 'ko' ? copy.languageKorean : copy.languageEnglish;
+  const newPercent = settings?.newPercent ?? 60;
+  const watchPercent = settings?.watchPercent ?? 30;
+  const strongPercent = settings?.strongPercent ?? 10;
   return (
     <div className="content-stack">
       <header className="page-heading page-heading--split">
         <div>
           <h1>{copy.settingsTitle}</h1>
+          <p>{copy.settingsReadOnly}</p>
         </div>
         <ButtonLink href={localizedHref(locale, '/settings/ai')} variant="secondary">
           {copy.navAiSettings}
         </ButtonLink>
       </header>
-      <section className="panel">
-        <p>
-          locale: {settings?.locale ?? copy.dataUnavailable}
-        </p>
-        <p>timezone: {settings?.timezone ?? 'America/Chicago'}</p>
-        <p>
-          allocation: {settings?.newPercent ?? 60}/{settings?.watchPercent ?? 30}/
-          {settings?.strongPercent ?? 10}
-        </p>
-        <p>
-          {copy.apiBudgetLabel}: {settings?.dailyApiBudget ?? 0}
-        </p>
+      <section className="panel settings-panel" aria-labelledby="settings-summary-title">
+        <h2 id="settings-summary-title">{copy.settingsTitle}</h2>
+        <dl className="settings-list">
+          <div>
+            <dt>{copy.settingsLocale}</dt>
+            <dd>{settings ? configuredLocale : copy.dataUnavailable}</dd>
+          </div>
+          <div>
+            <dt>{copy.settingsTimezone}</dt>
+            <dd>{settings?.timezone ?? 'America/Chicago'}</dd>
+          </div>
+          <div>
+            <dt>{copy.settingsAllocation}</dt>
+            <dd className="allocation-list">
+              <span>{copy.uniqueKeywords}: {newPercent}%</span>
+              <span>{copy.waitingLabel}: {watchPercent}%</span>
+              <span>{copy.acceptedLabel}: {strongPercent}%</span>
+              <progress max={100} value={newPercent} aria-label={`${copy.uniqueKeywords} ${newPercent}%`} />
+            </dd>
+          </div>
+          <div>
+            <dt>{copy.apiBudgetLabel}</dt>
+            <dd>{settings?.dailyApiBudget ?? 0}</dd>
+          </div>
+          <div>
+            <dt>{copy.settingsManualReserve}</dt>
+            <dd>{settings?.manualReserveEnabled ? copy.providerActive : copy.providerDisabled}</dd>
+          </div>
+        </dl>
       </section>
     </div>
   );

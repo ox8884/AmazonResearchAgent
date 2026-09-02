@@ -76,6 +76,7 @@ export type CopyKey =
   | 'uploadTooLarge'
   | 'uploadInvalidFile'
   | 'navAiSettings'
+  | 'navResearchGroup'
   | 'aiSettingsTitle'
   | 'aiSettingsDescription'
   | 'providerName'
@@ -88,9 +89,15 @@ export type CopyKey =
   | 'executable'
   | 'fixedArgs'
   | 'networkScope'
+  | 'openRouterZaiOnly'
   | 'commandProfile'
   | 'saveProvider'
+  | 'savingProvider'
+  | 'newOpenAiProvider'
+  | 'savedProviders'
+  | 'editProvider'
   | 'testConnection'
+  | 'testingConnection'
   | 'disableProvider'
   | 'subscriptionLabel'
   | 'subscriptionRole'
@@ -108,6 +115,8 @@ export type CopyKey =
   | 'secretStored'
   | 'connectionReady'
   | 'connectionUnavailable'
+  | 'connectionResponseInvalid'
+  | 'connectionRequestRejected'
   | 'noProviders'
   | 'roleAssignments'
   | 'providerEnabled'
@@ -130,6 +139,11 @@ export type CopyKey =
   | 'candidatesTitle'
   | 'runsTitle'
   | 'settingsTitle'
+  | 'settingsLocale'
+  | 'settingsTimezone'
+  | 'settingsAllocation'
+  | 'settingsManualReserve'
+  | 'settingsReadOnly'
   | 'queuedLabel'
   | 'runningLabel'
   | 'waitingLabel'
@@ -141,6 +155,28 @@ export type CopyKey =
   | 'noRuns'
   | 'waitingBudgetLabel'
   | 'needsAttentionLabel'
+  | 'providerActive'
+  | 'reserveLabel'
+  | 'evidenceLabel'
+  | 'noEvidence'
+  | 'runPlanningLabel'
+  | 'runFanoutLabel'
+  | 'failedLabel'
+  | 'sourceScheduled'
+  | 'sourceManual'
+  | 'stateDiscovered'
+  | 'stateRuleFilter'
+  | 'stateAiScreening'
+  | 'stateReadyForApiValidation'
+  | 'stateWaitingForApiBudget'
+  | 'stateApiValidationRunning'
+  | 'stateDeepResearch'
+  | 'stateStrong'
+  | 'stateWatch'
+  | 'stateReject'
+  | 'stateNeedsReview'
+  | 'stateWaitingForAiCapacity'
+  | 'stateNeedsAttention'
   | 'researchNowOverride'
   | 'researchNowOverrideConfirm';
 
@@ -203,6 +239,7 @@ export const COPY = {
     uploadTooLarge: '각 CSV 파일은 10 MB 이하여야 합니다.',
     uploadInvalidFile: '비어 있지 않은 CSV 파일만 선택할 수 있습니다.',
     navAiSettings: 'AI 설정',
+    navResearchGroup: '리서치 운영',
     aiSettingsTitle: 'AI Provider 설정',
     aiSettingsDescription: '구독 Provider와 OpenAI-compatible API를 제품 단위로 안전하게 관리합니다.',
     providerName: 'Provider 이름',
@@ -215,9 +252,15 @@ export const COPY = {
     executable: 'Command executable',
     fixedArgs: 'Fixed arguments (JSON array)',
     networkScope: 'Network scope',
+    openRouterZaiOnly: 'OpenRouter에서 Z.ai만 사용 (fallback 없음)',
     commandProfile: 'Command profile',
     saveProvider: '저장',
+    savingProvider: '저장 중…',
+    newOpenAiProvider: '새 OpenAI 호환 Provider',
+    savedProviders: '저장된 Provider',
+    editProvider: '수정',
     testConnection: '연결 테스트',
+    testingConnection: '테스트 중…',
     disableProvider: '비활성화',
     subscriptionLabel: 'Subscription',
     subscriptionRole: '고정 역할',
@@ -235,6 +278,8 @@ export const COPY = {
     secretStored: '저장된 key',
     connectionReady: 'Provider 연결 가능',
     connectionUnavailable: 'Provider 연결 불가',
+    connectionResponseInvalid: 'Provider 응답 형식 확인 필요',
+    connectionRequestRejected: 'Provider가 연결 요청을 거부함',
     noProviders: '저장된 provider가 없습니다.',
     roleAssignments: 'Role assignments',
     providerEnabled: 'Provider enabled',
@@ -252,11 +297,16 @@ export const COPY = {
     navDashboard: '대시보드',
     competitionLabel: '경쟁도',
     navCandidates: '후보',
+    settingsTitle: '리서치 설정',
+    settingsLocale: '언어',
+    settingsTimezone: '시간대',
+    settingsAllocation: '후보군별 API 배분',
+    settingsManualReserve: '수동 예약분',
+    settingsReadOnly: '이 화면은 읽기 전용입니다. 운영 설정은 승인된 서버 절차로 관리합니다.',
     navRuns: '실행',
     navSettings: '설정',
     candidatesTitle: '후보 목록',
     runsTitle: '리서치 실행',
-    settingsTitle: '리서치 설정',
     queuedLabel: '대기',
     runningLabel: '실행 중',
     waitingLabel: '대기 중',
@@ -266,8 +316,30 @@ export const COPY = {
     marginLabel: '마진',
     differentiationLabel: '차별화',
     noRuns: '아직 리서치 실행이 없습니다.',
-    waitingBudgetLabel: 'Waiting for API Budget',
-    needsAttentionLabel: 'Needs Attention',
+    waitingBudgetLabel: 'API 예산 대기',
+    needsAttentionLabel: '확인 필요',
+    providerActive: '활성',
+    reserveLabel: '예약분',
+    evidenceLabel: '수집 근거',
+    noEvidence: '아직 수집된 근거가 없습니다.',
+    runPlanningLabel: '계획 중',
+    runFanoutLabel: '작업 분배 중',
+    failedLabel: '실패',
+    sourceScheduled: '예약 실행',
+    sourceManual: '수동 실행',
+    stateDiscovered: '발견됨',
+    stateRuleFilter: '규칙 필터',
+    stateAiScreening: 'AI 선별',
+    stateReadyForApiValidation: 'API 검증 준비',
+    stateWaitingForApiBudget: 'API 예산 대기',
+    stateApiValidationRunning: 'API 검증 중',
+    stateDeepResearch: '심층 리서치',
+    stateStrong: '강한 후보',
+    stateWatch: '관찰',
+    stateReject: '제외',
+    stateNeedsReview: '검토 필요',
+    stateWaitingForAiCapacity: 'AI 용량 대기',
+    stateNeedsAttention: '확인 필요',
     researchNowOverride: '예약 예산 사용',
     researchNowOverrideConfirm: '예약 API 예산을 사용해서 지금 리서치를 실행할까요?'
   },
@@ -327,6 +399,7 @@ export const COPY = {
     uploadTooLarge: 'Each CSV file must be no larger than 10 MB.',
     uploadInvalidFile: 'Choose non-empty CSV files only.',
     navAiSettings: 'AI settings',
+    navResearchGroup: 'Research operations',
     aiSettingsTitle: 'AI provider settings',
     aiSettingsDescription: 'Manage subscription providers and OpenAI-compatible APIs as product choices.',
     providerName: 'Provider name',
@@ -339,9 +412,15 @@ export const COPY = {
     executable: 'Command executable',
     fixedArgs: 'Fixed arguments (JSON array)',
     networkScope: 'Network scope',
+    openRouterZaiOnly: 'Use Z.ai only on OpenRouter (no fallback)',
     commandProfile: 'Command profile',
     saveProvider: 'Save',
+    savingProvider: 'Saving…',
+    newOpenAiProvider: 'New OpenAI-Compatible Provider',
+    savedProviders: 'Saved providers',
+    editProvider: 'Edit',
     testConnection: 'Test connection',
+    testingConnection: 'Testing…',
     disableProvider: 'Disable',
     subscriptionLabel: 'Subscription',
     subscriptionRole: 'Fixed role',
@@ -359,6 +438,8 @@ export const COPY = {
     secretStored: 'Stored key',
     connectionReady: 'Provider available',
     connectionUnavailable: 'Provider unavailable',
+    connectionResponseInvalid: 'Provider response format needs attention',
+    connectionRequestRejected: 'Provider rejected the connection request',
     noProviders: 'No providers have been saved.',
     roleAssignments: 'Role assignments',
     providerEnabled: 'Provider enabled',
@@ -392,6 +473,33 @@ export const COPY = {
     noRuns: 'No research runs yet.',
     waitingBudgetLabel: 'Waiting for API Budget',
     needsAttentionLabel: 'Needs Attention',
+    providerActive: 'Active',
+    settingsLocale: 'Locale',
+    settingsTimezone: 'Timezone',
+    settingsAllocation: 'API allocation by cohort',
+    settingsManualReserve: 'Manual reserve',
+    settingsReadOnly: 'Read-only view. Operational settings are managed through the approved server procedure.',
+    reserveLabel: 'Reserved',
+    evidenceLabel: 'Evidence collected',
+    noEvidence: 'No evidence has been collected yet.',
+    runPlanningLabel: 'Planning',
+    runFanoutLabel: 'Fan-out',
+    failedLabel: 'Failed',
+    sourceScheduled: 'Scheduled run',
+    sourceManual: 'Manual run',
+    stateDiscovered: 'Discovered',
+    stateRuleFilter: 'Rule filter',
+    stateAiScreening: 'AI screening',
+    stateReadyForApiValidation: 'Ready for API validation',
+    stateWaitingForApiBudget: 'Waiting for API budget',
+    stateApiValidationRunning: 'API validation running',
+    stateDeepResearch: 'Deep research',
+    stateStrong: 'Strong',
+    stateWatch: 'Watch',
+    stateReject: 'Reject',
+    stateNeedsReview: 'Needs review',
+    stateWaitingForAiCapacity: 'Waiting for AI capacity',
+    stateNeedsAttention: 'Needs attention',
     researchNowOverride: 'Use reserved budget',
     researchNowOverrideConfirm: 'Run Research Now using the reserved API budget?'
   }

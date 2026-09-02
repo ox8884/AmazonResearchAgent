@@ -1,5 +1,5 @@
 import { getCopy } from '@ara/shared';
-import { ButtonLink, EmptyState, MetricCard, StatusBadge } from '../../../components/ui';
+import { ButtonLink, EmptyState, MetricCard, StatusBadge, ToneBadge } from '../../../components/ui';
 import { localizedHref, parseLocale } from '../../../lib/locale';
 
 export default async function ShowcasePage({
@@ -36,6 +36,8 @@ export default async function ShowcasePage({
           <StatusBadge status="processing" label={copy.importProcessing} />
           <StatusBadge status="completed" label={copy.importCompleted} />
           <StatusBadge status="failed" label={copy.importFailed} />
+          <ToneBadge value="Strong" label={copy.stateStrong} />
+          <ToneBadge value="Needs Attention" label={copy.stateNeedsAttention} />
         </div>
       </section>
 

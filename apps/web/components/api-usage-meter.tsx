@@ -9,13 +9,14 @@ export function ApiUsageMeter({
   meter: ApiBudgetMeter;
 }) {
   const copy = getCopy(locale);
+  const ratio = meter.dailyLimit > 0 ? Math.min(100, Math.round((meter.used / meter.dailyLimit) * 100)) : 0;
   return (
-    <article className="metric-card">
-      <p className="metric-card__label">{copy.apiBudgetLabel}</p>
-      <p className="metric-card__value">
-        {meter.used}/{meter.dailyLimit}
-      </p>
-      <p className="metric-card__note">reserve {meter.reservedLimit}</p>
-    </article>
+    <div className="budget-meter" aria-label={copy.apiBudgetLabel}>
+      <div className="budget-meter__heading">
+        <strong>{meter.used}/{meter.dailyLimit}</strong>
+      </div>
+      <progress max={100} value={ratio} aria-label={`${copy.apiBudgetLabel} ${ratio}%`} />
+      <p className="metric-card__note">{copy.reserveLabel}: {meter.reservedLimit}</p>
+    </div>
   );
 }

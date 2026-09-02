@@ -25,7 +25,6 @@ export default async function ImportsPage({
         <ButtonLink href={localizedHref(locale, '/imports/new')}>{copy.newImport}</ButtonLink>
       </header>
 
-
       {importsView.kind === 'unavailable' ? (
         <p className="notice notice--error" role="status">{copy.dataUnavailable}</p>
       ) : null}
@@ -41,16 +40,16 @@ export default async function ImportsPage({
             {imports.map((importRun) => (
               <article className="import-row" key={importRun.id}>
                 <div>
-                  <p className="import-row__title">{importRun.id}</p>
-                  <p className="import-row__meta">{localeDate(importRun.created_at, locale)}</p>
+                  <p className="import-row__title">{localeDate(importRun.created_at, locale)}</p>
+                  <p className="import-row__meta">{importRun.id}</p>
                 </div>
                 <LocalizedStatusBadge status={importRun.status} locale={locale} />
-                <div className="import-row__counts">
-                  <span>{importRun.file_count} {copy.fileCount}</span>
-                  <span>{importRun.total_row_count} {copy.rowCount}</span>
-                  <span>{importRun.unique_keyword_count} {copy.uniqueKeywords}</span>
-                  <span>{importRun.duplicate_keyword_count} {copy.duplicateKeywords}</span>
-                </div>
+                <dl className="import-row__counts">
+                  <div><dt>{copy.fileCount}</dt><dd>{importRun.file_count}</dd></div>
+                  <div><dt>{copy.rowCount}</dt><dd>{importRun.total_row_count}</dd></div>
+                  <div><dt>{copy.uniqueKeywords}</dt><dd>{importRun.unique_keyword_count}</dd></div>
+                  <div><dt>{copy.duplicateKeywords}</dt><dd>{importRun.duplicate_keyword_count}</dd></div>
+                </dl>
               </article>
             ))}
           </div>
