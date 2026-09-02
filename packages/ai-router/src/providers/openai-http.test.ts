@@ -193,6 +193,77 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(paths).toEqual([]);
   });
 
+  it('probes a manual model without requiring a task-specific normalization result', async () => {
+    const paths: string[] = [];
+    const payloads: unknown[] = [];
+    const mock = await startMockServer((incoming, response) => {
+      paths.push(incoming.url ?? '');
+      let body = '';
+      incoming.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
+      incoming.on('end', () => {
+        payloads.push(JSON.parse(body));
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          choices: [{ message: { content: 'This is not niche-normalization JSON.' } }]
+        }));
+      });
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'manual-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'subscription',
+      apiKey: 'test-key',
+      manualModelId: 'manual-model',
+      modelDiscovery: 'disabled'
+    });
+
+    await expect(provider.probeConnection('manual-model')).resolves.toBeUndefined();
+
+    expect(paths).toEqual(['/v1/chat/completions']);
+    expect(payloads).toEqual([{
+      model: 'manual-model',
+      messages: [{ role: 'user', content: 'Reply with OK.' }]
+    }]);
+  });
+
+  it('locks structured completions to Z.ai when configured for OpenRouter', async () => {
+    const payloads: unknown[] = [];
+    const mock = await startMockServer((incoming, response) => {
+      let body = '';
+      incoming.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
+      incoming.on('end', () => {
+        payloads.push(JSON.parse(body));
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          choices: [{ message: { content: '{"classification":"product_niche"}' } }]
+        }));
+      });
+    });
+    server = mock.server;
+    const provider = new OpenAiHttpProvider({
+      id: 'openrouter-http',
+      baseUrl: mock.baseUrl,
+      billingType: 'payg',
+      apiKey: 'test-key',
+      openRouterProvider: 'z-ai'
+    });
+
+    await provider.runStructured(request);
+
+    expect(payloads).toEqual([expect.objectContaining({
+      model: 'cheap-model',
+      provider: {
+        only: ['z-ai'],
+        allow_fallbacks: false
+      }
+    })]);
+  });
+
   it('does not treat unsupported /models as healthy when a manual model exists', async () => {
     const mock = await startMockServer((_incoming, response) => {
       response.statusCode = 404;

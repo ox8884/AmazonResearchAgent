@@ -274,6 +274,32 @@ integration('opportunity normalization job', () => {
     expect(analysis.winning_attempt_id).toBeNull();
   });
 
+  // Break: no routable provider leaves a valid candidate in AI Screening.
+  it('defers when routing has no eligible provider before an attempt starts', async () => {
+    const fixture = await seedExecution(client, {
+      classification: 'ambiguous', canonicalNiche: null, canonicalEnglish: null,
+      catalogPhrases: [], aliases: [], productFit: 'possible', riskFlags: [],
+      confidence: 0.4, reason: 'unused'
+    });
+
+    const result = await runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
+      {
+        client,
+        coordinator: fixture.coordinator,
+        catalog: { entries: [] },
+        jobLease: fixture.job.leaseIdentity,
+        signal: new AbortController().signal
+      }
+    );
+    const { data: candidate, error } = await client.from('candidates')
+      .select('state').eq('id', fixture.candidateId).single();
+    if (error) throw error;
+
+    expect(result.deferredCount).toBe(1);
+    expect(candidate.state).toBe('Waiting for AI Capacity');
+  });
+
   // Break: a stale generation payload claims or finalizes the current candidate analysis.
   it('rejects a payload generation mismatch before analysis claim', async () => {
     const fixture = await seedExecution(client, {
@@ -291,6 +317,43 @@ integration('opportunity normalization job', () => {
         signal: new AbortController().signal
       }
     )).rejects.toThrow(/generation does not match/u);
+    const { count, error } = await client
+      .from('ai_analyses')
+      .select('id', { count: 'exact', head: true })
+      .eq('input_payload->>candidateId', fixture.candidateId);
+    if (error) throw error;
+    expect(count).toBe(0);
+  });
+
+  it('completes a stale candidate-state job without claiming an analysis', async () => {
+    const fixture = await seedExecution(client, {
+      classification: 'ambiguous', canonicalNiche: null, canonicalEnglish: null,
+      catalogPhrases: [], aliases: [], productFit: 'possible', riskFlags: [],
+      confidence: 0.4, reason: 'unused'
+    });
+    const { error: stateError } = await client.from('candidates')
+      .update({ state: 'Ready for API Validation' })
+      .eq('id', fixture.candidateId);
+    if (stateError) throw stateError;
+
+    const result = await runNormalizeJob(
+      { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },
+      {
+        client,
+        coordinator: fixture.coordinator,
+        catalog: fixture.catalog,
+        jobLease: fixture.job.leaseIdentity,
+        signal: new AbortController().signal
+      }
+    );
+
+    expect(result).toMatchObject({
+      processedCount: 1,
+      clusteredCount: 0,
+      deferredCount: 0,
+      reusedAnalysisCount: 0
+    });
+    expect(fixture.calls.count).toBe(0);
     const { count, error } = await client
       .from('ai_analyses')
       .select('id', { count: 'exact', head: true })

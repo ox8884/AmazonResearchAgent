@@ -337,8 +337,8 @@ integration('settings API to worker catalog', () => {
       attempts: createProviderAttemptRepository(client),
       runtime,
       semaphores: new AdapterSemaphoreRegistry(),
-      resolveTarget: (selection) =>
-        resolvePersistedNormalizationTarget(client, selection, { encryptionKey })
+      resolveTarget: (selection, authorization) =>
+        resolvePersistedNormalizationTarget(client, selection, authorization, { encryptionKey })
     });
     const result = await runNormalizeJob(
       { candidateIds: [fixture.candidateId], locale: 'ko', normalizationGeneration: 0 },

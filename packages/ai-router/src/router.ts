@@ -16,6 +16,7 @@ export interface ProviderCatalogEntry {
   readonly priority: number;
   readonly roles?: readonly AiRole[];
   readonly rolePriority?: Partial<Record<AiRole, number>>;
+  readonly paidPrimary?: boolean;
   readonly health: ProviderHealth;
   readonly models: readonly AiModelDescriptor[];
 }
@@ -98,6 +99,9 @@ export function routeAiRequest(
   const candidates: RouteCandidate[] = [];
   const checkedProviderIds: string[] = [];
   const excludedProviderIds = new Set(request.excludeProviderIds);
+  const paidPrimaryProviderIds = new Set(request.paidPrimaryProviderIds);
+  const permitsPayg = (providerId: string): boolean =>
+    request.allowPaidFallback || paidPrimaryProviderIds.has(providerId);
   if (
     request.role === 'strong_cross_validation' &&
     request.primaryProviderId
@@ -108,6 +112,12 @@ export function routeAiRequest(
     if (excludedProviderIds.has(entry.provider.id)) {
       continue;
     }
+    if (
+      paidPrimaryProviderIds.size > 0 &&
+      !paidPrimaryProviderIds.has(entry.provider.id)
+    ) {
+      continue;
+    }
     if (!entry.roles || !entry.roles.includes(request.role)) {
       continue;
     }
@@ -115,14 +125,14 @@ export function routeAiRequest(
     if (!entry.enabled || !entry.health.available) {
       continue;
     }
-    if (entry.provider.billingType === 'payg' && !request.allowPaidFallback) {
+    if (entry.provider.billingType === 'payg' && !permitsPayg(entry.provider.id)) {
       continue;
     }
     for (const model of entry.models) {
       if (!supportsCapabilities(model, request.requiredCapabilities)) {
         continue;
       }
-      if (model.billingType === 'payg' && !request.allowPaidFallback) {
+      if (model.billingType === 'payg' && !permitsPayg(entry.provider.id)) {
         continue;
       }
 

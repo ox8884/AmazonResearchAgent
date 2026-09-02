@@ -60,6 +60,7 @@ const HttpProviderInputSchema = z.object({
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
   modelDiscovery: z.enum(['enabled', 'disabled']).optional(),
+  openRouterProvider: z.literal('z-ai').optional(),
   modelEnabled: z.boolean().default(true),
   modelPriority: z.number().int().nonnegative().default(100),
   roles: z.array(AiRoleSchema).default([]),
@@ -146,6 +147,7 @@ interface PublicHttpProvider {
   readonly networkScope: 'public' | 'private' | 'loopback' | null;
   readonly modelId: string | null;
   readonly modelDiscovery: 'enabled' | 'disabled';
+  readonly openRouterProvider: 'z-ai' | null;
   readonly settingsRevision: number;
   readonly models: readonly PublicModel[];
 }
@@ -288,6 +290,7 @@ function publicHttpProvider(
         : null,
     modelId: jsonString(config.manualModelId),
     modelDiscovery: jsonString(config.modelDiscovery) === 'disabled' ? 'disabled' : 'enabled',
+    openRouterProvider: jsonString(config.openRouterProvider) === 'z-ai' ? 'z-ai' : null,
     settingsRevision: provider.settings_revision,
     models: models.map(publicModel)
   };
@@ -298,11 +301,15 @@ function httpProviderConfig(input: HttpProviderInput, modelId: string | undefine
     throw new ProviderConfigurationError('Base URL is required for HTTP providers.');
   }
   const modelDiscovery = input.modelDiscovery ?? (modelId ? 'disabled' : 'enabled');
+  if (input.openRouterProvider && new URL(input.baseUrl).hostname !== 'openrouter.ai') {
+    throw new ProviderConfigurationError('OpenRouter provider routing requires an OpenRouter Base URL.');
+  }
   return {
     baseUrl: input.baseUrl,
     networkScope: input.networkScope,
     modelDiscovery,
     ...(modelDiscovery === 'disabled' && modelId ? { manualModelId: modelId } : {}),
+    ...(input.openRouterProvider ? { openRouterProvider: input.openRouterProvider } : {}),
     roles: input.roles
   };
 }
@@ -553,9 +560,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });
     }
     if (error instanceof ProviderRepositoryError) {
-      const detail = error.cause instanceof Error ? error.cause.message : error.message;
+      const cause = error.cause;
+      const detail = cause instanceof Error
+        ? cause.message
+        : typeof cause === 'object' &&
+            cause !== null &&
+            'message' in cause &&
+            typeof cause.message === 'string'
+          ? cause.message
+          : error.message;
       if (detail.includes('settings_revision_conflict')) {
         return NextResponse.json({ error: 'settings_conflict' }, { status: 409 });
+      }
+      if (detail.includes('provider_model_billing_mismatch')) {
+        return NextResponse.json({ error: 'provider_model_billing_conflict' }, { status: 409 });
       }
       if (detail.includes('provider_family_immutable') || detail.includes('duplicate key')) {
         return NextResponse.json({ error: 'provider_family_conflict' }, { status: 409 });

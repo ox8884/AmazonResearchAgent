@@ -113,6 +113,7 @@ export const AiRequestSchema = z.object({
   routerMode: RouterModeSchema,
   locale: LocaleSchema,
   allowPaidFallback: z.boolean().default(false),
+  paidPrimaryProviderIds: z.array(z.string().trim().min(1)).default([]),
   requiredCapabilities: z
     .array(ProviderCapabilitySchema)
     .min(1)

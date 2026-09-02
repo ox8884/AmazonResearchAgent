@@ -64,6 +64,7 @@ export interface OpenAiHttpProviderConfig {
   readonly manualModelId?: string;
   readonly qualityRank?: number;
   readonly modelDiscovery?: 'enabled' | 'disabled';
+  readonly openRouterProvider?: 'z-ai';
   readonly timeoutMs?: number;
   readonly requiresSecret?: boolean;
   readonly fetch?: typeof fetch;
@@ -270,6 +271,21 @@ export class OpenAiHttpProvider implements RawAiProvider {
     return runWithSchema(this, request.schema, request);
   }
 
+  async probeConnection(modelId: string): Promise<void> {
+    try {
+      const response = await this.http.post('chat/completions', {
+        json: {
+          model: modelId,
+          messages: [{ role: 'user', content: 'Reply with OK.' }],
+          ...this.openRouterRouting()
+        }
+      });
+      ChatResponseSchema.parse(await readJsonBounded(response, COMPLETION_MAX_BYTES));
+    } catch (error) {
+      throw mapError(error);
+    }
+  }
+
   async runRaw(request: RawStructuredAiRequest): Promise<RawAiProviderResult> {
     const startedAt = new Date().toISOString();
     const body: JsonObject = {
@@ -288,7 +304,8 @@ export class OpenAiHttpProvider implements RawAiProvider {
           strict: true,
           schema: request.schema
         }
-      }
+      },
+      ...this.openRouterRouting()
     };
 
     try {
@@ -314,6 +331,18 @@ export class OpenAiHttpProvider implements RawAiProvider {
     } catch (error) {
       throw mapError(error);
     }
+  }
+
+  private openRouterRouting(): JsonObject {
+    if (this.config.openRouterProvider !== 'z-ai') {
+      return {};
+    }
+    return {
+      provider: {
+        only: ['z-ai'],
+        allow_fallbacks: false
+      }
+    };
   }
 }
 

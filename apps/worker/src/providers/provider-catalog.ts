@@ -40,7 +40,10 @@ import {
   type SubscriptionAdapter
 } from '@ara/shared';
 import { KeywordNormalizationSchema, type KeywordNormalization } from '@ara/research-engine';
-import type { NormalizationExecutionTarget } from './normalization-execution-coordinator';
+import type {
+  NormalizationExecutionTarget,
+  NormalizationTargetAuthorization
+} from './normalization-execution-coordinator';
 
 import { resolveApprovedCommandProfile } from './command-profiles';
 import {
@@ -105,6 +108,14 @@ function configModelDiscovery(
     return value;
   }
   throw new ProviderCatalogError('Stored model discovery policy is invalid.');
+}
+
+function configOpenRouterProvider(config: ConfigRecord): 'z-ai' | undefined {
+  const value = configString(config, 'openRouterProvider');
+  if (value === undefined || value === 'z-ai') {
+    return value;
+  }
+  throw new ProviderCatalogError('Stored OpenRouter routing policy is invalid.');
 }
 
 function configStrings(config: ConfigRecord, key: string): string[] {
@@ -184,6 +195,10 @@ async function providerFromRow(
     const validatedUrl = await validateProviderBaseUrl(baseUrl, networkScope);
     const manualModelId = configString(config, 'manualModelId');
     const modelDiscovery = configModelDiscovery(config);
+    const openRouterProvider = configOpenRouterProvider(config);
+    if (openRouterProvider && validatedUrl.hostname !== 'openrouter.ai') {
+      throw new ProviderCatalogError('Stored OpenRouter routing policy has an invalid base URL.');
+    }
     const apiKey = decryptProviderKey(secret, options);
     return new OpenAiHttpProvider({
       id: row.id,
@@ -193,7 +208,8 @@ async function providerFromRow(
       fetch: createPinnedProviderFetch(networkScope),
       ...(apiKey ? { apiKey } : {}),
       ...(manualModelId ? { manualModelId } : {}),
-      ...(modelDiscovery ? { modelDiscovery } : {})
+      ...(modelDiscovery ? { modelDiscovery } : {}),
+      ...(openRouterProvider ? { openRouterProvider } : {})
     });
   }
 
@@ -221,6 +237,20 @@ async function providerFromRow(
       modelId,
       billingType.data
     )
+  );
+}
+
+function isAuthorizedInitialPaygTarget(
+  provider: ProviderRow,
+  model: ModelRow,
+  authorization: NormalizationTargetAuthorization
+): boolean {
+  return (
+    authorization.initialPaidPrimary &&
+    provider.kind === 'openai_http' &&
+    provider.billing_type === 'payg' &&
+    model.billing_type === 'payg' &&
+    configOpenRouterProvider(configRecord(provider.config)) === 'z-ai'
   );
 }
 
@@ -474,6 +504,10 @@ async function catalogEntry(
     provider: adapter,
     enabled: provider.enabled,
     priority: provider.priority,
+    paidPrimary: (
+      adapter.billingType === 'payg' &&
+      configOpenRouterProvider(config) === 'z-ai'
+    ),
     health,
     models: persistedModels,
     roles,
@@ -484,6 +518,7 @@ async function catalogEntry(
 export async function resolvePersistedNormalizationTarget(
   client: QueueDatabaseClient,
   selection: RouteSelection,
+  authorization: NormalizationTargetAuthorization,
   options: PersistedProviderCatalogOptions = {}
 ): Promise<NormalizationExecutionTarget> {
   const snapshot = await loadPersistedProviderSnapshot(client, selection.providerId, options);
@@ -491,7 +526,14 @@ export async function resolvePersistedNormalizationTarget(
     throw new ProviderCatalogError('Routed provider snapshot is unavailable.');
   }
   const model = snapshot.models.find((candidate) => candidate.model_id === selection.model.id);
-  if (!model || !model.enabled || model.billing_type === 'payg') {
+  if (
+    !model ||
+    !model.enabled ||
+    (
+      model.billing_type === 'payg' &&
+      !isAuthorizedInitialPaygTarget(snapshot.provider, model, authorization)
+    )
+  ) {
     throw new ProviderCatalogError('Routed model is no longer eligible.');
   }
   if (snapshot.provider.kind === 'openai_http') {

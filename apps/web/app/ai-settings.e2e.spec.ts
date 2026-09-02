@@ -26,6 +26,55 @@ test('logs in and opens Korean and English AI settings', async ({ page }) => {
   await expect(page).toHaveURL(/\/en\/settings\/ai$/u);
   await expect(page.getByRole('heading', { level: 1, name: 'AI provider settings' })).toBeVisible();
 });
+
+test('keeps a saved HTTP provider visibly editable beside its test action', async ({ page }) => {
+  const provider = {
+    id: 'openrouter-provider',
+    product: 'openai_compatible_api',
+    productLabel: 'OpenAI-Compatible API',
+    name: 'OpenRouter API',
+    billingType: 'payg',
+    enabled: true,
+    priority: 100,
+    secretLast4: '1234',
+    roles: ['niche_normalization'],
+    baseUrl: 'https://openrouter.ai/api/v1',
+    networkScope: 'public',
+    modelId: 'z-ai/glm-5.3-flash',
+    modelDiscovery: 'disabled',
+    openRouterProvider: 'z-ai',
+    settingsRevision: 2,
+    models: [
+      {
+        id: 'z-ai/glm-5.3-flash',
+        displayName: 'z-ai/glm-5.3-flash',
+        billingType: 'payg',
+        capabilities: ['structured_output'],
+        qualityRank: 100,
+        enabled: true,
+        priority: 100,
+        origin: 'manual'
+      }
+    ]
+  };
+  await page.route('**/api/ai-providers', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ providers: [provider] })
+    });
+  });
+
+  await loginAsAdmin(page, 'ko');
+  await expect(page.getByRole('heading', { name: '저장된 Provider' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'OpenRouter API 수정' }).click();
+
+  await expect(page.getByRole('heading', { name: 'OpenRouter API 수정' })).toBeVisible();
+  await expect(page.getByLabel('Model ID')).toHaveValue('z-ai/glm-5.3-flash');
+  await expect(page.getByLabel('OpenRouter에서 Z.ai만 사용 (fallback 없음)')).toBeChecked();
+  await expect(page.getByRole('button', { name: '연결 테스트' })).toBeVisible();
+});
 // Break: a successful OpenAI-compatible connection test is misattributed to every compatible provider card.
 
 test('renders OpenAI-compatible connection test results without secrets', async ({ page }) => {
@@ -112,6 +161,65 @@ test('renders OpenAI-compatible connection test results without secrets', async 
   expect(provider).not.toHaveProperty('apiKey');
   expect(JSON.stringify(secondProvider)).not.toContain('plaintext-secret-fixture');
   expect(secondProvider).not.toHaveProperty('apiKey');
+});
+
+test('explains a malformed OpenAI-compatible completion without calling it unavailable', async ({ page }) => {
+  const provider = {
+    id: 'openai-compatible-response-fixture',
+    product: 'openai_compatible_api',
+    productLabel: 'OpenAI-Compatible API',
+    name: 'Response Fixture Provider',
+    billingType: 'payg',
+    enabled: true,
+    priority: 100,
+    secretLast4: '1234',
+    roles: ['niche_normalization'],
+    baseUrl: 'https://provider.example/v1',
+    networkScope: 'public',
+    modelId: 'fixture-model',
+    modelDiscovery: 'disabled',
+    settingsRevision: 1,
+    models: []
+  };
+  await page.route('**/api/ai-providers', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ providers: [provider] })
+    });
+  });
+  await page.route('**/api/ai-providers/test', async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ jobId: 'job-invalid-response', status: 'queued' })
+    });
+  });
+  await page.route('**/api/ai-provider-tests/job-invalid-response', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId: 'job-invalid-response',
+        status: 'completed',
+        result: {
+          providerTest: {
+            available: false,
+            models: [],
+            errorCategory: 'provider_response_invalid'
+          }
+        },
+        errorCategory: null
+      })
+    });
+  });
+
+  await loginAsAdmin(page, 'ko');
+  await page.getByRole('button', { name: 'Response Fixture Provider 수정' }).click();
+  await page.getByRole('button', { name: '연결 테스트' }).click();
+
+  await expect(page.getByRole('status')).toContainText('Provider 응답 형식 확인 필요');
+  await expect(page.getByText('Provider 연결 불가')).toHaveCount(0);
 });
 
 

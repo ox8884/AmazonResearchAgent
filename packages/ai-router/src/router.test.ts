@@ -54,6 +54,7 @@ function request(overrides: Partial<AiRequest> = {}): AiRequest {
     routerMode: 'Balanced',
     locale: 'ko',
     allowPaidFallback: false,
+    paidPrimaryProviderIds: [],
     requiredCapabilities: ['structured_json'],
     excludeProviderIds: [],
     payload: { keyword: 'batter squeeze bottle' },
@@ -123,6 +124,34 @@ describe('AI routing policy', () => {
     if (allowed.kind === 'route') {
       expect(allowed.providerId).toBe('converted');
     }
+  });
+
+  it('routes an explicitly nominated payg primary without enabling fallback', () => {
+    const payg = provider('custom-openai', 'payg');
+    const subscription = provider('subscription', 'subscription');
+    const decision = routeAiRequest(
+      request({ paidPrimaryProviderIds: ['custom-openai'] }),
+      catalog([
+        {
+          provider: subscription,
+          enabled: true,
+          roles: ['niche_normalization'],
+          priority: 0,
+          health: healthy,
+          models: [model('subscription', 'subscription-model', 'subscription', 0)]
+        },
+        {
+          provider: payg,
+          enabled: true,
+          roles: ['niche_normalization'],
+          priority: 100,
+          health: healthy,
+          models: [model('custom-openai', 'custom-model', 'payg', 100)]
+        }
+      ])
+    );
+
+    expect(decision).toMatchObject({ kind: 'route', providerId: 'custom-openai' });
   });
 
   // Break: routing returns a model or billing identity owned by a different provider entry.

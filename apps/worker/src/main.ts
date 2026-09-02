@@ -324,7 +324,8 @@ export async function main(): Promise<void> {
           attempts: createProviderAttemptRepository(client),
           runtime: providerRuntime,
           semaphores: composition.adapterSemaphores,
-          resolveTarget: (selection) => resolvePersistedNormalizationTarget(client, selection)
+          resolveTarget: (selection, authorization) =>
+            resolvePersistedNormalizationTarget(client, selection, authorization)
         });
         return {
           queue: createQueue(client),

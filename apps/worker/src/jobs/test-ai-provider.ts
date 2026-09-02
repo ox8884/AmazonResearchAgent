@@ -8,6 +8,7 @@ import { assertPersistableModelId, UnsafeModelIdError } from '@ara/shared';
 
 import { KeywordNormalizationSchema } from '@ara/research-engine';
 import {
+  OpenAiHttpProvider,
   OpenAiHttpError,
   TEST_CONNECTION_REQUIRED,
   type AiProvider
@@ -45,6 +46,10 @@ export interface ProviderTestResult {
 }
 
 async function probeExecution(adapter: AiProvider, modelId: string): Promise<void> {
+  if (adapter instanceof OpenAiHttpProvider) {
+    await adapter.probeConnection(modelId);
+    return;
+  }
   await adapter.runStructured({
     role: 'niche_normalization',
     modelId,
@@ -77,6 +82,12 @@ function executionErrorCategory(error: unknown): string {
     }
     if (error.retryable) {
       return 'provider_unavailable';
+    }
+    if (error.status === null) {
+      return 'provider_response_invalid';
+    }
+    if (error.status >= 400 && error.status < 500) {
+      return 'provider_request_rejected';
     }
   }
   if (error instanceof Error) {

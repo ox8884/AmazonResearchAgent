@@ -45,6 +45,7 @@ const HttpProviderSchema = z.object({
   baseUrl: z.string().nullable(),
   networkScope: z.enum(['public', 'private', 'loopback']).nullable(),
   modelId: z.string().nullable(),
+  openRouterProvider: z.literal('z-ai').nullable().default(null),
   settingsRevision: z.number().default(1),
   models: z.array(ProviderModelSchema)
 });
@@ -239,6 +240,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
         networkScope: formData.get('networkScope') ?? 'public',
         apiKey: formData.get('apiKey') ?? '',
         modelId: submittedModelId,
+        ...(formData.get('openRouterProvider') === 'z-ai' ? { openRouterProvider: 'z-ai' } : {}),
         modelEnabled: isNewManual || formData.get('modelEnabled') === 'on',
         modelPriority: isNewManual ? 100 : Number(formData.get('modelPriority') ?? 100),
         roles: formData.getAll('roles').filter((value): value is string => typeof value === 'string'),
@@ -473,6 +475,17 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
                 <label htmlFor="api-key">{copy.apiKey}</label>
                 <input id="api-key" name="apiKey" type="password" autoComplete="new-password" />
               </div>
+              {savedHttp?.baseUrl && new URL(savedHttp.baseUrl).hostname === 'openrouter.ai' ? (
+                <label className="checkbox-field field-stack--wide">
+                  <input
+                    name="openRouterProvider"
+                    type="checkbox"
+                    value="z-ai"
+                    defaultChecked={savedHttp.openRouterProvider === 'z-ai'}
+                  />
+                  <span>{copy.openRouterZaiOnly}</span>
+                </label>
+              ) : null}
             </>
           ) : null}
           {visibility.roleSelection ? (

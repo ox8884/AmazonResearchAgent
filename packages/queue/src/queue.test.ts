@@ -51,6 +51,10 @@ class InMemoryQueueRepository implements QueueRepository {
     return [];
   }
 
+  async claimJobsByType(): Promise<Job[]> {
+    return [];
+  }
+
   async completeJob(): Promise<boolean> {
     return true;
   }

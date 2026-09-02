@@ -155,6 +155,21 @@ async function loadCandidates(
   return data;
 }
 
+async function hasCompletedAnalysis(
+  client: QueueDatabaseClient,
+  hash: string
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('ai_analyses')
+    .select('id')
+    .eq('role', 'niche_normalization')
+    .eq('input_hash', hash)
+    .eq('status', 'completed')
+    .limit(1);
+  if (error) throw new NormalizationJobError('load completed normalization analysis.', error);
+  return data.length > 0;
+}
+
 async function claimAnalysis(
   client: QueueDatabaseClient,
   candidate: CandidateRow,
@@ -344,6 +359,27 @@ export async function runNormalizeJob(
   const candidate = candidates[0];
   if (!candidate || candidate.normalization_generation !== input.normalizationGeneration) {
     throw new NormalizationJobError('Normalization payload generation does not match the candidate.');
+  }
+  if (candidate.state !== 'AI Screening') {
+    const locale = LocaleSchema.parse(input.locale);
+    const reusedAnalysisCount = await hasCompletedAnalysis(
+      dependencies.client,
+      inputHash(candidate, promptVersion, locale)
+    ) ? 1 : 0;
+    const checkpoint: NormalizeCheckpoint = {
+      phase: 'completed',
+      processedCandidateCount: 1
+    };
+    await dependencies.onCheckpoint?.(checkpoint);
+    return {
+      processedCount: 1,
+      clusteredCount: 0,
+      rejectedCount: 0,
+      needsReviewCount: 0,
+      deferredCount: 0,
+      reusedAnalysisCount,
+      checkpoint
+    };
   }
   let clusteredCount = 0;
   let rejectedCount = 0;

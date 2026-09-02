@@ -215,6 +215,293 @@ describe('NormalizationExecutionCoordinator', () => {
     );
   });
 
+  it('routes the configured pay-as-you-go provider for normalization', async () => {
+    const paygCatalog: ProviderCatalog = {
+      entries: [{
+        provider: {
+          id: 'custom-openai',
+          billingType: 'payg',
+          health: async () => ({
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            reason: null,
+            retryAfterSeconds: null
+          }),
+          listModels: async () => [],
+          runStructured: async () => {
+            throw new Error('Target execution is required.');
+          }
+        },
+        enabled: true,
+        paidPrimary: true,
+        priority: 0,
+        roles: ['niche_normalization'],
+        health: {
+          available: true,
+          checkedAt: new Date(0).toISOString(),
+          reason: null,
+          retryAfterSeconds: null
+        },
+        models: [{
+          providerId: 'custom-openai',
+          id: 'custom-model',
+          displayName: 'custom-model',
+          capabilities: ['structured_json'],
+          billingType: 'payg',
+          qualityRank: 0
+        }]
+      }]
+    };
+    const attempts = attemptRepository();
+    const resolveTarget = vi.fn(async () => ({
+      providerId: 'custom-openai',
+      modelId: 'custom-model',
+      adapter: null,
+      expectedSettingsRevision: 1,
+      expectedAuthGeneration: 1,
+      expectedExecutionFingerprint: 'custom-fingerprint',
+      execute: async () => ({
+        output,
+        providerId: 'custom-openai',
+        modelId: 'custom-model',
+        role: 'niche_normalization' as const,
+        inputHash: 'input-hash',
+        usage,
+        costClass: 'payg' as const,
+        startedAt: new Date(0).toISOString(),
+        completedAt: new Date(1).toISOString()
+      })
+    }));
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts,
+      runtime: runtimeRepository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget
+    });
+
+    await expect(coordinator.execute({ ...request(), catalog: paygCatalog })).resolves.toMatchObject({
+      kind: 'finalized'
+    });
+    expect(resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'custom-openai',
+        model: expect.objectContaining({ billingType: 'payg' })
+      }),
+      { initialPaidPrimary: true }
+    );
+  });
+
+  // Break: a failed Z.ai primary becomes a PAYG retry or permits generic PAYG fallback.
+  it('does not carry initial PAYG authority past the first attempted provider', async () => {
+    const paygCatalog: ProviderCatalog = {
+      entries: [
+        {
+          provider: {
+            id: 'zai-primary',
+            billingType: 'payg',
+            health: async () => ({
+              available: true,
+              checkedAt: new Date(0).toISOString(),
+              reason: null,
+              retryAfterSeconds: null
+            }),
+            listModels: async () => [],
+            runStructured: async () => {
+              throw new Error('Target execution is required.');
+            }
+          },
+          enabled: true,
+          paidPrimary: true,
+          priority: 0,
+          roles: ['niche_normalization'],
+          health: {
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            reason: null,
+            retryAfterSeconds: null
+          },
+          models: [{
+            providerId: 'zai-primary',
+            id: 'z-ai/glm-5.3-flash',
+            displayName: 'z-ai/glm-5.3-flash',
+            capabilities: ['structured_json'],
+            billingType: 'payg',
+            qualityRank: 0
+          }]
+        },
+        ...catalog(['codex']).entries
+      ]
+    };
+    const authorizations: Array<{
+      readonly providerId: string;
+      readonly initialPaidPrimary: boolean;
+    }> = [];
+    let zaiExecutions = 0;
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts: attemptRepository(),
+      runtime: runtimeRepository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      async resolveTarget(selection, authorization) {
+        authorizations.push({
+          providerId: selection.providerId,
+          initialPaidPrimary: authorization.initialPaidPrimary
+        });
+        if (selection.providerId === 'zai-primary') {
+          return {
+            providerId: 'zai-primary',
+            modelId: 'z-ai/glm-5.3-flash',
+            adapter: null,
+            expectedSettingsRevision: 1,
+            expectedAuthGeneration: 0,
+            expectedExecutionFingerprint: 'zai-fingerprint',
+            async execute() {
+              if (zaiExecutions++ === 0) {
+                throw Object.assign(new Error('spawn rejected'), {
+                  failureClass: 'process_spawn_failure_pre_consumption' as const
+                });
+              }
+              return {
+                output,
+                providerId: 'zai-primary',
+                modelId: 'z-ai/glm-5.3-flash',
+                role: 'niche_normalization' as const,
+                inputHash: 'input-hash',
+                usage,
+                costClass: 'payg' as const,
+                startedAt: new Date(0).toISOString(),
+                completedAt: new Date(1).toISOString()
+              };
+            }
+          };
+        }
+        return target('codex', async () => ({
+          output,
+          providerId: 'codex',
+          modelId: 'codex-model',
+          role: 'niche_normalization',
+          inputHash: 'input-hash',
+          usage,
+          costClass: 'subscription',
+          startedAt: new Date(0).toISOString(),
+          completedAt: new Date(1).toISOString()
+        }));
+      }
+    });
+
+    await expect(coordinator.execute({ ...request(), catalog: paygCatalog })).resolves.toMatchObject({
+      kind: 'finalized'
+    });
+    expect(authorizations).toEqual([
+      { providerId: 'zai-primary', initialPaidPrimary: true },
+      { providerId: 'codex', initialPaidPrimary: false }
+    ]);
+  });
+
+  // Break: a restarted pre-spawn failure is treated as a new initial PAYG route.
+  it('does not restore initial PAYG authority after a durable pre-spawn failure', async () => {
+    const durableParentAttemptId = '00000000-0000-4000-8000-000000000101';
+    const paygCatalog: ProviderCatalog = {
+      entries: [
+        {
+          provider: {
+            id: 'zai-primary',
+            billingType: 'payg',
+            health: async () => ({
+              available: true,
+              checkedAt: new Date(0).toISOString(),
+              reason: null,
+              retryAfterSeconds: null
+            }),
+            listModels: async () => [],
+            runStructured: async () => {
+              throw new Error('Target execution is required.');
+            }
+          },
+          enabled: true,
+          paidPrimary: true,
+          priority: 0,
+          roles: ['niche_normalization'],
+          health: {
+            available: true,
+            checkedAt: new Date(0).toISOString(),
+            reason: null,
+            retryAfterSeconds: null
+          },
+          models: [{
+            providerId: 'zai-primary',
+            id: 'z-ai/glm-5.3-flash',
+            displayName: 'z-ai/glm-5.3-flash',
+            capabilities: ['structured_json'],
+            billingType: 'payg',
+            qualityRank: 0
+          }]
+        },
+        ...catalog(['codex']).entries
+      ]
+    };
+    const attempts = attemptRepository({
+      reconcile: vi.fn(async () => ({
+        attemptedProviderIds: [],
+        pendingWinnerAttemptId: null,
+        fallbackParentAttemptId: durableParentAttemptId
+      }))
+    });
+    const resolveTarget = vi.fn(async (selection) => {
+      if (selection.providerId === 'zai-primary') {
+        return {
+          providerId: 'zai-primary',
+          modelId: 'z-ai/glm-5.3-flash',
+          adapter: null,
+          expectedSettingsRevision: 1,
+          expectedAuthGeneration: 0,
+          expectedExecutionFingerprint: 'zai-fingerprint',
+          async execute() {
+            return {
+              output,
+              providerId: 'zai-primary',
+              modelId: 'z-ai/glm-5.3-flash',
+              role: 'niche_normalization' as const,
+              inputHash: 'input-hash',
+              usage,
+              costClass: 'payg' as const,
+              startedAt: new Date(0).toISOString(),
+              completedAt: new Date(1).toISOString()
+            };
+          }
+        };
+      }
+      return target('codex', async () => ({
+        output,
+        providerId: 'codex',
+        modelId: 'codex-model',
+        role: 'niche_normalization',
+        inputHash: 'input-hash',
+        usage,
+        costClass: 'subscription',
+        startedAt: new Date(0).toISOString(),
+        completedAt: new Date(1).toISOString()
+      }));
+    });
+    const coordinator = new NormalizationExecutionCoordinator({
+      attempts,
+      runtime: runtimeRepository(),
+      semaphores: new AdapterSemaphoreRegistry(),
+      resolveTarget
+    });
+
+    await expect(coordinator.execute({ ...request(), catalog: paygCatalog })).resolves.toMatchObject({
+      kind: 'finalized'
+    });
+    expect(resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'codex' }),
+      { initialPaidPrimary: false }
+    );
+    expect(attempts.begin).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'codex',
+      fallbackParentAttemptId: durableParentAttemptId
+    }));
+  });
+
   // Break: a recoverable Codex failure either retries Codex, selects PAYG, or skips runtime writeback before Grok.
   it('writes a recoverable failure before falling back once to a distinct provider', async () => {
     const calls: string[] = [];
@@ -303,9 +590,10 @@ describe('NormalizationExecutionCoordinator', () => {
 
     await expect(coordinator.execute(request())).resolves.toMatchObject({ kind: 'finalized' });
     expect(resolveTarget).toHaveBeenCalledOnce();
-    expect(resolveTarget).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: 'grok'
-    }));
+    expect(resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'grok' }),
+      { initialPaidPrimary: false }
+    );
     expect(attempts.begin).toHaveBeenCalledOnce();
     expect(attempts.begin).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'grok',

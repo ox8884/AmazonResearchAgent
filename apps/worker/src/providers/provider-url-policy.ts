@@ -283,8 +283,14 @@ export function createPinnedProviderFetch(
       method,
       headers
     };
-    if (typeof init?.body === 'string' || init?.body instanceof Uint8Array) {
-      requestInit.body = init.body;
+    const requestBody =
+      typeof init?.body === 'string' || init?.body instanceof Uint8Array
+        ? init.body
+        : input instanceof Request && input.body
+          ? new Uint8Array(await input.clone().arrayBuffer())
+          : undefined;
+    if (requestBody) {
+      requestInit.body = requestBody;
     }
     const requested = await dispatcher.request(requestInit);
     const responseHeaders = new Headers();

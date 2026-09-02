@@ -89,6 +89,7 @@ export type CopyKey =
   | 'executable'
   | 'fixedArgs'
   | 'networkScope'
+  | 'openRouterZaiOnly'
   | 'commandProfile'
   | 'saveProvider'
   | 'savingProvider'
@@ -252,6 +253,7 @@ export const COPY = {
     fixedArgs: 'Fixed arguments (JSON array)',
     networkScope: 'Network scope',
     commandProfile: 'Command profile',
+    openRouterZaiOnly: 'OpenRouter에서 Z.ai만 사용 (fallback 없음)',
     saveProvider: '저장',
     savingProvider: '저장 중…',
     newOpenAiProvider: '새 OpenAI 호환 Provider',
@@ -412,6 +414,7 @@ export const COPY = {
     networkScope: 'Network scope',
     commandProfile: 'Command profile',
     saveProvider: 'Save',
+    openRouterZaiOnly: 'Use Z.ai only on OpenRouter (no fallback)',
     savingProvider: 'Saving…',
     newOpenAiProvider: 'New OpenAI-Compatible Provider',
     savedProviders: 'Saved providers',

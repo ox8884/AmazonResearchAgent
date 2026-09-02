@@ -121,4 +121,33 @@ describe('worker provider URL policy', () => {
     expect(response.status).toBe(200);
     expect(seen[0]).toContain(`provider.example:${address.port}`);
   });
+
+  it('forwards a POST body carried by a Request input', async () => {
+    let receivedBody = '';
+    const server = createServer((request, response) => {
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => {
+        receivedBody += chunk;
+      });
+      request.on('end', () => {
+        response.statusCode = 200;
+        response.end('ok');
+      });
+    });
+    const address = await listenOnFetchSafeLoopback(server);
+    const fetchPinned = createPinnedProviderFetch('loopback');
+
+    try {
+      const response = await fetchPinned(new Request(`${address.url}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"manual-model"}'
+      }));
+
+      expect(response.status).toBe(200);
+      expect(receivedBody).toBe('{"model":"manual-model"}');
+    } finally {
+      server.close();
+    }
+  });
 });

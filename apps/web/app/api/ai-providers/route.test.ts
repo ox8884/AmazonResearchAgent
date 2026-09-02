@@ -193,6 +193,53 @@ describe('provider settings route', () => {
     );
   });
 
+  it('persists Z.ai-only routing for an OpenRouter provider', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          product: 'openai_compatible_api',
+          name: 'OpenRouter API',
+          billingType: 'payg',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          networkScope: 'public',
+          modelId: 'z-ai/glm-5.3-flash',
+          openRouterProvider: 'z-ai',
+          roles: ['niche_normalization']
+        })
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(fixtures.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({
+        config: expect.objectContaining({ openRouterProvider: 'z-ai' })
+      })
+    }));
+  });
+
+  it('rejects Z.ai-only routing without an OpenRouter Base URL', async () => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          product: 'openai_compatible_api',
+          name: 'Other provider',
+          billingType: 'payg',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          openRouterProvider: 'z-ai',
+          roles: []
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(fixtures.saveSettings).not.toHaveBeenCalled();
+  });
+
 
   it('rejects a model ID equal to the stored secret on blank-key edit', async () => {
     fixtures.findSecret.mockResolvedValue({
@@ -311,6 +358,33 @@ describe('provider settings route', () => {
     );
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({ error: 'settings_conflict' });
+  });
+
+  it('returns 409 when an existing provider model has a different billing type', async () => {
+    const error = new ProviderRepositoryError('save provider settings atomically');
+    Object.assign(error, { cause: { message: 'provider_model_billing_mismatch' } });
+    fixtures.saveSettings.mockRejectedValue(error);
+
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          product: 'openai_compatible_api',
+          id: 'provider-existing',
+          name: 'HTTP provider',
+          billingType: 'payg',
+          baseUrl: 'https://provider.example/v1',
+          networkScope: 'public',
+          modelDiscovery: 'enabled',
+          settingsRevision: 1,
+          roles: []
+        })
+      })
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: 'provider_model_billing_conflict' });
   });
 
   // Break: a product choice can persist browser-controlled execution identity or secrets.

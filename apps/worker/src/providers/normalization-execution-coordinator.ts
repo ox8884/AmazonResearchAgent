@@ -50,6 +50,10 @@ export interface NormalizationExecutionTarget {
   ): Promise<AiProviderResult<KeywordNormalization>>;
 }
 
+export interface NormalizationTargetAuthorization {
+  readonly initialPaidPrimary: boolean;
+}
+
 export interface NormalizationExecutionRequest {
   readonly jobLease: JobLeaseIdentity;
   readonly analysisLease: AnalysisLeaseIdentity;
@@ -77,7 +81,10 @@ export interface NormalizationExecutionCoordinatorDependencies {
   readonly attempts: ProviderAttemptRepository;
   readonly runtime: Pick<ProviderRuntimeRepository, 'applyFailure'>;
   readonly semaphores: AdapterSemaphoreRegistry;
-  resolveTarget(selection: RouteSelection): Promise<NormalizationExecutionTarget>;
+  resolveTarget(
+    selection: RouteSelection,
+    authorization: NormalizationTargetAuthorization
+  ): Promise<NormalizationExecutionTarget>;
 }
 
 export interface CompletedNormalizationFinalizationRequest {
@@ -214,16 +221,29 @@ export class NormalizationExecutionCoordinator {
 
     const excluded = new Set(reconciliation.attemptedProviderIds);
     let fallbackParentAttemptId = reconciliation.fallbackParentAttemptId;
+    let initialPaidPrimaryAvailable =
+      excluded.size === 0 && fallbackParentAttemptId === null;
     if (excluded.size > 0 && fallbackParentAttemptId === null) {
       return this.defer(request);
     }
     for (;;) {
       throwIfAborted(request.signal);
+      const paidPrimaryProviderIds = initialPaidPrimaryAvailable
+        ? request.catalog.entries
+          .filter((entry) => (
+            entry.enabled &&
+            entry.paidPrimary === true &&
+            entry.provider.billingType === 'payg' &&
+            entry.roles?.includes('niche_normalization')
+          ))
+          .map((entry) => entry.provider.id)
+        : [];
       const decision = routeAiRequest(AiRequestSchema.parse({
         role: 'niche_normalization',
         routerMode: 'Balanced',
         locale: request.locale,
         allowPaidFallback: false,
+        paidPrimaryProviderIds,
         excludeProviderIds: [...excluded],
         payload: { candidateId: request.candidateId }
       }), request.catalog);
@@ -231,7 +251,9 @@ export class NormalizationExecutionCoordinator {
         return this.defer(request);
       }
 
-      const target = await this.dependencies.resolveTarget(decision);
+      const target = await this.dependencies.resolveTarget(decision, {
+        initialPaidPrimary: paidPrimaryProviderIds.includes(decision.providerId)
+      });
       if (
         target.providerId !== decision.providerId ||
         target.modelId !== decision.model.id
@@ -329,6 +351,7 @@ export class NormalizationExecutionCoordinator {
           fallbackAllowed = FALLBACK_FAILURES.has(outcome.failureClass);
         }
         if (!fallbackAllowed) throw failure;
+        initialPaidPrimaryAvailable = false;
         fallbackParentAttemptId = authorizationAttemptId;
         if (outcome.failureClass !== 'process_spawn_failure_pre_consumption') {
           excluded.add(target.providerId);
