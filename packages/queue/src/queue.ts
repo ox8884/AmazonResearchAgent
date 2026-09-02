@@ -128,12 +128,6 @@ export interface QueueRepository {
   insertJob(input: JobInsert): Promise<string>;
   findJobIdByIdempotencyKey(key: string): Promise<string | null>;
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]>;
-  claimJobsByType(
-    workerId: string,
-    type: JobType,
-    limit: number,
-    leaseSeconds: number
-  ): Promise<Job[]>;
   completeJob(lease: JobLeaseIdentity, checkpoint: Json): Promise<boolean>;
   failJob(
     lease: JobLeaseIdentity,
@@ -272,24 +266,6 @@ export class SupabaseQueueRepository implements QueueRepository {
     return (data ?? []).map(mapJob);
   }
 
-  async claimJobsByType(
-    workerId: string,
-    type: JobType,
-    limit: number,
-    leaseSeconds: number
-  ): Promise<Job[]> {
-    const { data, error } = await this.client.rpc('claim_jobs_by_type', {
-      worker_id: workerId,
-      requested_type: type,
-      job_limit: limit,
-      lease_seconds: leaseSeconds
-    });
-
-    if (error) {
-      throw new QueueOperationError('claim jobs by type', error.code, error.message);
-    }
-    return (data ?? []).map(mapJob);
-  }
 
   async completeJob(
     lease: JobLeaseIdentity,
@@ -409,15 +385,6 @@ export class DurableQueue {
     return this.repository.claimJobs(workerId, limit, leaseSeconds);
   }
 
-  claimJobsByType(
-    workerId: string,
-    type: JobType,
-    limit: number,
-    leaseSeconds: number
-  ): Promise<Job[]> {
-    assertNonEmpty(workerId, 'workerId');
-    return this.repository.claimJobsByType(workerId, type, limit, leaseSeconds);
-  }
 
   async completeJob(lease: JobLeaseIdentity, checkpoint: unknown): Promise<void> {
     const completed = await this.repository.completeJob(lease, asJson(checkpoint));

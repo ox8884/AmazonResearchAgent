@@ -2127,37 +2127,6 @@ export type Database = {
           isSetofReturn: true
         }
       }
-      claim_jobs_by_type: {
-        Args: {
-          job_limit: number
-          lease_seconds: number
-          requested_type: string
-          worker_id: string
-        }
-        Returns: {
-          attempts: number
-          available_at: string
-          checkpoint: Json
-          created_at: string
-          id: string
-          idempotency_key: string
-          last_error: string | null
-          leased_by: string | null
-          leased_until: string | null
-          max_attempts: number
-          payload: Json
-          priority: number
-          status: string
-          type: string
-          updated_at: string
-        }[]
-        SetofOptions: {
-          from: "*"
-          to: "jobs"
-          isOneToOne: false
-          isSetofReturn: true
-        }
-      }
       commit_ai_provider_acceptance_probe: {
         Args: {
           adapter: string

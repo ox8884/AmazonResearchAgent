@@ -64,40 +64,6 @@ integration('Supabase queue adapter', () => {
     expect(claimed.map((job) => job.id)).toEqual([jobId]);
   });
 
-  // Break: an isolated normalization run claims an unrelated higher-priority job.
-  it('claims only the requested job type', async () => {
-    const suffix = crypto.randomUUID();
-    const unrelatedId = await queue.enqueueJob({
-      type: 'TEST_AI_PROVIDER_CONNECTION',
-      payload: {},
-      idempotencyKey: `queue-it-unrelated-${suffix}`,
-      priority: 1
-    });
-    const normalizationId = await queue.enqueueJob({
-      type: 'NORMALIZE_OPPORTUNITIES',
-      payload: {},
-      idempotencyKey: `queue-it-normalize-${suffix}`,
-      priority: 100
-    });
-
-    const claimed = await queue.claimJobsByType(
-      'integration-normalization-worker',
-      'NORMALIZE_OPPORTUNITIES',
-      1,
-      60
-    );
-    const { data: unrelated, error } = await client
-      .from('jobs')
-      .select('status')
-      .eq('id', unrelatedId)
-      .single();
-    if (error) {
-      throw error;
-    }
-
-    expect(claimed.map((job) => job.id)).toEqual([normalizationId]);
-    expect(unrelated.status).toBe('queued');
-  });
 
   // Break: a running owner cannot durably persist a phase checkpoint.
   it('persists a checkpoint only through the active lease owner', async () => {
