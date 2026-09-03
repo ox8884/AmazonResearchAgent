@@ -305,7 +305,7 @@ export class OpenAiHttpProvider implements RawAiProvider {
           schema: request.schema
         }
       },
-      ...this.openRouterRouting()
+      ...this.openRouterRouting(true)
     };
 
     try {
@@ -333,15 +333,19 @@ export class OpenAiHttpProvider implements RawAiProvider {
     }
   }
 
-  private openRouterRouting(): JsonObject {
+  private openRouterRouting(structuredOutput = false): JsonObject {
     if (this.config.openRouterProvider !== 'z-ai') {
       return {};
     }
     return {
       provider: {
         only: ['z-ai'],
-        allow_fallbacks: false
-      }
+        allow_fallbacks: false,
+        ...(structuredOutput ? { require_parameters: true } : {})
+      },
+      ...(structuredOutput
+        ? { plugins: [{ id: 'response-healing' }] }
+        : {})
     };
   }
 }

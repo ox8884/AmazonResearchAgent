@@ -229,7 +229,7 @@ describe('OpenAI-compatible HTTP provider', () => {
     }]);
   });
 
-  it('locks structured completions to Z.ai when configured for OpenRouter', async () => {
+  it('locks and hardens structured completions for OpenRouter Z.ai', async () => {
     const payloads: unknown[] = [];
     const mock = await startMockServer((incoming, response) => {
       let body = '';
@@ -259,8 +259,10 @@ describe('OpenAI-compatible HTTP provider', () => {
       model: 'cheap-model',
       provider: {
         only: ['z-ai'],
-        allow_fallbacks: false
-      }
+        allow_fallbacks: false,
+        require_parameters: true
+      },
+      plugins: [{ id: 'response-healing' }]
     })]);
   });
 
