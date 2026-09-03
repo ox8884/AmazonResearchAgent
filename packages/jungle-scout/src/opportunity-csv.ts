@@ -113,9 +113,10 @@ function startingLine(info: CsvRecordInfo, raw: string): number {
 
 function mapRow(
   entry: CsvRecordWithInfo,
-  sourceFileName: string
+  sourceFileName: string,
+  sourceLineOffset: number
 ): ParsedOpportunityRow {
-  const sourceRowNumber = startingLine(entry.info, entry.raw);
+  const sourceRowNumber = startingLine(entry.info, entry.raw) + sourceLineOffset;
   const value = (header: RequiredHeader): string =>
     requiredValue(entry.record, header, sourceFileName, sourceRowNumber);
 
@@ -193,9 +194,12 @@ export function parseOpportunityFinderCsv(
     );
   }
 
+  const standardPreamble = /^(?:\uFEFF)?JUNGLESCOUT WEBAPP CSV EXPORT[^\S\r\n]*(?:\r\n|\n|\r)Report Generated at:[^\r\n]*(?:\r\n|\n|\r)/u.exec(input);
+  const sourceLineOffset = standardPreamble ? 2 : 0;
+  const csvInput = standardPreamble ? input.slice(standardPreamble[0].length) : input;
   let headers: string[] = [];
   try {
-    const entries = parse(input, {
+    const entries = parse(csvInput, {
       bom: true,
       columns(rawHeaders: string[]) {
         headers = rawHeaders.map((header) => header.trim());
@@ -227,7 +231,7 @@ export function parseOpportunityFinderCsv(
     return {
       sourceFileName,
       headers,
-      rows: entries.map((entry) => mapRow(entry, sourceFileName))
+      rows: entries.map((entry) => mapRow(entry, sourceFileName, sourceLineOffset))
     };
   } catch (error) {
     if (error instanceof OpportunityCsvParseError) {

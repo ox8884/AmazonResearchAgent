@@ -16,6 +16,20 @@ const PAGE_ONE = readFileSync(pageOnePath, 'utf8');
 const PAGE_TWO = readFileSync(pageTwoPath, 'utf8');
 
 describe('Opportunity Finder CSV parser', () => {
+  it('parses the standard Jungle Scout export preamble', () => {
+    const exportCsv = [
+      'JUNGLESCOUT WEBAPP CSV EXPORT',
+      'Report Generated at: Wed Aug 26 2026 21:29:35 GMT-0500',
+      PAGE_ONE
+    ].join('\n');
+
+    const parsed = parseOpportunityFinderCsv(exportCsv, 'opportunity-finder.csv');
+
+    expect(parsed.rows).toHaveLength(4);
+    expect(parsed.rows[0]?.keyword).toBe('pancake dispenser bottle');
+    expect(parsed.rows[0]?.sourceRowNumber).toBe(4);
+  });
+
   // Break: currency, thousands separators, percentages, or < bounds lose meaning.
   it('parses formatted numeric fields without losing upper-bound meaning', () => {
     const parsed = parseOpportunityFinderCsv(PAGE_ONE, 'page-1.csv');
