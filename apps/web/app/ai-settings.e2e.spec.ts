@@ -144,18 +144,23 @@ test('renders OpenAI-compatible connection test results without secrets', async 
   });
 
   await loginAsAdmin(page, 'ko');
-  const testedCard = page.locator('section.provider-result').filter({ hasText: provider.name });
-  const otherCard = page.locator('section.provider-result').filter({ hasText: secondProvider.name });
-  await testedCard.getByRole('button', { name: '연결 테스트' }).click();
+  // The workspace is bound to the selected provider; A is auto-selected first.
+  const workspace = page.locator('.provider-workspace');
+  await expect(workspace.getByRole('heading', { name: 'Fixture Provider A 수정' })).toBeVisible();
+  await workspace.getByRole('button', { name: '연결 테스트' }).click();
 
   await expect.poll(() => testRequests).toEqual([{ providerId: provider.id }]);
-  const status = testedCard.getByRole('status');
+  const status = workspace.getByRole('status');
   await expect(status).toBeVisible();
   await expect(status).toContainText('openai/gpt-5.6-terra');
   await expect(status).toContainText('openai/gpt-5.6-mini');
-  await expect(otherCard.getByRole('status')).toHaveCount(0);
-  await expect(otherCard).not.toContainText('openai/gpt-5.6-terra');
-  await expect(otherCard).not.toContainText('openai/gpt-5.6-mini');
+
+  // Selecting another provider must not carry the tested result over.
+  await page.getByRole('button', { name: 'Fixture Provider B 수정' }).click();
+  await expect(workspace.getByRole('heading', { name: 'Fixture Provider B 수정' })).toBeVisible();
+  await expect(workspace.getByRole('status')).toHaveCount(0);
+  await expect(page.getByText('openai/gpt-5.6-terra')).toHaveCount(0);
+  await expect(page.getByText('openai/gpt-5.6-mini')).toHaveCount(0);
   await expect(page.getByLabel('API Key')).toHaveValue('');
   expect(JSON.stringify(provider)).not.toContain('plaintext-secret-fixture');
   expect(provider).not.toHaveProperty('apiKey');

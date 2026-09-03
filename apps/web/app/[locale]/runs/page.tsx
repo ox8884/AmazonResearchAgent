@@ -18,7 +18,7 @@ export default async function RunsPage({
       <header className="page-heading page-heading--split">
         <div>
           <h1>{copy.runsTitle}</h1>
-          <p>{copy.statusLabel}: {runs.length}</p>
+          <p>{copy.runsProvenanceNote}</p>
         </div>
         <a className="button button--secondary" href={localizedHref(locale, '/dashboard')}>
           {copy.navDashboard}

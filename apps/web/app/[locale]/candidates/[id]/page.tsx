@@ -23,29 +23,41 @@ export default async function CandidateDetailPage({
   const locale = parseLocale(localeParam);
   const copy = getCopy(locale);
   const candidate = await getCandidateDetailView(id);
+  const hasScore =
+    candidate.competition !== null ||
+    candidate.demand !== null ||
+    candidate.margin !== null ||
+    candidate.differentiation !== null;
   return (
     <div className="content-stack">
       <a className="back-link" href={localizedHref(locale, '/candidates')}>{copy.navCandidates}</a>
       <header className="page-heading candidate-detail-heading">
         <div>
+          <p className="candidate-detail__question">{copy.detailVerdictQuestion}</p>
           <h1>{candidate.keyword ?? copy.candidateTitle}</h1>
         </div>
         <div className="candidate-detail-heading__meta">
           <CandidateStateBadge state={candidate.state ?? 'Discovered'} locale={locale} />
-          <code>{id}</code>
         </div>
       </header>
-      <CandidateScoreCard
-        locale={locale}
-        competition={candidate.competition}
-        demand={candidate.demand}
-        margin={candidate.margin}
-        differentiation={candidate.differentiation}
-      />
-      <section className="panel evidence-panel" aria-labelledby="evidence-title">
+      <section className="evidence-panel" aria-labelledby="evidence-title">
         <div className="section-heading">
-          <h2 id="evidence-title">{copy.evidenceLabel}</h2>
-          <span className="section-count">{candidate.evidence.length}</span>
+          <h2 id="evidence-title">{copy.detailSignalsTitle}</h2>
+          {hasScore ? (
+            <span className="section-count">{candidate.evidence.length}</span>
+          ) : (
+            <span className="section-count section-count--uncomputed">{copy.signalsNotComputed}</span>
+          )}
+        </div>
+        <CandidateScoreCard
+          locale={locale}
+          competition={candidate.competition}
+          demand={candidate.demand}
+          margin={candidate.margin}
+          differentiation={candidate.differentiation}
+        />
+        <div className="section-heading detail-gap-heading">
+          <h2>{copy.detailGapTitle}</h2>
         </div>
         {candidate.evidence.length === 0 ? (
           <p className="empty-state">{copy.noEvidence}</p>
@@ -72,6 +84,15 @@ export default async function CandidateDetailPage({
             })}
           </div>
         )}
+        <details className="candidate-detail__technical">
+          <summary>{copy.technicalDetails}</summary>
+          <dl>
+            <div>
+              <dt>{copy.importIdLabel}</dt>
+              <dd><code>{id}</code></dd>
+            </div>
+          </dl>
+        </details>
       </section>
     </div>
   );

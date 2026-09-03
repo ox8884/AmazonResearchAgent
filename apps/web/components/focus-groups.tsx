@@ -1,55 +1,78 @@
-import { getCopy, RuleReasonSchema, type Locale } from '@ara/shared';
-import { formatCount, type FocusGroup } from '../lib/dashboard-metrics';
+import { getCopy, type Locale } from '@ara/shared';
+import { formatCount } from '../lib/dashboard-metrics';
 import { localizedHref } from '../lib/locale';
-import type { CandidateSummary } from '../lib/server/dashboard-data';
-import {
-  ButtonLink,
-  CandidateStateBadge,
-  toneForState
-} from './ui';
+import type { ResearchObject } from '../lib/research-objects';
+import { ButtonLink, CandidateStateBadge } from './ui';
 
-const PREVIEW_ROWS = 3;
-
-function stateElementId(state: string): string {
-  return `focus-${state.replace(/\s+/g, '-').toLowerCase()}`;
-}
-
-function GroupRow({
+/**
+ * The dashboard queue: the same research objects the Candidates page shows,
+ * in compact form. The focal decision (DecisionCall) owns the judgment
+ * narrative; this list only names objects, their state, and how to open
+ * them. Lead state/reason/link all read from the object's single lead
+ * record; mixed-state objects show the real state counts.
+ */
+function ResearchObjectItem({
   locale,
-  candidate
+  object
 }: {
   locale: Locale;
-  candidate: CandidateSummary;
+  object: ResearchObject;
 }) {
   const copy = getCopy(locale);
-  const detailHref = localizedHref(locale, `/candidates/${candidate.id}`);
-  const reasons = RuleReasonSchema.array().safeParse(candidate.rule_reasons);
+  const detailHref = localizedHref(locale, `/candidates/${object.leadRecord.id}`);
   return (
     <li className="group-row">
       <div className="group-row__primary">
         <a className="group-row__keyword" href={detailHref}>
-          {candidate.keyword}
+          {object.keyword}
         </a>
-        {reasons.success && reasons.data.length > 0 ? (
+        {object.leadReason ? (
           <p className="group-row__reason">
-            {reasons.data.map((reason) => (
-              <span className="reason-code" key={`${reason.code}:${reason.detail}`}>
-                {reason.code}: {reason.detail}
-              </span>
-            ))}
+            <span className="reason-code">
+              {object.leadReason[0]!.code}: {object.leadReason[0]!.detail}
+            </span>
           </p>
         ) : null}
       </div>
-      {candidate.preliminary_score !== null ? (
-        <span className="group-row__score">
-          <span className="visually-hidden">{copy.scoreLabel}: </span>
-          {candidate.preliminary_score}
-        </span>
+      <span className="group-row__state">
+        {object.mixedStates ? (
+          <span className="research-object__breakdown">
+            {object.stateBreakdown.map((entry, index) => (
+              <span className="research-object__breakdown-item" key={entry.state}>
+                {index > 0 ? <span className="research-object__breakdown-dot" aria-hidden="true"> · </span> : null}
+                <CandidateStateBadge state={entry.state} locale={locale} />
+                <span className="research-object__breakdown-count">{entry.count}</span>
+              </span>
+            ))}
+          </span>
+        ) : object.leadState ? (
+          <CandidateStateBadge state={object.leadState} locale={locale} />
+        ) : null}
+      </span>
+      {object.records.length > 1 ? (
+        <details className="group-row__records">
+          <summary>
+            {formatCount(copy.recordsInGroup, object.records.length)}
+          </summary>
+          <ul className="group-row__record-list">
+            {object.records.map((record) => (
+              <li key={record.id}>
+                <a
+                  href={localizedHref(locale, `/candidates/${record.id}`)}
+                  aria-label={`${copy.openCandidate}: ${record.keyword}`}
+                >
+                  {copy.openCandidate}
+                </a>
+                <span>{record.id}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       <a
         className="group-row__action"
         href={detailHref}
-        aria-label={`${copy.openCandidate}: ${candidate.keyword}`}
+        aria-label={`${copy.openCandidate}: ${object.keyword}`}
       >
         {copy.openCandidate}
       </a>
@@ -57,64 +80,13 @@ function GroupRow({
   );
 }
 
-function FocusGroupSection({
-  locale,
-  group,
-  lead
-}: {
-  locale: Locale;
-  group: FocusGroup;
-  lead: boolean;
-}) {
-  const copy = getCopy(locale);
-  const preview = group.rows.slice(0, PREVIEW_ROWS);
-  const rest = group.rows.slice(PREVIEW_ROWS);
-  const beyondQueue = Math.max(0, group.total - group.rows.length);
-  return (
-    <section
-      className={`focus-group focus-group--${toneForState(group.state)}${lead ? ' focus-group--lead' : ''}`}
-      aria-labelledby={stateElementId(group.state)}
-    >
-      <div className="focus-group__head">
-        <h3 id={stateElementId(group.state)}>
-          <CandidateStateBadge state={group.state} locale={locale} />
-        </h3>
-        <span className="focus-group__count">{group.total}</span>
-      </div>
-      {group.rows.length > 0 && group.allRowsLackRationale ? (
-        <p className="focus-group__confidence">{copy.confidenceNotice}</p>
-      ) : null}
-      <ul className="focus-group__rows">
-        {preview.map((candidate) => (
-          <GroupRow key={candidate.id} locale={locale} candidate={candidate} />
-        ))}
-      </ul>
-      {rest.length > 0 ? (
-        <details className="focus-group__details">
-          <summary>{formatCount(copy.groupMore, rest.length)}</summary>
-          <ul className="focus-group__rows">
-            {rest.map((candidate) => (
-              <GroupRow key={candidate.id} locale={locale} candidate={candidate} />
-            ))}
-          </ul>
-        </details>
-      ) : null}
-      {beyondQueue > 0 ? (
-        <a className="focus-group__all" href={localizedHref(locale, '/candidates')}>
-          {formatCount(copy.groupAllCandidates, group.total)}
-        </a>
-      ) : null}
-    </section>
-  );
-}
-
 export function FocusGroups({
   locale,
-  groups,
+  objects,
   ready
 }: {
   locale: Locale;
-  groups: readonly FocusGroup[];
+  objects: readonly ResearchObject[];
   ready: boolean;
 }) {
   const copy = getCopy(locale);
@@ -123,14 +95,14 @@ export function FocusGroups({
       <div className="section-heading">
         <div className="section-heading__title">
           <h2 id="focus-groups-title">{copy.focusTitle}</h2>
-          {ready ? <span className="section-count">{groups.length}</span> : null}
+          {ready ? <span className="section-count">{objects.length}</span> : null}
         </div>
         <a href={localizedHref(locale, '/candidates')}>{copy.navCandidates}</a>
       </div>
       <p className="focus-order-note">{copy.focusOrderNote}</p>
       {!ready ? (
         <p className="queue-status">{copy.statusUnavailable}</p>
-      ) : groups.length === 0 ? (
+      ) : objects.length === 0 ? (
         <div className="queue-empty">
           <p className="queue-empty__title">{copy.noCandidates}</p>
           <p className="queue-empty__hint">{copy.queueEmptyHint}</p>
@@ -139,16 +111,11 @@ export function FocusGroups({
           </ButtonLink>
         </div>
       ) : (
-        <div className="focus-group-list">
-          {groups.map((group, index) => (
-            <FocusGroupSection
-              key={group.state}
-              locale={locale}
-              group={group}
-              lead={index === 0}
-            />
+        <ul className="focus-group-list">
+          {objects.map((object) => (
+            <ResearchObjectItem key={object.key} locale={locale} object={object} />
           ))}
-        </div>
+        </ul>
       )}
     </section>
   );

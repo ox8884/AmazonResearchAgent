@@ -2,6 +2,28 @@
 
 ## 0. Research Log
 
+### Product experience rebuild (2026-09-02, decision-desk pass)
+
+Prompt: `session-prompts/2026-09-02-product-experience-rebuild-prompt.md`. Previous passes fixed tokens and per-surface structure, but the app still reads as a well-made internal tool because each page is an isolated, rhythmically identical composition: page title → wide margin → same-size panels → row list. Three root causes:
+
+1. **No screen owns the decision grammar.** The shell announces six destinations of equal weight; nothing shows where the operator stands in `발견 → 판단 → 실행 → 운영`. Navigation is a link list, not a workflow spine.
+2. **Equal-weight section rhythm.** Every surface composes the same: heading, inset panel, hairline rows, a chip per value. Dashboard sections compete as peers; candidates read as rows not comparable objects; runs/imports read as tables not provenance; AI Settings reads as a polished form, not the capability view that feeds the desk.
+3. **Data has no written voice.** Numbers are styled, but screens never narrate recorded state (what deserves attention, what is missing, what the next move is) in editorial type; after the briefing sentence the page falls back to admin cadence.
+
+Directions considered:
+
+1. **"Desk sections"** (cosmetic rework) — keep the shell, restyle each page with more asymmetric proportion and larger numerals. Rejected: repeats the anti-reference — prettier admin pages, still six disconnected surfaces.
+2. **"Decision desk" (chosen)** — one product grammar `decision object → evidence → confidence gap → next action`, expressed differently per surface, plus a **workflow spine** in the shell: nav items grouped by the phase of the research loop they serve (판단 = dashboard/candidates, 실행·운영 = runs/imports/settings + AI settings), the active phase marked in the masthead, and each surface's role changing its density and rhythm:
+   - **Dashboard** = the desk's front page: one focal decision (a review call backed by reason, confidence gap, and the next action in one reading flow), then pipeline signal and provenance strip at subordinate weight.
+   - **Candidates** = comparison ledger: each row a compact research object (keyword, judgment phase, confidence state, score, next action) with verdict-first column order.
+   - **Candidate detail** = review brief: verdict question first, core signals, evidence, then what is missing — not a metadata wall.
+   - **Runs / Imports** = provenance traces: freshness and origin of the data behind judgments; date-led with perceived hierarchy between status/time/source/count; no badge-per-value.
+   - **AI Settings** = capability fleet console preserved (directory, workspace, scoped results) but rebalanced to read as the desk's engine: fleet summary as the opening read, identity/role/connection before technical meta.
+
+**Choice: Decision desk.** Material and colour roles stay Ink & Signal (paper, ink, rules, one cobalt signal — no gradients, glass, or dark-SaaS regression); the reset comes from the workflow spine, editorial narration of recorded state, and per-surface rhythm. No new dependencies.
+
+Conservation: all routes, data derivation (recorded state counts, scores, budget record only), provider semantics, auth/locale routing, and E2E contracts (`지금 리서치`, import flow, showcase headings, provider result scoping, masked keys) unchanged.
+
 ### Direction reset (2026-09-02, visual direction reset pass)
 
 The information architecture now follows `signal → evidence → confidence → decision → action` (previous passes), but the surfaces still read as a safe admin dashboard: dark left rail, warm canvas, stacked identical white cards, thin borders, small badges. This pass resets the aesthetic direction itself. Two directions were considered:

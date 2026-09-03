@@ -61,7 +61,6 @@ export type CopyKey =
   | 'uploadSuccess'
   | 'uploadError'
   | 'returnToImports'
-  | 'importIdLabel'
   | 'privacyNote'
   | 'viewAllImports'
   | 'skipToContent'
@@ -221,8 +220,53 @@ export type CopyKey =
   | 'bottleneckNone'
   | 'bottleneckFlowing'
   | 'pipelinePathLabel'
-  | 'opsTitle';
-
+  | 'opsTitle'
+  | 'fleetTitle'
+  | 'fleetEnabled'
+  | 'fleetAttention'
+  | 'fleetTotal'
+  | 'fleetRoles'
+  | 'addProvider'
+  | 'testSectionTitle'
+  | 'workspaceNewHint'
+  | 'navPhaseJudge'
+  | 'navPhaseOperate'
+  | 'navPhaseAi'
+  | 'detailVerdictQuestion'
+  | 'detailSignalsTitle'
+  | 'detailGapTitle'
+  | 'detailNextTitle'
+  | 'detailNoScore'
+  | 'candidatesJudgeNote'
+  | 'candidatesColJudgment'
+  | 'candidatesColConfidence'
+  | 'candidatesNextAction'
+  | 'runsProvenanceNote'
+  | 'importsProvenanceNote'
+  | 'importsFreshness'
+  | 'decisionCallTitle'
+  | 'decisionWhy'
+  | 'decisionGap'
+  | 'decisionGapNone'
+  | 'decisionAct'
+  | 'decisionEmptyTitle'
+  | 'decisionEmptyBody'
+  | 'researchObjectLabel'
+  | 'recordsInGroup'
+  | 'groupShowRecords'
+  | 'groupHideRecords'
+  | 'groupStatesSummary'
+  | 'scoreNotVerdict'
+  | 'preVerificationLabel'
+  | 'preVerificationDetail'
+  | 'groupNextActionOpen'
+  | 'importsRecordSummary'
+  | 'importsSameTimestampNote'
+  | 'importIdLabel'
+  | 'importRecordOrdinal'
+  | 'signalsNotComputed'
+  | 'importTimestampNote'
+  | 'navCurrentLocation';
 type CopyDictionary = Record<CopyKey, string>;
 
 export const COPY = {
@@ -427,7 +471,52 @@ export const COPY = {
     bottleneckNone: '막힌 단계가 기록되어 있지 않습니다.',
     bottleneckFlowing: '막힘 없이 진행 중인 후보 {count}개',
     pipelinePathLabel: '단계별 후보 수',
-    opsTitle: '운영 현황'
+    opsTitle: '운영 현황',
+    fleetTitle: '현재 Fleet 상태',
+    fleetEnabled: '활성',
+    fleetAttention: '주의 필요',
+    fleetTotal: '등록',
+    fleetRoles: '역할',
+    addProvider: '새 provider 추가',
+    testSectionTitle: '연결 테스트 결과',
+    workspaceNewHint: 'Provider를 저장하면 연결 테스트를 사용할 수 있습니다.',
+    navPhaseJudge: '판단',
+    navPhaseOperate: '실행·운영',
+    navPhaseAi: 'AI 운영',
+    detailVerdictQuestion: '이 기회를 진행할 근거가 충분한가?',
+    detailSignalsTitle: '핵심 신호',
+    detailGapTitle: '아직 부족한 근거',
+    detailNextTitle: '다음 검증',
+    detailNoScore: '점수가 아직 계산되지 않았습니다. 근거 수집이 먼저입니다.',
+    candidatesJudgeNote: '행마다 판단 단계, 근거 상태, 다음 조치가 함께 보입니다. 위에서부터 비교해 결정하세요.',
+    candidatesColJudgment: '판단',
+    candidatesColConfidence: '근거',
+    candidatesNextAction: '다음',
+    runsProvenanceNote: '각 실행은 후보 판단에 쓰인 데이터가 언제, 어디서 만들어졌는지 보여 줍니다.',
+    importsProvenanceNote: '가져오기는 후보 데이터의 원천입니다. 최근 항목일수록 판단 근거가 신선합니다.',
+    importsFreshness: '데이터 기준',
+    decisionCallTitle: '오늘의 판단',
+    decisionWhy: '근거',
+    decisionGap: '확인되지 않은 것',
+    decisionGapNone: '기록된 근거만으로 판단 가능한 상태입니다.',
+    decisionAct: '다음 행동',
+    decisionEmptyTitle: '아직 판단할 후보가 없습니다.',
+    decisionEmptyBody: 'CSV를 가져오면 Opportunity Finder 키워드가 후보로 등록되고 첫 판단이 만들어집니다.',
+    researchObjectLabel: '연구 대상',
+    recordsInGroup: '레코드 {count}개',
+    groupShowRecords: '같은 키워드의 레코드 {count}개 보기',
+    groupHideRecords: '레코드 접기',
+    groupStatesSummary: '단계: {states}',
+    scoreNotVerdict: '점수는 초기 스크리닝 값이며 결정이 아닙니다.',
+    preVerificationLabel: '검증 전',
+    preVerificationDetail: '수집된 근거가 없어 아직 판단할 수 없습니다.',
+    groupNextActionOpen: '레코드를 열어 검토',
+    importsRecordSummary: '파일 {files}개 · 원본 행 {rows}개 · 고유 키워드 {keywords}개',
+    importsSameTimestampNote: '아래 항목들은 서로 다른 가져오기 기록입니다.',
+    importRecordOrdinal: '기록 {ordinal}',
+    signalsNotComputed: '미계산',
+    importTimestampNote: '동일 시각에 등록된 별도 import 기록입니다. 기록 번호는 목록 순서이며 원본 식별자가 아닙니다.',
+    navCurrentLocation: '현재 위치: {page}'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -630,7 +719,53 @@ export const COPY = {
     bottleneckNone: 'No blocked stage is recorded.',
     bottleneckFlowing: '{count} candidates moving without a block',
     pipelinePathLabel: 'Candidates by stage',
-    opsTitle: 'Operations'
+    opsTitle: 'Operations',
+    fleetTitle: 'Fleet status',
+    fleetEnabled: 'Enabled',
+    fleetAttention: 'Need attention',
+    fleetRoles: 'Roles',
+    fleetTotal: 'Total',
+    addProvider: 'Add provider',
+    testSectionTitle: 'Connection test result',
+    workspaceNewHint: 'Save the provider to enable connection testing.',
+    navPhaseJudge: 'Judge',
+    navPhaseOperate: 'Run & operate',
+    navPhaseAi: 'AI operations',
+    detailVerdictQuestion: 'Is the evidence strong enough to advance this opportunity?',
+    detailSignalsTitle: 'Core signals',
+    importsFreshness: 'Data as of',
+    detailGapTitle: 'Evidence still missing',
+    detailNextTitle: 'Next verification',
+    detailNoScore: 'No score has been computed yet. Evidence collection comes first.',
+    decisionCallTitle: "Today's decision",
+    decisionWhy: 'Why',
+    decisionGap: 'Not yet verified',
+    decisionGapNone: 'The recorded evidence is sufficient to decide.',
+    decisionAct: 'Next action',
+    decisionEmptyTitle: 'No candidates to judge yet.',
+    decisionEmptyBody: 'Import a CSV to register Opportunity Finder keywords as candidates and create the first judgment.',
+    researchObjectLabel: 'Research object',
+    recordsInGroup: '{count} records',
+    groupShowRecords: 'Show {count} records for this keyword',
+    groupHideRecords: 'Collapse records',
+    groupStatesSummary: 'Stages: {states}',
+    scoreNotVerdict: 'The score is an early screening value, not a decision.',
+    preVerificationLabel: 'Pre-verification',
+    preVerificationDetail: 'No evidence collected yet; it cannot be judged.',
+    groupNextActionOpen: 'Open a record to review',
+    importsRecordSummary: '{files} files · {rows} raw rows · {keywords} unique keywords',
+    importsSameTimestampNote: 'The entries below are separate import records.',
+    importRecordOrdinal: 'Record {ordinal}',
+    signalsNotComputed: 'Not computed',
+    importTimestampNote: 'Separate import records registered at the same time. Record numbers are list positions, not source identifiers.',
+    navCurrentLocation: 'Current location: {page}',
+    candidatesJudgeNote: 'Each row shows the judgment phase, evidence state, and next action together. Compare from the top and decide.',
+    candidatesColJudgment: 'Judgment',
+    candidatesColConfidence: 'Evidence',
+    candidatesNextAction: 'Next',
+    runsProvenanceNote: 'Each run traces when and where the data behind candidate judgments was produced.',
+    importsProvenanceNote: 'Imports are the origin of candidate data; the most recent entries carry the freshest judgment basis.',
+
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

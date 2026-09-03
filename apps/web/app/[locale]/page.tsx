@@ -1,4 +1,5 @@
 import { getCopy } from '@ara/shared';
+import { DecisionCall } from '../../components/decision-call';
 import { FocusGroups } from '../../components/focus-groups';
 import { PipelineSignal } from '../../components/pipeline-signal';
 import { ResearchNowButton } from '../../components/research-now-button';
@@ -7,11 +8,8 @@ import {
   localeDate
 } from '../../components/ui';
 import { localizedHref, parseLocale } from '../../lib/locale';
-import {
-  buildFocusGroups,
-  formatCount,
-  summarizeStateCounts
-} from '../../lib/dashboard-metrics';
+import { formatCount, summarizeStateCounts } from '../../lib/dashboard-metrics';
+import { buildResearchObjects } from '../../lib/research-objects';
 import {
   getApiBudgetMeterView,
   getCandidateStateCountsView,
@@ -37,7 +35,7 @@ export default async function DashboardPage({
   const ready = dashboard.kind === 'ready';
   const data = dashboard.data;
   const summary = summarizeStateCounts(stateCounts);
-  const groups = ready ? buildFocusGroups(data.candidates, stateCounts) : [];
+  const objects = ready ? buildResearchObjects(data.candidates) : [];
 
   // Briefing tiers, deterministic from recorded state counts only:
   // review-needed → budget wait → capacity wait → in progress → decided → empty.
@@ -69,15 +67,25 @@ export default async function DashboardPage({
         {ready ? null : (
           <p className="notice notice--error" role="status">{copy.dataUnavailable}</p>
         )}
-        <div className="briefing__actions">
-          <ResearchNowButton locale={locale} />
-          <a className="briefing__quiet-link" href={localizedHref(locale, '/imports/new')}>
-            {copy.newImport}
-          </a>
-        </div>
       </header>
 
-      <FocusGroups locale={locale} groups={groups} ready={ready} />
+      {ready && objects.length > 0 ? (
+        <DecisionCall locale={locale} object={objects[0]!} />
+      ) : ready ? (
+        <section className="panel decision-call decision-call--empty" aria-labelledby="decision-call-title">
+          <p className="decision-call__eyebrow">{copy.decisionCallTitle}</p>
+          <h2 id="decision-call-title">{copy.decisionEmptyTitle}</h2>
+          <p className="decision-call__body">{copy.decisionEmptyBody}</p>
+          <div className="briefing__actions">
+            <ResearchNowButton locale={locale} />
+            <a className="briefing__quiet-link" href={localizedHref(locale, '/imports/new')}>
+              {copy.newImport}
+            </a>
+          </div>
+        </section>
+      ) : null}
+
+      <FocusGroups locale={locale} objects={objects} ready={ready} />
 
       <PipelineSignal
         locale={locale}
