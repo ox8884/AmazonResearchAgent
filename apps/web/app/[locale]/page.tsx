@@ -1,14 +1,17 @@
 import { getCopy } from '@ara/shared';
-import { DecisionQueue } from '../../components/decision-queue';
-import { ResearchPulse } from '../../components/research-pulse';
+import { FocusGroups } from '../../components/focus-groups';
+import { PipelineSignal } from '../../components/pipeline-signal';
 import { ResearchNowButton } from '../../components/research-now-button';
 import {
-  ButtonLink,
   LocalizedStatusBadge,
   localeDate
 } from '../../components/ui';
 import { localizedHref, parseLocale } from '../../lib/locale';
-import { formatCount, summarizeStateCounts } from '../../lib/dashboard-metrics';
+import {
+  buildFocusGroups,
+  formatCount,
+  summarizeStateCounts
+} from '../../lib/dashboard-metrics';
 import {
   getApiBudgetMeterView,
   getCandidateStateCountsView,
@@ -34,16 +37,23 @@ export default async function DashboardPage({
   const ready = dashboard.kind === 'ready';
   const data = dashboard.data;
   const summary = summarizeStateCounts(stateCounts);
+  const groups = ready ? buildFocusGroups(data.candidates, stateCounts) : [];
 
+  // Briefing tiers, deterministic from recorded state counts only:
+  // review-needed → budget wait → capacity wait → in progress → decided → empty.
   const briefingLine = !ready
     ? copy.briefingUnavailable
     : summary.review > 0
       ? formatCount(copy.briefingNeedsReview, summary.review)
-      : summary.inProgress > 0
-        ? formatCount(copy.briefingInProgress, summary.inProgress)
-        : summary.total > 0
-          ? formatCount(copy.briefingRecorded, summary.total)
-          : copy.noCandidates;
+      : summary.waitingBudget > 0
+        ? formatCount(copy.briefingBudgetWait, summary.waitingBudget)
+        : summary.waitingCapacity > 0
+          ? formatCount(copy.briefingCapacityWait, summary.waitingCapacity)
+          : summary.inProgress > 0
+            ? formatCount(copy.briefingInProgress, summary.inProgress)
+            : summary.total > 0
+              ? formatCount(copy.briefingDecided, summary.total)
+              : copy.noCandidates;
 
   const generatedAt = new Intl.DateTimeFormat(
     locale === 'ko' ? 'ko-KR' : 'en-US',
@@ -61,54 +71,52 @@ export default async function DashboardPage({
         )}
         <div className="briefing__actions">
           <ResearchNowButton locale={locale} />
-          <ButtonLink href={localizedHref(locale, '/imports/new')} variant="secondary">
+          <a className="briefing__quiet-link" href={localizedHref(locale, '/imports/new')}>
             {copy.newImport}
-          </ButtonLink>
+          </a>
         </div>
       </header>
 
-      <div className="dashboard-grid">
-        <DecisionQueue locale={locale} candidates={data.candidates} ready={ready} />
-        <div className="dashboard-grid__aside">
-          <ResearchPulse
-            locale={locale}
-            counts={jobCounts}
-            budget={apiBudget}
-            summary={summary}
-            importsTotal={data.totals.imports}
-            ready={ready}
-          />
-          <section
-            className="panel panel--inset recent-imports-evidence"
-            aria-labelledby="recent-imports-title"
-          >
-            <div className="section-heading">
-              <h2 id="recent-imports-title">{copy.recentImports}</h2>
-              <a href={localizedHref(locale, '/imports')}>{copy.viewAllImports}</a>
-            </div>
-            {data.imports.length === 0 ? (
-              <p className="evidence-empty">{copy.noImports}</p>
-            ) : (
-              <ul className="evidence-imports">
-                {data.imports.slice(0, 3).map((importRun) => (
-                  <li key={importRun.id}>
-                    <div className="evidence-imports__main">
-                      <span className="evidence-imports__date">
-                        {localeDate(importRun.created_at, locale)}
-                      </span>
-                      <LocalizedStatusBadge status={importRun.status} locale={locale} />
-                    </div>
-                    <span className="evidence-imports__counts">
-                      {importRun.file_count} {copy.fileCount} · {importRun.total_row_count}{' '}
-                      {copy.rowCount}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+      <FocusGroups locale={locale} groups={groups} ready={ready} />
+
+      <PipelineSignal
+        locale={locale}
+        summary={summary}
+        budget={apiBudget}
+        counts={jobCounts}
+        importsTotal={data.totals.imports}
+        ready={ready}
+      />
+
+      <section
+        className="panel panel--inset recent-imports-evidence"
+        aria-labelledby="recent-imports-title"
+      >
+        <div className="section-heading">
+          <h2 id="recent-imports-title">{copy.recentImports}</h2>
+          <a href={localizedHref(locale, '/imports')}>{copy.viewAllImports}</a>
         </div>
-      </div>
+        {data.imports.length === 0 ? (
+          <p className="evidence-empty">{copy.noImports}</p>
+        ) : (
+          <ul className="evidence-imports">
+            {data.imports.slice(0, 3).map((importRun) => (
+              <li key={importRun.id}>
+                <div className="evidence-imports__main">
+                  <span className="evidence-imports__date">
+                    {localeDate(importRun.created_at, locale)}
+                  </span>
+                  <LocalizedStatusBadge status={importRun.status} locale={locale} />
+                </div>
+                <span className="evidence-imports__counts">
+                  {importRun.file_count} {copy.fileCount} · {importRun.total_row_count}{' '}
+                  {copy.rowCount}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

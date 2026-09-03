@@ -204,7 +204,24 @@ export type CopyKey =
   | 'budgetZero'
   | 'budgetBlocked'
   | 'budgetRemainingLabel'
-  | 'researchNowPending';
+  | 'researchNowPending'
+  | 'providerGroupIdentity'
+  | 'providerGroupCapability'
+  | 'providerGroupRouting'
+  | 'providerGroupConnection'
+  | 'briefingBudgetWait'
+  | 'briefingCapacityWait'
+  | 'briefingDecided'
+  | 'focusTitle'
+  | 'focusOrderNote'
+  | 'groupMore'
+  | 'groupAllCandidates'
+  | 'confidenceNotice'
+  | 'bottleneckTitle'
+  | 'bottleneckNone'
+  | 'bottleneckFlowing'
+  | 'pipelinePathLabel'
+  | 'opsTitle';
 
 type CopyDictionary = Record<CopyKey, string>;
 
@@ -393,7 +410,24 @@ export const COPY = {
     budgetZero: '오늘 사용 가능한 API 예산이 0입니다.',
     budgetBlocked: '예산이 소진되어 후보 {count}개가 대기 중입니다.',
     budgetRemainingLabel: '잔여',
-    researchNowPending: '대기열에 추가하는 중…'
+    researchNowPending: '대기열에 추가하는 중…',
+    providerGroupIdentity: 'Provider 식별',
+    providerGroupCapability: '역할과 모델',
+    providerGroupRouting: '라우팅과 우선순위',
+    providerGroupConnection: '보안 연결',
+    briefingBudgetWait: 'API 예산을 기다리는 후보가 {count}개 있습니다.',
+    briefingCapacityWait: 'AI 용량을 기다리는 후보가 {count}개 있습니다.',
+    briefingDecided: '결정이 완료된 후보가 {count}개 있습니다.',
+    focusTitle: '지금 검토할 묶음',
+    focusOrderNote: '확인 필요와 대기 상태를 먼저 묶고, 각 묶음 안에서는 preliminary score 순으로 정렬합니다.',
+    groupMore: '같은 상태의 후보 {count}개 더 보기',
+    groupAllCandidates: '이 상태 전체 {count}개는 후보 목록에서 보기',
+    confidenceNotice: '이 묶음의 후보에는 아직 기록된 근거가 없습니다.',
+    bottleneckTitle: '파이프라인 병목',
+    bottleneckNone: '막힌 단계가 기록되어 있지 않습니다.',
+    bottleneckFlowing: '막힘 없이 진행 중인 후보 {count}개',
+    pipelinePathLabel: '단계별 후보 수',
+    opsTitle: '운영 현황'
   },
   en: {
     appName: 'Amazon Research Agent',
@@ -579,7 +613,24 @@ export const COPY = {
     budgetZero: 'No API budget is available for today.',
     budgetBlocked: 'Budget is exhausted; {count} candidates are waiting.',
     budgetRemainingLabel: 'Remaining',
-    researchNowPending: 'Queueing…'
+    researchNowPending: 'Queueing…',
+    providerGroupIdentity: 'Provider identity',
+    providerGroupCapability: 'Capability and role',
+    providerGroupRouting: 'Routing and priority',
+    providerGroupConnection: 'Secure connection',
+    briefingBudgetWait: '{count} candidates are waiting for API budget.',
+    briefingCapacityWait: '{count} candidates are waiting for AI capacity.',
+    briefingDecided: '{count} candidates are fully decided.',
+    focusTitle: 'Focus now',
+    focusOrderNote: 'Groups run from needs-review and blocked states first; candidates inside each group are ordered by preliminary score.',
+    groupMore: 'Show {count} more candidates in this state',
+    groupAllCandidates: 'See all {count} in Candidates',
+    confidenceNotice: 'No recorded rationale yet for the candidates in this group.',
+    bottleneckTitle: 'Pipeline bottleneck',
+    bottleneckNone: 'No blocked stage is recorded.',
+    bottleneckFlowing: '{count} candidates moving without a block',
+    pipelinePathLabel: 'Candidates by stage',
+    opsTitle: 'Operations'
   }
 } as const satisfies Record<Locale, CopyDictionary>;
 

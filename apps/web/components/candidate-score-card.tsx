@@ -20,7 +20,7 @@ export function CandidateScoreCard({
     [copy.marginLabel, margin],
     [copy.differentiationLabel, differentiation]
   ] as const;
-  const format = (value: number | null): string => value === null ? '—' : String(value);
+  const format = (value: number | null): string => value === null ? '-' : String(value);
   return (
     <section className="panel score-panel" aria-label={copy.scoreLabel}>
       <div className="score-grid">

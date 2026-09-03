@@ -7,7 +7,7 @@ import { getCandidateDetailView } from '../../../../lib/server/dashboard-data';
 export const dynamic = 'force-dynamic';
 
 function evidenceValue(value: unknown): string {
-  if (value === null) return '—';
+  if (value === null) return '-';
   if (typeof value === 'string') return value.length > 120 ? `${value.slice(0, 117)}…` : value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) return `${value.length} items`;

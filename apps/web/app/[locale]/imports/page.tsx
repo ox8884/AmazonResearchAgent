@@ -34,7 +34,12 @@ export default async function ImportsPage({
           <span className="section-count">{imports.length}</span>
         </div>
         {imports.length === 0 ? (
-          <EmptyState>{copy.noImports}</EmptyState>
+          <div className="empty-block">
+            <EmptyState>{copy.noImports}</EmptyState>
+            <ButtonLink href={localizedHref(locale, '/imports/new')} variant="secondary">
+              {copy.newImport}
+            </ButtonLink>
+          </div>
         ) : (
           <div className="import-list">
             {imports.map((importRun) => (

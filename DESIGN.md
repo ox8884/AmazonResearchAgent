@@ -1,118 +1,122 @@
 # Amazon Research Agent Design System
 
 ## 0. Research Log
-- Direction: **Evidence Ledger** — a research notebook meets an operations desk.
-- Evidence: the current shell has no active location, the dashboard repeats nine equal cards, and detail pages hide payloads behind raw identifiers.
-- Decision: organize every surface around **evidence → decision → action**; use a restrained rail, ledger rows, semantic status labels, and one clear action per context.
-- Adaptation: retain a warm, Korean-safe light canvas for long review sessions, then add ink chrome and shallow elevation so panels have hierarchy without glass or gradients.
-- Second pass (2026-09-02, dashboard decision queue): the dashboard leads with a data-derived briefing header, a decision queue as the hero surface, a compact pipeline pulse, and one lightweight evidence strip; briefing sentences, ordering, and alerts may only be derived from recorded candidate states, scores, and counts.
-- Non-goals: no new product workflow, API route, provider fallback, storage format, or business rule.
+
+### Direction reset (2026-09-02, visual direction reset pass)
+
+The information architecture now follows `signal → evidence → confidence → decision → action` (previous passes), but the surfaces still read as a safe admin dashboard: dark left rail, warm canvas, stacked identical white cards, thin borders, small badges. This pass resets the aesthetic direction itself. Two directions were considered:
+
+1. **"Signal Terminal"** — a dark graphite operator console: near-black surfaces, phosphor data in mono, amber/green status readouts. Rejected as the primary direction: it keeps the product inside the generic dark-SaaS gravity well, works against long Korean review sessions, and the current shell is already dark-chromed, so it would read as a re-tint rather than a reset.
+
+2. **"Ink & Signal" (chosen)** — an analyst's printed desk: a deep **ink masthead** across the top (the only dark chrome, and it is horizontal, not a rail), a **cool paper** work surface (not warm beige), **ruled ledgers instead of floating cards** (column hairlines, 2px ink scotch rules above section titles), and **instrument-scale numerals** for the data that decisions depend on. One cobalt signal color carries interaction and the single primary action; decision colors (good/hold/stop) appear only on semantic state. Depth comes from type scale, rules, and surface steps — never from shadows, gradients, or glass.
+
+**Choice: Ink & Signal.** It keeps light-surface Korean readability for long sessions while making the product read as an analyst-grade intelligence workspace: the briefing is set like a headline, the decision queue reads like a ruled ledger sheet, and the AI provider area reads like an operator console.
+
+- Adaptation: system font stacks stay (Korean-safe, dependency-free); the reset is achieved with palette, shell structure, rules, scale, and rhythm — no new UI dependencies.
+- Non-goals: no new product workflow, API route, provider fallback, storage format, or business rule. Backend semantics unchanged.
+
+### Earlier log (retained for context)
+- Direction: **Evidence Ledger** — a research notebook meets an operations desk; surfaces follow `evidence → decision → action`.
+- Dashboard second pass (2026-09-02): dashboard leads with a data-derived briefing header, a decision queue hero, a compact pipeline pulse, and one lightweight evidence strip; briefing sentences, ordering, and alerts may only be derived from recorded candidate states, scores, and counts.
 
 ## 1. Atmosphere & Identity
-The product should feel like a dependable research control room: quiet, exact, and operational. The visual spine is a **decision rail**—a 3px inline-start marker paired with a visible text badge on every candidate, run, import, or provider state. Color supports the label; it never replaces it.
-
-The shell uses a compact ink rail at desktop and a wrapping top bar on smaller screens. The content canvas remains warm and calm. Evidence is shown near the decision it explains; actions sit next to the state that makes them safe to use.
+An **intelligence desk**: quiet, exact, editorial. The top **ink masthead** carries navigation as a horizontal command strip; the work surface below is cool paper organized by ruled sections. Hierarchy is typographic first: headlines for briefings, instrument-scale tabular numerals for the numbers decisions depend on, quiet mono for identifiers, small bold labels for metadata. Color is rationed: cobalt `signal` marks interaction and the one primary action; `good`/`hold`/`stop` appear only on decision state; everything else is ink on paper.
 
 ## 2. Color
 
 | Role | Token | Value | Usage |
 |---|---|---|---|
-| Canvas | `--canvas` | `#F4F3EE` | Document background |
-| Canvas deep | `--canvas-deep` | `#EAE9E3` | Rail and table headers |
-| Surface | `--surface` | `#FFFFFF` | Raised panels, inputs |
-| Surface muted | `--surface-muted` | `#F1F0EB` | Inset rows and disabled areas |
-| Ink | `--ink` | `#191C1A` | Primary text and primary controls |
-| Ink muted | `--ink-muted` | `#555956` | Supporting text; must remain readable |
-| Ink quiet | `--ink-quiet` | `#6B706B` | Metadata only, never essential instructions |
-| Border | `--border` | `#D5D5CE` | Structural rules |
-| Border strong | `--border-strong` | `#A9ADA5` | Emphasis and control borders |
-| Accent | `--accent` | `#23517D` | Links, focus, active navigation, processing |
-| Accent hover | `--accent-hover` | `#173B5D` | Accent hover and active |
-| Accent surface | `--accent-surface` | `#E8EFF5` | Informational state background |
-| Strong | `--strong` | `#256044` | Accepted/strong outcome |
-| Strong surface | `--strong-surface` | `#E7F1EA` | Strong outcome background |
-| Watch | `--watch` | `#835615` | Watch, waiting, attention |
-| Watch surface | `--watch-surface` | `#F7EEDB` | Watch/waiting background |
-| Reject | `--reject` | `#963B36` | Reject and failure |
-| Reject surface | `--reject-surface` | `#F8E8E5` | Reject/failure background |
-| Rail ink | `--rail-ink` | `#F4F3EE` | Text on the ink rail |
-| Rail muted | `--rail-muted` | `#B8C0BA` | Supporting rail text |
+| Paper | `--paper` | `#F6F6F2` | Document canvas (neutral, cool) |
+| Paper deep | `--paper-deep` | `#EDEEE8` | Inset surfaces, masthead pill hover |
+| Surface | `--surface` | `#FFFFFF` | Panels, inputs |
+| Ink | `--ink` | `#151A22` | Primary text, scotch rules, ink controls |
+| Ink muted | `--ink-muted` | `#4E555F` | Supporting text |
+| Ink quiet | `--ink-quiet` | `#6F7680` | Metadata only |
+| Line | `--line` | `#DBDCD5` | Hairline rules, row separators |
+| Line strong | `--line-strong` | `#A7ABAC` | Control borders, column rules |
+| Signal | `--signal` | `#1F4FC0` | Links, focus, active nav, primary action, progress fill |
+| Signal hover | `--signal-hover` | `#16389A` | Hover/active |
+| Signal surface | `--signal-surface` | `#E9EEFB` | Informational state background |
+| Good | `--good` / `--good-surface` | `#1E6E4A` / `#E4F1E9` | Accepted/strong outcome |
+| Hold | `--hold` / `--hold-surface` | `#8A5A10` / `#F6EDDA` | Waiting/watch/attention |
+| Stop | `--stop` / `--stop-surface` | `#A03A32` / `#F8E9E6` | Reject/failure |
+| Masthead | `--masthead` | `#10151D` | Top command bar background |
+| Masthead ink | `--masthead-ink` | `#F3F4F1` | Text on the masthead |
+| Masthead muted | `--masthead-muted` | `#A8B0BD` | Secondary masthead text |
+| Focus ring | `--ring` | `rgb(31 79 192 / 30%)` | Focus outlines |
 
-Rules: hue is semantic or interactive only; primary buttons use ink, not a decorative gradient. No gradients, transparency effects, or color-only state indicators. Raw hex values live only in this document and `apps/web/app/globals.css`.
+Rules: hue is semantic or interactive only. No gradients, no glass/blur, no neon, no decorative charts or sparkles. State is never color-only; every chip carries a text label. Raw hex values live only in this document and `apps/web/app/globals.css`.
 
 ## 3. Typography
 
 | Level | Size | Weight | Line height | Usage |
 |---|---:|---:|---:|---|
-| Display | `clamp(2rem, 4vw, 3.5rem)` | 700 | 1.05 | Lead number or exceptional page title |
-| H1 | `clamp(1.75rem, 3vw, 2.5rem)` | 700 | 1.15 | Page title |
-| H2 | 1.35rem | 680 | 1.25 | Section title |
-| H3 | 1.05rem | 680 | 1.35 | Panel title |
+| Display | `clamp(1.9rem, 3.2vw, 2.75rem)` | 740 | 1.08 | Briefing headline only |
+| Instrument numeral | `1.6rem+`, tabular | 700 | 1.1 | Scores, counts that drive decisions |
+| Title (H1) | `clamp(1.3rem, 2vw, 1.55rem)` | 740 | 1.2 | Page titles (compact; data gets the scale) |
+| Section (H2) | 1rem | 750 | 1.3 | Section titles under a 2px ink scotch rule |
+| Sub (H3) | .9rem | 750 | 1.35 | Group titles inside forms/panels |
 | Body | 1rem | 400 | 1.6 | Main text |
 | Small | .875rem | 400 | 1.5 | Supporting text |
-| Label | .75rem | 700 | 1.35 | Controls, table headings, eyebrow |
-| Meta | .75rem | 500 | 1.4 | IDs and timestamps |
+| Label | .75rem | 700 | 1.35 | Controls, table headings |
+| Meta | .75rem | 500 | 1.4 | IDs, timestamps, reasons — mono stack |
 
-Primary stack: `Segoe UI Variable`, `Apple SD Gothic Neo`, `Noto Sans KR`, `system-ui`, sans-serif. Mono stack: `Cascadia Code`, `SFMono-Regular`, monospace. Headings use `letter-spacing: -.02em`; prose uses `overflow-wrap:anywhere` and a readable measure. Numeric values and IDs use `font-variant-numeric: tabular-nums`.
+Primary stack: `Segoe UI Variable`, `Apple SD Gothic Neo`, `Noto Sans KR`, `system-ui`, sans-serif. Mono stack: `Cascadia Code`, `SFMono-Regular`, monospace — reserved for identifiers, codes, and technical values only; never decorative. Headings track `-0.02em`; display tracks `-0.03em`. All counters use `font-variant-numeric: tabular-nums`. Metadata is differentiated from decisions by weight, spacing, placement, and mono — not by size alone.
 
 ## 4. Density & Layout
-Base unit: 4px. Keep the existing `--space-*` scale and add only tokens required by the shell. Default page gutters use `clamp(16px, 4vw, 48px)`. The main content is capped at 72rem; prose blocks are capped near 44rem.
+Base unit: 4px; the `--space-*` scale is kept. Page gutters `clamp(16px, 4vw, 40px)`. Main content is capped at **82rem** so wide viewports are used well; narrow forms stay near 52rem.
 
-- Desktop (`min-width: 64rem`): 16rem command rail + flexible document column.
-- Below 64rem: one document column; the rail becomes a top navigation bar whose links wrap rather than forcing horizontal page scroll.
-- The document owns scrolling. No primary or nested navigation scroller; `.provider-list` is intrinsic content and never uses a `100vh` max-height.
-- Panels use grid/flex reflow, not minimum widths that create overflow. At 375px, rows become stacked, controls stay full-width where needed, and long IDs/reasons break safely.
-- Data columns align numbers to the end and use tabular numerals. Mobile keeps labels visible beside values.
+- Desktop (≥64rem): single-column document under the masthead; dashboard splits into queue (fluid) + 21rem aside.
+- Below 64rem: one column; the masthead condenses to two rows — brand + locale on row one, navigation as a **horizontal scroll strip** (no wrap, no hidden items).
+- Document owns scrolling. No nested viewport scrollers anywhere, including the provider directory.
+- Panels reflow with grid/flex; at 375px rows stack, controls stay full-width, long values break with `overflow-wrap: anywhere`.
+- Numbers align to the end with tabular numerals; mobile keeps labels beside values.
 
 ## 5. Reusable Primitives
 
 ### App shell and navigation
-`skip-link`, `app-shell`, `app-rail`, `wordmark`, `primary-nav`, and `language-switcher`. Navigation items expose an active visual marker and `aria-current="page"`; locale links preserve the current non-locale path. States: active, hover, focus, narrow wrapped layout.
+`skip-link`, `masthead` (ink command bar): `wordmark`, `primary-nav` (horizontal strip; pills with `aria-current="page"` and an inverse ink-on-paper active pill), `language-switcher`. Below 64rem the nav becomes an edge-faded horizontal scroll strip; the information structure (6 items + group label) never collapses into an accidental wrap. Locale links preserve the current non-locale path.
 
 ### Page header
-`page-heading` contains an eyebrow, one H1, purpose copy, and at most one primary action. Secondary links remain visually subordinate. No page hides its main action below the fold when the action is available.
+`page-heading` holds one compact H1 and purpose copy; at most one primary action sits with it. The dashboard replaces it with the `briefing` primitive (below). No page hides its main action below the fold.
 
-### Stat lede and operational band
-`stat-lede` gives one dominant value context; `stat-row` holds compact companions with ruled separators; `meter` pairs a labelled progress bar with used/limit/reserve values. This replaces repeated identical metric-card walls.
+### Briefing (dashboard)
+`briefing`: a data-as-of meta line, the briefing sentence set in **Display** type under a 3px signal rule, purpose copy, and the action row — one primary (Research Now), one secondary (New import), and the reserved-budget variant as a quiet ghost with its confirm intact. Briefing text derives only from recorded candidate-state counts; pending/queued/error states are explicit.
 
-### Dashboard briefing
-`briefing` replaces the dashboard page heading: a small data-as-of meta line, one briefing sentence as the H1, short purpose copy, and the action row. The briefing sentence may only be derived from recorded candidate-state counts (review-needed first, then in-progress, then total; a neutral line when empty or unavailable). Exactly one primary action (Research Now) and one secondary action (New import); the reserved-budget variant is a quiet ghost action still guarded by its confirm dialog. Buttons expose pending, queued, and error states without inventing results.
+### Scotch rule and sections
+`.section-heading` opens with a **2px ink rule** (scotch rule) above the section title — the editorial device that replaces floating-card repetition. Panels group with rules and spacing, never cards-in-cards.
 
-### Decision queue
-`decision-queue` is the dashboard hero panel. Each `queue-row` carries a state-toned decision rail (3px marker colored by the state tone, never color-only because the text badge is always present), the keyword as a link, the localized state badge, the recorded rationale (rule-reason codes, or an explicit "no recorded rationale" line), a tabular preliminary score, and one explicit `Open candidate` action. Ordering uses only recorded data: review-needed states first, then preliminary score, and the ordering rule is stated in the UI. The empty state explains that no candidates exist yet and links to the import action.
+### Ledgers (candidates, runs, imports, decision queue)
+`ledger` / `queue-row` rows align on a shared grid with **column rules** (1px `--line-strong` vertical hairlines between data zones). Rows carry a 3px state-toned decision rail plus a labeled status chip. Scores render as instrument numerals. Every queue row exposes keyword link, state chip, recorded rationale (or an explicit hollow `hold`-tone "no recorded rationale" tag — repetition there reads as a data-trust warning, not an empty page), score, and one explicit `Open candidate` action. Queue order (review-needed first, then preliminary score) is stated in the UI and uses only recorded data. Empty states name the next action.
 
-### Pipeline pulse
-`pulse` is a compact inset strip beside or below the queue. It lists the pipeline stages (imports, discovery, validation prep, AI screening, decided, rejected) as text labels with counts; imports count runs while stages count candidates, and the unit difference is stated. When no candidates exist the pulse says the pipeline is empty instead of listing zero stages. Job-queue counts appear as a compact line, or an explicit "no jobs waiting" line. Budget appears as a quiet detail (or "no budget record for today" when no row exists) and only becomes a visible alert when the remaining budget blocks waiting candidates.
+### Status chip
+`status` chips are labeled rectangles (radius 6) with tinted surface, 1px semantic border, and the small marker dot. Tones: neutral, signal/active, hold/waiting, good, stop. Unknown backend values fall back to a neutral visible label.
 
-### Supporting evidence strip
-The dashboard keeps one supporting-evidence surface: the three most recent imports in an inset panel without shadow, showing date, localized status, and file/row counts. Import UUIDs are not rendered on the dashboard. Recent runs and state changes stay on their own pages.
+### Buttons
+Primary = signal cobalt fill (one per context), secondary = paper fill with strong line, ghost = text-only muted (guarded variants such as reserved-budget). Pending state disables and swaps copy; success/error use `role="status"`/`role="alert"` notices.
 
-### Ledger row
-`ledger`, `ledger__head`, and `ledger__row` provide table-like alignment for candidates, runs, and imports. Rows carry a state rail and visible status badge. Empty, loading, error, long-content, and populated states are explicit.
+### Pipeline pulse and evidence strip
+`pulse` (inset) lists pipeline stages as text label + count, the conditional review-needed alert in hold tone, job counts, and the budget as a quiet detail that becomes a stop-toned alert only when it actually blocks waiting candidates. Supporting evidence is limited to the three most recent imports in an inset strip; no UUIDs on the dashboard.
 
-### Status badge and decision marker
-`status-badge` always includes a localized text label. Tones: neutral, accent/active, waiting/watch, strong, reject, and attention. Unknown backend values fall back to a neutral visible label rather than crashing.
-
-### Provider directory and editor
-`provider-admin` contains a stable provider directory, one active editor, and one connection-result region per saved provider. Directory entries retain `aria-pressed`; the provider name remains adjacent to the edit action for stable accessible names. The directory has document flow and no nested viewport scroller.
-
-The editor preserves product selection, enabled state, role assignment, billing method, priority, network scope, save, disable, connection test, and result attribution. Results are scoped to the provider whose Test action was pressed. Secrets remain write-only and display only as `••••{secretLast4}`.
+### Provider console (AI Settings)
+`provider-admin` = directory (inset) + editor. Directory entries keep `aria-pressed`, accessible `"{name} 수정"` names, and stay in document flow. The editor groups fields in **setup order and risk**: Provider identity → Capability and role → Routing and priority → Secure connection. Connection results stay scoped to the provider whose Test action was pressed (`section.provider-result`), secrets stay write-only (`••••{secretLast4}`), and subscription products expose only safe status/Test/Disable. Provider names, products, roles, and connection state — not internal UUIDs — are the readable surface.
 
 ### Form field, notice, and empty state
-Every control has an explicit label, help text where needed, visible focus, and native validation semantics. `notice` distinguishes alert/status/success states. `empty-state` explains what is absent and the next available action without inventing data.
+Every control has an explicit label, help text where needed, visible signal focus ring, and native validation semantics. `notice` distinguishes error/status/success. `empty-state` is an inset sheet with the reason and the next possible action — never bare whitespace.
 
 ## 6. Accessibility & Interaction
-- WCAG 2.2 AA target: essential body text >= 4.5:1, large text >= 3:1, and focus rings remain visible against every surface.
-- Status is never conveyed by hue alone; labels, icons/markers, or text context remain present.
-- Interactive targets are at least 44px high where practical. No icon-only action; hand-authored inline SVG must have a text alternative.
-- Keyboard order follows evidence → decision → action. `aria-live="polite"` is limited to asynchronous save/test/upload feedback; failures use `role="alert"`.
-- Korean and English copy must wrap naturally and must not clip at 375/768/1280px.
-- Motion is limited to save, test, upload, error, and panel-state feedback. No scroll choreography. All motion is disabled or reduced under `prefers-reduced-motion`.
+- WCAG 2.2 AA: essential text ≥ 4.5:1, large text ≥ 3:1; the cobalt signal on white and on `--signal-surface` meets AA for its uses; focus rings (3px `--ring`) stay visible on every surface.
+- Status is never hue-only; chips always carry labels.
+- Interactive targets ≥ 44px where practical. No icon-only actions; no emoji glyphs in UI.
+- Keyboard order follows reading order: masthead → briefing/actions → queue → aside. `aria-live="polite"` limited to async save/test/upload feedback; failures use `role="alert"`.
+- Korean and English copy must wrap naturally without clipping at 375/768/1280 (`word-break: keep-all` + `overflow-wrap`).
+- Motion is limited to save/test/upload/state feedback with short `ease-out` transitions; everything collapses under `prefers-reduced-motion`.
 
 ## 7. Surface Strategy
-Three layers only: canvas (recessed), panel (raised), and inset (sunken). Panels use a 1px border plus a restrained shadow token; controls use a border and focus ring. Radius is 8px for controls and 12px for panels. Avoid cards inside cards: use ruled sections and whitespace for grouping.
+Three steps only: paper (recessed), panel (white, 1px hairline, **no shadow**), inset (paper-deep). Radius scale is documented, not mixed: panels 12, controls/buttons/inputs 8, chips/badges 6. Grouping is done with scotch rules, column rules, and spacing rather than stacked boxes.
 
 ## 8. Accepted Debt
-- Settings remains read-only because no settings mutation contract is in scope; the UI must say so rather than imply editability.
+- Settings remains read-only because no settings mutation contract is in scope; the UI says so rather than implying editability.
 - Existing API/server data contracts and provider authorization flows remain unchanged.
-- Evidence payloads are rendered as bounded, non-secret summaries; raw provider responses and secrets are never rendered.
+- Evidence payloads render as bounded, non-secret summaries; raw provider responses and secrets are never rendered.
+- The showcase page keeps its exact `동작/상태/지표` heading contract for E2E.

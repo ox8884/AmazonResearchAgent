@@ -385,122 +385,139 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
           <h2>{saved ? `${saved.name} ${copy.editProvider}` : copy.newOpenAiProvider}</h2>
         </header>
         <form className="ai-provider-form" onSubmit={submit} key={buildProviderFormKey(saved)}>
-          <div className="form-grid">
-          <div className="field-stack">
-            <label htmlFor="provider-product">{copy.providerProduct}</label>
-            <select
-              id="provider-product"
-              name="product"
-              value={product}
-              onChange={(event) => {
-                setProduct(event.target.value as AiProviderProduct);
-                setSaved(null);
-                setStatus({ kind: 'idle' });
-              }}
-            >
-              {PRODUCT_PROVIDER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </div>
-          {visibility.httpCredentials ? (
-            <>
+          <section className="form-group">
+            <h3>{copy.providerGroupIdentity}</h3>
+            <div className="form-grid">
               <div className="field-stack">
-                <label htmlFor="provider-name">{copy.providerName}</label>
-                <input id="provider-name" name="name" required autoComplete="off" defaultValue={savedHttp?.name ?? ''} />
-              </div>
-              <div className="field-stack">
-                <label htmlFor="billing-type">{copy.billingType}</label>
-                <select id="billing-type" name="billingType" defaultValue={savedHttp?.billingType ?? 'subscription'}>
-                  <option value="free">Free</option>
-                  <option value="subscription">Subscription</option>
-                  <option value="payg">Pay-as-you-go</option>
+                <label htmlFor="provider-product">{copy.providerProduct}</label>
+                <select
+                  id="provider-product"
+                  name="product"
+                  value={product}
+                  onChange={(event) => {
+                    setProduct(event.target.value as AiProviderProduct);
+                    setSaved(null);
+                    setStatus({ kind: 'idle' });
+                  }}
+                >
+                  {PRODUCT_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </div>
-              <label className="checkbox-field">
-                <input name="enabled" type="checkbox" defaultChecked={savedHttp?.enabled ?? true} />
-                <span>{copy.providerEnabled}</span>
-              </label>
-            </>
-          ) : null}
-          <div className="field-stack">
-            <label htmlFor="provider-priority">{copy.providerPriority}</label>
-            <input id="provider-priority" name="priority" type="number" min={0} defaultValue={saved?.priority ?? 100} />
-          </div>
-          {visibility.modelConfiguration ? (
-            <>
-              <div className="field-stack">
-                <label htmlFor="model-id">{copy.modelId}</label>
-                <input id="model-id" name="modelId" placeholder="model-id" defaultValue={savedHttp?.modelId ?? ''} />
-              </div>
-              {(savedHttp?.models ?? []).map((model) => (
-                <div key={model.id} className="field-stack field-stack--wide">
-                  <label className="checkbox-field">
-                    <input name={`model-enabled-${model.id}`} type="checkbox" defaultChecked={model.enabled} />
-                    <span>{copy.modelEnabled}: {model.displayName} ({model.origin})</span>
-                  </label>
-                  <label htmlFor={`model-priority-${model.id}`}>{copy.modelPriority}</label>
-                  <input id={`model-priority-${model.id}`} name={`model-priority-${model.id}`} type="number" min={0} defaultValue={model.priority} />
-                </div>
-              ))}
-              {(!savedHttp || savedHttp.models.length === 0) ? (
+              {visibility.httpCredentials ? (
                 <>
-                  <label className="checkbox-field">
-                    <input name="modelEnabled" type="checkbox" defaultChecked />
-                    <span>{copy.modelEnabled}</span>
-                  </label>
                   <div className="field-stack">
-                    <label htmlFor="model-priority">{copy.modelPriority}</label>
-                    <input id="model-priority" name="modelPriority" type="number" min={0} defaultValue={100} />
+                    <label htmlFor="provider-name">{copy.providerName}</label>
+                    <input id="provider-name" name="name" required autoComplete="off" defaultValue={savedHttp?.name ?? ''} />
                   </div>
+                  <div className="field-stack">
+                    <label htmlFor="billing-type">{copy.billingType}</label>
+                    <select id="billing-type" name="billingType" defaultValue={savedHttp?.billingType ?? 'subscription'}>
+                      <option value="free">Free</option>
+                      <option value="subscription">Subscription</option>
+                      <option value="payg">Pay-as-you-go</option>
+                    </select>
+                  </div>
+                  <label className="checkbox-field">
+                    <input name="enabled" type="checkbox" defaultChecked={savedHttp?.enabled ?? true} />
+                    <span>{copy.providerEnabled}</span>
+                  </label>
                 </>
               ) : null}
-            </>
-          ) : null}
-          {visibility.httpCredentials ? (
-            <>
-              <div className="field-stack field-stack--wide">
-                <label htmlFor="base-url">{copy.baseUrl}</label>
-                <input id="base-url" name="baseUrl" type="url" placeholder="https://provider.example/v1" defaultValue={savedHttp?.baseUrl ?? ''} />
+            </div>
+          </section>
+          {visibility.modelConfiguration || visibility.roleSelection ? (
+            <section className="form-group">
+              <h3>{copy.providerGroupCapability}</h3>
+              <div className="form-grid">
+                {visibility.modelConfiguration ? (
+                  <>
+                    <div className="field-stack">
+                      <label htmlFor="model-id">{copy.modelId}</label>
+                      <input id="model-id" name="modelId" placeholder="model-id" defaultValue={savedHttp?.modelId ?? ''} />
+                    </div>
+                    {(savedHttp?.models ?? []).map((model) => (
+                      <div key={model.id} className="field-stack field-stack--wide">
+                        <label className="checkbox-field">
+                          <input name={`model-enabled-${model.id}`} type="checkbox" defaultChecked={model.enabled} />
+                          <span>{copy.modelEnabled}: {model.displayName} ({model.origin})</span>
+                        </label>
+                        <label htmlFor={`model-priority-${model.id}`}>{copy.modelPriority}</label>
+                        <input id={`model-priority-${model.id}`} name={`model-priority-${model.id}`} type="number" min={0} defaultValue={model.priority} />
+                      </div>
+                    ))}
+                    {(!savedHttp || savedHttp.models.length === 0) ? (
+                      <>
+                        <label className="checkbox-field">
+                          <input name="modelEnabled" type="checkbox" defaultChecked />
+                          <span>{copy.modelEnabled}</span>
+                        </label>
+                        <div className="field-stack">
+                          <label htmlFor="model-priority">{copy.modelPriority}</label>
+                          <input id="model-priority" name="modelPriority" type="number" min={0} defaultValue={100} />
+                        </div>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+                {visibility.roleSelection ? (
+                  <fieldset className="field-stack field-stack--wide role-assignments">
+                    <legend>{copy.roleAssignments}</legend>
+                    {AiRoleSchema.options.map((role) => (
+                      <label className="checkbox-field" key={role}>
+                        <input name="roles" type="checkbox" value={role} defaultChecked={(savedHttp?.roles ?? ['niche_normalization']).includes(role)} />
+                        <span>{role}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ) : null}
               </div>
+            </section>
+          ) : null}
+          <section className="form-group">
+            <h3>{copy.providerGroupRouting}</h3>
+            <div className="form-grid">
               <div className="field-stack">
-                <label htmlFor="network-scope">{copy.networkScope}</label>
-                <select id="network-scope" name="networkScope" defaultValue={savedHttp?.networkScope ?? 'public'}>
-                  <option value="public">Public HTTPS</option>
-                  <option value="private">Private / Tailscale</option>
-                  <option value="loopback">Worker loopback</option>
-                </select>
+                <label htmlFor="provider-priority">{copy.providerPriority}</label>
+                <input id="provider-priority" name="priority" type="number" min={0} defaultValue={saved?.priority ?? 100} />
               </div>
-              <div className="field-stack field-stack--wide">
-                <label htmlFor="api-key">{copy.apiKey}</label>
-                <input id="api-key" name="apiKey" type="password" autoComplete="new-password" />
+            </div>
+          </section>
+          {visibility.httpCredentials ? (
+            <section className="form-group">
+              <h3>{copy.providerGroupConnection}</h3>
+              <div className="form-grid">
+                <div className="field-stack field-stack--wide">
+                  <label htmlFor="base-url">{copy.baseUrl}</label>
+                  <input id="base-url" name="baseUrl" type="url" placeholder="https://provider.example/v1" defaultValue={savedHttp?.baseUrl ?? ''} />
+                </div>
+                <div className="field-stack">
+                  <label htmlFor="network-scope">{copy.networkScope}</label>
+                  <select id="network-scope" name="networkScope" defaultValue={savedHttp?.networkScope ?? 'public'}>
+                    <option value="public">Public HTTPS</option>
+                    <option value="private">Private / Tailscale</option>
+                    <option value="loopback">Worker loopback</option>
+                  </select>
+                </div>
+                <div className="field-stack field-stack--wide">
+                  <label htmlFor="api-key">{copy.apiKey}</label>
+                  <input id="api-key" name="apiKey" type="password" autoComplete="new-password" />
+                </div>
+                {savedHttp?.baseUrl && new URL(savedHttp.baseUrl).hostname === 'openrouter.ai' ? (
+                  <label className="checkbox-field field-stack--wide">
+                    <input
+                      name="openRouterProvider"
+                      type="checkbox"
+                      value="z-ai"
+                      defaultChecked={savedHttp.openRouterProvider === 'z-ai'}
+                    />
+                    <span>{copy.openRouterZaiOnly}</span>
+                  </label>
+                ) : null}
               </div>
-              {savedHttp?.baseUrl && new URL(savedHttp.baseUrl).hostname === 'openrouter.ai' ? (
-                <label className="checkbox-field field-stack--wide">
-                  <input
-                    name="openRouterProvider"
-                    type="checkbox"
-                    value="z-ai"
-                    defaultChecked={savedHttp.openRouterProvider === 'z-ai'}
-                  />
-                  <span>{copy.openRouterZaiOnly}</span>
-                </label>
-              ) : null}
-            </>
+            </section>
           ) : null}
-          {visibility.roleSelection ? (
-            <fieldset className="field-stack field-stack--wide role-assignments">
-              <legend>{copy.roleAssignments}</legend>
-              {AiRoleSchema.options.map((role) => (
-                <label className="checkbox-field" key={role}>
-                  <input name="roles" type="checkbox" value={role} defaultChecked={(savedHttp?.roles ?? ['niche_normalization']).includes(role)} />
-                  <span>{role}</span>
-                </label>
-              ))}
-            </fieldset>
-          ) : null}
-          </div>
-
           <p className="privacy-note">{copy.privacyNote}</p>
           <button className="button button--primary" type="submit" disabled={status.kind === 'saving'}>
             {status.kind === 'saving' ? copy.savingProvider : copy.saveProvider}
@@ -508,6 +525,9 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
           {errorMessage ? <p className="notice notice--error" role="alert">{errorMessage}</p> : null}
           {status.kind === 'saved' ? <p role="status">{copy.providerSaved}</p> : null}
         </form>
+        {visibility.httpCredentials ? (
+          <p className="privacy-note">{copy.httpTestCostWarning}</p>
+        ) : null}
         <div className="provider-results" aria-label={copy.testConnection}>
           {listedProviders.map((provider) =>
             provider.product === 'openai_compatible_api' ? (
@@ -517,7 +537,6 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
                 {provider.secretLast4 ? (
                   <p className="import-id"><span>{copy.secretStored}</span> <code>••••{provider.secretLast4}</code></p>
                 ) : null}
-                <p className="privacy-note">{copy.httpTestCostWarning}</p>
                 <button
                   className="button button--secondary"
                   type="button"
@@ -553,7 +572,7 @@ export function AiProviderForm({ locale }: { locale: Locale }) {
                   <div><dt>{copy.subscriptionModel}</dt><dd>{provider.modelLabel}</dd></div>
                   <div><dt>{copy.subscriptionRole}</dt><dd><code>{provider.role}</code></dd></div>
                   <div><dt>{copy.providerPriority}</dt><dd>{provider.priority}</dd></div>
-                  <div><dt>{copy.lastProbe}</dt><dd>{provider.lastCheckedAt ?? '—'}</dd></div>
+                  <div><dt>{copy.lastProbe}</dt><dd>{provider.lastCheckedAt ?? '-'}</dd></div>
                 </dl>
                 <p className="privacy-note">{copy.operatorAuthorizationGuidance}</p>
                 <div className="button-row">

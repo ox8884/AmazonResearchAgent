@@ -32,7 +32,7 @@ export default async function AiSettingsPage({
   }
 
   return (
-    <div className="content-stack content-stack--narrow">
+    <div className="content-stack">
       <header className="page-heading page-heading--split">
         <div>
           <h1>{copy.aiSettingsTitle}</h1>
