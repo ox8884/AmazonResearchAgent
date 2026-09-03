@@ -299,6 +299,7 @@ export class OpenAiHttpProvider implements RawAiProvider {
       : 'Return only JSON matching the requested schema.';
     const body: JsonObject = {
       model: request.modelId,
+      ...(this.config.openRouterProvider === 'z-ai' ? { temperature: 0 } : {}),
       messages: [
         {
           role: 'system',

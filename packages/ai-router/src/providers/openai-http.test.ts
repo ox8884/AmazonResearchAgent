@@ -257,6 +257,7 @@ describe('OpenAI-compatible HTTP provider', () => {
 
     expect(payloads).toEqual([expect.objectContaining({
       model: 'cheap-model',
+      temperature: 0,
       messages: expect.arrayContaining([
         expect.objectContaining({
           role: 'system',
