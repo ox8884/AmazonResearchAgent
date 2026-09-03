@@ -257,6 +257,12 @@ describe('OpenAI-compatible HTTP provider', () => {
 
     expect(payloads).toEqual([expect.objectContaining({
       model: 'cheap-model',
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('"classification"')
+        })
+      ]),
       provider: {
         only: ['z-ai'],
         allow_fallbacks: false

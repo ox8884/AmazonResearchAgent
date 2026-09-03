@@ -288,12 +288,21 @@ export class OpenAiHttpProvider implements RawAiProvider {
 
   async runRaw(request: RawStructuredAiRequest): Promise<RawAiProviderResult> {
     const startedAt = new Date().toISOString();
+    const systemPrompt = this.config.openRouterProvider === 'z-ai'
+      ? [
+          'Return exactly one valid JSON object matching the supplied JSON Schema.',
+          'Include every required property and no additional properties.',
+          'Use null only where the schema permits null. Do not use Markdown fences or explanatory text.',
+          'JSON Schema:',
+          JSON.stringify(request.schema)
+        ].join('\n')
+      : 'Return only JSON matching the requested schema.';
     const body: JsonObject = {
       model: request.modelId,
       messages: [
         {
           role: 'system',
-          content: 'Return only JSON matching the requested schema.'
+          content: systemPrompt
         },
         { role: 'user', content: request.prompt }
       ],
