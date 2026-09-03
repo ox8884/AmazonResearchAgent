@@ -340,8 +340,7 @@ export class OpenAiHttpProvider implements RawAiProvider {
     return {
       provider: {
         only: ['z-ai'],
-        allow_fallbacks: false,
-        ...(structuredOutput ? { require_parameters: true } : {})
+        allow_fallbacks: false
       },
       ...(structuredOutput
         ? { plugins: [{ id: 'response-healing' }] }

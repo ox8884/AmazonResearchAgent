@@ -259,8 +259,7 @@ describe('OpenAI-compatible HTTP provider', () => {
       model: 'cheap-model',
       provider: {
         only: ['z-ai'],
-        allow_fallbacks: false,
-        require_parameters: true
+        allow_fallbacks: false
       },
       plugins: [{ id: 'response-healing' }]
     })]);
