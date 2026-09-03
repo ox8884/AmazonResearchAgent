@@ -37,6 +37,7 @@ export type BeginProviderAttemptInput = {
   readonly expectedAuthGeneration: number;
   readonly expectedExecutionFingerprint: string;
   readonly fallbackParentAttemptId: string | null;
+  readonly initialPaidPrimary: boolean;
 };
 
 export type AppendProviderAttemptOutcomeInput = {
@@ -239,6 +240,7 @@ export function createProviderAttemptRepository(
         expected_settings_revision: input.expectedSettingsRevision,
         expected_auth_generation: input.expectedAuthGeneration,
         expected_execution_fingerprint: input.expectedExecutionFingerprint,
+        initial_payg_primary_authorized: input.initialPaidPrimary,
         ...(input.fallbackParentAttemptId === null
           ? {}
           : { fallback_parent_attempt_id: input.fallbackParentAttemptId })

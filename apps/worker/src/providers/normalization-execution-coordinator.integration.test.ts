@@ -365,7 +365,8 @@ integration('normalization coordinator authority cutover', () => {
       expectedSettingsRevision: 1,
       expectedAuthGeneration: 0,
       expectedExecutionFingerprint: codex.fingerprint,
-      fallbackParentAttemptId: null
+      fallbackParentAttemptId: null,
+      initialPaidPrimary: false
     });
 
     const calls = { codex: 0, grok: 0, payg: 0 };
@@ -729,7 +730,8 @@ integration('normalization coordinator authority cutover', () => {
       expectedSettingsRevision: 1,
       expectedAuthGeneration: 0,
       expectedExecutionFingerprint: codex.fingerprint,
-      fallbackParentAttemptId: null
+      fallbackParentAttemptId: null,
+      initialPaidPrimary: false
     });
     await attempts.appendOutcome({
       attemptId: staged.attemptId,

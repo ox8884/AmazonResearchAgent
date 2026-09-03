@@ -289,6 +289,9 @@ describe('NormalizationExecutionCoordinator', () => {
       }),
       { initialPaidPrimary: true }
     );
+    expect(attempts.begin).toHaveBeenCalledWith(expect.objectContaining({
+      initialPaidPrimary: true
+    }));
   });
 
   // Break: a failed Z.ai primary becomes a PAYG retry or permits generic PAYG fallback.

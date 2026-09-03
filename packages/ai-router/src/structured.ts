@@ -136,6 +136,9 @@ export async function runWithSchema<T>(
   if (firstParsed.success) {
     return { ...first, output: firstParsed.data };
   }
+  if (provider.billingType === 'payg') {
+    throw new InvalidStructuredOutputError(first.usage, [first]);
+  }
 
   const repaired = await provider.runRaw({
     ...request,

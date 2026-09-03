@@ -122,6 +122,47 @@ async function seedReadyProvider(adapter: 'codex' | 'grok' = 'codex'): Promise<P
   return { providerId, modelId, fingerprint, probeGeneration: activated.result.probe_generation };
 }
 
+async function seedPaygProvider(options: {
+  readonly openRouterProvider?: string;
+  readonly probeAvailable?: boolean;
+} = {}): Promise<ProviderFixture> {
+  const suffix = randomUUID();
+  const providerId = `payg-${suffix}`;
+  const modelId = `model-${suffix}`;
+  const fingerprint = `fingerprint-${suffix}`;
+  await sql`
+    insert into ai_providers (
+      id, name, kind, adapter, billing_type, enabled, config, settings_revision
+    ) values (
+      ${providerId}, ${providerId}, 'openai_http', null, 'payg', true,
+      ${sql.json({
+        baseUrl: 'https://openrouter.ai/api/v1',
+        networkScope: 'public',
+        manualModelId: modelId,
+        openRouterProvider: options.openRouterProvider ?? 'z-ai',
+        roles: ['niche_normalization'],
+        executionIdentity: fingerprint,
+        executionProbe: {
+          available: options.probeAvailable ?? true,
+          checkedAt: new Date(0).toISOString(),
+          errorCategory: null,
+          fingerprint,
+        },
+      })},
+      1
+    )
+  `;
+  await sql`
+    insert into ai_models (
+      provider_id, model_id, display_name, capabilities, billing_type, enabled
+    ) values (
+      ${providerId}, ${modelId}, ${modelId}, '["structured_json"]'::jsonb,
+      'payg', true
+    )
+  `;
+  return { providerId, modelId, fingerprint, probeGeneration: 0 };
+}
+
 async function seedCandidateAndLeases(
   selectedProvider?: ProviderFixture
 ): Promise<Fixture> {
@@ -267,6 +308,27 @@ async function beginAttempt(fixture: Fixture, fallbackParentAttemptId: string | 
   return row.result;
 }
 
+async function beginInitialPaygAttempt(
+  fixture: Fixture,
+  authorized: boolean,
+  fallbackParentAttemptId: string | null = null,
+) {
+  const [row] = await sql<{ result: {
+    attempt_id: string;
+    attempt_sequence: number;
+    billing_type: string;
+  } }[]>`
+    select begin_ai_provider_attempt(
+      ${fixture.job.job_id}, ${fixture.job.job_lease_owner}, ${fixture.job.job_lease_epoch},
+      ${fixture.analysis.analysis_id}, ${fixture.analysis.analysis_lease_owner},
+      ${fixture.analysis.analysis_lease_epoch}, ${fixture.providerId}, ${fixture.modelId},
+      1, 0, ${fixture.fingerprint}, ${fallbackParentAttemptId}::uuid, ${authorized}
+    ) as result
+  `;
+  if (!row) throw new Error('PAYG provider attempt authorization returned no row.');
+  return row.result;
+}
+
 async function appendSuccess(fixture: Fixture, attemptId: string, output = normalizationOutput) {
   const [row] = await sql<{ result: { event_type: string } }[]>`
     select append_ai_provider_attempt_outcome(
@@ -357,7 +419,13 @@ beforeAll(async () => {
     `);
     await sql.unsafe('alter default privileges in schema public grant all on tables to service_role');
     const files = (await readdir(migrationsDirectory))
-      .filter((file) => file.endsWith('.sql') && file <= '202608290021_provider_attempt_transactions.sql')
+      .filter((file) => (
+        file.endsWith('.sql') &&
+        (
+          file <= '202608290021_provider_attempt_transactions.sql' ||
+          file === '20260903203236_authorize_initial_openrouter_zai_payg_primary.sql'
+        )
+      ))
       .sort();
     for (const file of files) {
       await sql.unsafe(await readFile(resolve(migrationsDirectory, file), 'utf8'));
@@ -377,6 +445,47 @@ afterAll(async () => {
 });
 
 describe('provider attempt transactions', () => {
+  it('authorizes an explicitly selected initial OpenRouter Z.ai PAYG primary', async () => {
+    const fixture = await seedCandidateAndLeases(await seedPaygProvider());
+    await expect(beginInitialPaygAttempt(fixture, true)).resolves.toMatchObject({
+      billing_type: 'payg',
+      attempt_sequence: 1,
+    });
+  });
+
+  it('rejects PAYG without explicit initial-primary authorization', async () => {
+    const fixture = await seedCandidateAndLeases(await seedPaygProvider());
+    await expect(beginInitialPaygAttempt(fixture, false)).rejects.toThrow(
+      /provider_attempt_payg_primary_rejected/i,
+    );
+  });
+
+  it('rejects non-Z.ai or stale-probe PAYG targets even when explicitly authorized', async () => {
+    const wrongProvider = await seedCandidateAndLeases(await seedPaygProvider({
+      openRouterProvider: 'parasail',
+    }));
+    await expect(beginInitialPaygAttempt(wrongProvider, true)).rejects.toThrow(
+      /provider_attempt_payg_primary_rejected/i,
+    );
+
+    const staleProbe = await seedCandidateAndLeases(await seedPaygProvider({
+      probeAvailable: false,
+    }));
+    await expect(beginInitialPaygAttempt(staleProbe, true)).rejects.toThrow(
+      /provider_attempt_payg_primary_rejected/i,
+    );
+  });
+
+  it('rejects PAYG as a fallback even when the initial-primary flag is forged', async () => {
+    const fixture = await seedCandidateAndLeases();
+    const first = await beginAttempt(fixture);
+    await appendOutcome(fixture, first.attempt_id, 'attempt_failed', 'unknown', 'capacity_exhausted');
+    const payg = await seedPaygProvider();
+    await expect(beginInitialPaygAttempt({ ...fixture, ...payg }, true, first.attempt_id)).rejects.toThrow(
+      /provider_attempt_payg_primary_rejected/i,
+    );
+  });
+
   it('rejects old epochs even when the same worker IDs reclaim both leases', async () => {
     const fixture = await seedCandidateAndLeases();
     await sql`update jobs set leased_until = clock_timestamp() - interval '1 second' where id = ${fixture.job.job_id}`;

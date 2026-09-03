@@ -251,8 +251,9 @@ export class NormalizationExecutionCoordinator {
         return this.defer(request);
       }
 
+      const initialPaidPrimary = paidPrimaryProviderIds.includes(decision.providerId);
       const target = await this.dependencies.resolveTarget(decision, {
-        initialPaidPrimary: paidPrimaryProviderIds.includes(decision.providerId)
+        initialPaidPrimary
       });
       if (
         target.providerId !== decision.providerId ||
@@ -286,7 +287,8 @@ export class NormalizationExecutionCoordinator {
               expectedSettingsRevision: target.expectedSettingsRevision,
               expectedAuthGeneration: target.expectedAuthGeneration,
               expectedExecutionFingerprint: target.expectedExecutionFingerprint,
-              fallbackParentAttemptId
+              fallbackParentAttemptId,
+              initialPaidPrimary
             });
             authorizationAttemptId = authorization.attemptId;
             throwIfAborted(request.signal);

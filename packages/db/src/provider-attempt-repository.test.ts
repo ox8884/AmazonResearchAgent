@@ -43,7 +43,8 @@ describe('provider attempt repository', () => {
       expectedSettingsRevision: 2,
       expectedAuthGeneration: 1,
       expectedExecutionFingerprint: 'fp-v2',
-      fallbackParentAttemptId: null
+      fallbackParentAttemptId: null,
+      initialPaidPrimary: false
     });
     expect(client.rpc).toHaveBeenCalledWith('begin_ai_provider_attempt', expect.objectContaining({
       job_id: jobLease.jobId,
@@ -51,7 +52,8 @@ describe('provider attempt repository', () => {
       job_lease_epoch: jobLease.epoch,
       analysis_id: analysisLease.analysisId,
       analysis_lease_owner: analysisLease.owner,
-      analysis_lease_epoch: analysisLease.epoch
+      analysis_lease_epoch: analysisLease.epoch,
+      initial_payg_primary_authorized: false
     }));
   });
 
@@ -87,7 +89,8 @@ describe('provider attempt repository', () => {
       expectedSettingsRevision: 2,
       expectedAuthGeneration: 1,
       expectedExecutionFingerprint: 'fp-v2',
-      fallbackParentAttemptId: null
+      fallbackParentAttemptId: null,
+      initialPaidPrimary: false
     })).rejects.toThrow('Could not begin provider attempt.');
   });
 

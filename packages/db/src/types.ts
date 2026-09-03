@@ -2037,6 +2037,7 @@ export type Database = {
           expected_execution_fingerprint: string
           expected_settings_revision: number
           fallback_parent_attempt_id?: string
+          initial_payg_primary_authorized?: boolean
           job_id: string
           job_lease_epoch: number
           job_lease_owner: string

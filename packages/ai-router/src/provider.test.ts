@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
   InvalidStructuredOutputError,
@@ -86,6 +86,20 @@ describe('structured AI provider guard', () => {
     const parsed = await runWithSchema(provider, ClassificationSchema, request());
 
     expect(parsed.output.classification).toBe('product_niche');
+  });
+
+  it('never sends a paid repair request after invalid PAYG output', async () => {
+    const runRaw = vi.fn(async () => result('{"classification":"maybe"}'));
+    const provider: RawAiProvider = {
+      ...fakeProvider([]),
+      billingType: 'payg',
+      runRaw,
+    };
+
+    await expect(runWithSchema(provider, ClassificationSchema, request())).rejects.toBeInstanceOf(
+      InvalidStructuredOutputError,
+    );
+    expect(runRaw).toHaveBeenCalledOnce();
   });
 
   it('accepts an already parsed object without changing its type', async () => {
