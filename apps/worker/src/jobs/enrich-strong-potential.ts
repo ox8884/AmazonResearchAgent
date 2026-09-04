@@ -3,10 +3,11 @@ import { DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
 import type { Json } from '@ara/db';
 import { makeApiCacheKey, type Locale } from '@ara/shared';
 import type { QueueDatabaseClient } from '@ara/queue';
-import type {
-  HistoricalSearchVolumeQueryResult,
-  SalesEstimatesQueryResult,
-  ShareOfVoiceQueryResult
+import {
+  JungleScoutClientError,
+  type HistoricalSearchVolumeQueryResult,
+  type SalesEstimatesQueryResult,
+  type ShareOfVoiceQueryResult
 } from '@ara/jungle-scout';
 import {
   analyzeHistoricalSearchVolume,
@@ -18,6 +19,8 @@ import {
 import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
 import { notifyCandidateDecision } from './candidate-notifications';
 
+// allow: SIZE_OK — this module is one sequential, resumable enrichment state machine.
+
 export interface EnrichStrongPotentialOptions {
   readonly budget?: ApiBudget;
   readonly keyword?: string;
@@ -26,7 +29,7 @@ export interface EnrichStrongPotentialOptions {
   readonly queryHistoricalSearchVolume?: (
     keyword: string
   ) => Promise<HistoricalSearchVolumeQueryResult>;
-  readonly querySalesEstimates?: (asins: readonly string[]) => Promise<SalesEstimatesQueryResult>;
+  readonly querySalesEstimates?: (asin: string) => Promise<SalesEstimatesQueryResult>;
   readonly queryShareOfVoice?: (keyword: string) => Promise<ShareOfVoiceQueryResult>;
   enqueueResume?(input: {
     readonly candidateId: string;
@@ -57,7 +60,13 @@ function relevantAsinsFrom(payload: unknown): string[] {
   }
   return [
     ...new Set(
-      asins.filter((asin): asin is string => typeof asin === 'string' && asin.length > 0)
+      asins
+        .filter((asin): asin is string => typeof asin === 'string' && asin.length > 0)
+        .map((asin) => {
+          const separator = asin.indexOf('/');
+          return separator >= 0 ? asin.slice(separator + 1) : asin;
+        })
+        .filter((asin) => asin.length > 0)
     )
   ].sort();
 }
@@ -152,7 +161,7 @@ export async function runEnrichStrongPotential(
     }
     asins = relevantAsinsFrom(relevant?.payload);
   }
-  asins = [...new Set(asins)].sort();
+  asins = [...new Set(asins)].sort().slice(0, 3);
 
   const incomplete = async (outcome: Extract<BudgetedCallOutcome, { kind: 'deferred_budget' | 'in_flight' }>) => {
     await options.enqueueResume?.({
@@ -207,36 +216,50 @@ export async function runEnrichStrongPotential(
 
   if (options.querySalesEstimates && asins.length > 0) {
     const querySales = options.querySalesEstimates;
-    const outcome = await runEndpoint({
-      client,
-      budget,
-      candidateId,
-      endpoint: 'sales_estimates',
-      phrases: asins,
-      query: async () => {
-        const fetched = await querySales(asins);
+    const estimates: Array<{
+      asin: string;
+      estimatedMonthlySales: number | null;
+      dailySales?: number[];
+      prices?: number[];
+    }> = [];
+    for (const asin of asins) {
+      let outcome: BudgetedCallOutcome;
+      try {
+        outcome = await runEndpoint({
+          client,
+          budget,
+          candidateId,
+          endpoint: 'sales_estimates',
+          phrases: [asin],
+          query: async () => {
+            const fetched = await querySales(asin);
+            return {
+              payload: fetched.data,
+              httpAttempts: fetched.httpAttempts,
+              status: fetched.status
+            };
+          }
+        });
+      } catch (error: unknown) {
+        if (error instanceof JungleScoutClientError && error.status === 422) {
+          continue;
+        }
+        throw error;
+      }
+      if (outcome.kind === 'blocked_policy') {
         return {
-          payload: fetched.data,
-          httpAttempts: fetched.httpAttempts,
-          status: fetched.status
+          differentiationMode: 'missing',
+          completed: false,
+          analysisVerdict: null,
+          salesAsins: asins
         };
       }
-    });
-    if (outcome.kind === 'blocked_policy') {
-      return {
-        differentiationMode: 'missing',
-        completed: false,
-        analysisVerdict: null,
-        salesAsins: asins
-      };
-    }
-    if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
-      return incomplete(outcome);
-    }
-    await persistEvidence(client, candidateId, 'sales_estimates', outcome.payload);
-    const estimates =
-      outcome.payload && typeof outcome.payload === 'object' && 'estimates' in outcome.payload
-        ? (outcome.payload as {
+      if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
+        return incomplete(outcome);
+      }
+      if (outcome.payload && typeof outcome.payload === 'object' && 'estimates' in outcome.payload) {
+        estimates.push(
+          ...(outcome.payload as {
             estimates: Array<{
               asin: string;
               estimatedMonthlySales: number | null;
@@ -244,7 +267,10 @@ export async function runEnrichStrongPotential(
               prices?: number[];
             }>;
           }).estimates
-        : [];
+        );
+      }
+    }
+    await persistEvidence(client, candidateId, 'sales_estimates', { estimates });
     await persistEvidence(
       client,
       candidateId,
@@ -282,35 +308,29 @@ export async function runEnrichStrongPotential(
       return incomplete(outcome);
     }
     await persistEvidence(client, candidateId, 'share_of_voice', outcome.payload);
-    const { data: products, error: productError } = await client
-      .from('products')
-      .select('asin,brand')
-      .in('asin', asins.length > 0 ? asins : ['']);
-    if (productError) {
-      throw new Error(`Could not load brand mapping: ${productError.message}`);
-    }
-    const brandByAsin: Record<string, string | null> = {};
-    for (const product of products ?? []) {
-      if (typeof product.asin === 'string') {
-        brandByAsin[product.asin] = typeof product.brand === 'string' ? product.brand : null;
-      }
-    }
-    const rows =
-      outcome.payload && typeof outcome.payload === 'object' && 'rows' in outcome.payload
-        ? (outcome.payload as { rows: Array<{ asin: string; share: number | null }> }).rows
+    const brands =
+      outcome.payload && typeof outcome.payload === 'object' && 'brands' in outcome.payload
+        ? (outcome.payload as {
+            brands: Array<{ brand: string; share: number | null }>;
+          }).brands
         : [];
     await persistEvidence(
       client,
       candidateId,
       'share_of_voice_analysis',
-      analyzeShareOfVoice({ rows, brandByAsin })
+      analyzeShareOfVoice({ brands })
     );
   }
 
   if (historicalPayload && typeof historicalPayload === 'object' && 'points' in historicalPayload) {
     const analysis = analyzeHistoricalSearchVolume({
-      points: (historicalPayload as { points: Array<{ month: string; searchVolume: number | null }> })
-        .points
+      points: (historicalPayload as {
+        points: Array<{
+          periodStart: string;
+          periodEnd: string;
+          searchVolume: number | null;
+        }>;
+      }).points
     });
     await persistEvidence(client, candidateId, 'historical_search_volume_analysis', analysis);
   }

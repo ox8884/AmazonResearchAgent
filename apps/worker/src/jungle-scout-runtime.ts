@@ -19,6 +19,20 @@ const DEFAULT_BASE_URL = 'https://developer.junglescout.com';
 const DEFAULT_DAILY_LIMIT = 20;
 const DEFAULT_RESERVED_LIMIT = 5;
 
+export function buildCompleteDateRange(
+  days: number,
+  now: Date
+): { readonly startDate: string; readonly endDate: string } {
+  const end = new Date(now.getTime());
+  end.setUTCDate(end.getUTCDate() - 1);
+  const start = new Date(end.getTime());
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10)
+  };
+}
+
 export class JungleScoutConfigurationError extends Error {
   constructor() {
     super('Jungle Scout is not configured');
@@ -106,7 +120,8 @@ export function createJungleScoutKeywordQuery(
 }
 
 export function createJungleScoutHistoricalSearchVolumeQuery(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  now?: Date
 ): (keyword: string) => Promise<HistoricalSearchVolumeQueryResult> {
   let client: JungleScoutClient | undefined;
   return async (keyword) => {
@@ -118,15 +133,21 @@ export function createJungleScoutHistoricalSearchVolumeQuery(
         baseUrl: config.baseUrl
       });
     }
-    return queryHistoricalSearchVolume(client, { marketplace: 'us', keyword });
+    const range = buildCompleteDateRange(365, now ?? new Date());
+    return queryHistoricalSearchVolume(client, {
+      marketplace: 'us',
+      keyword,
+      ...range
+    });
   };
 }
 
 export function createJungleScoutSalesEstimatesQuery(
-  env: NodeJS.ProcessEnv = process.env
-): (asins: readonly string[]) => Promise<SalesEstimatesQueryResult> {
+  env: NodeJS.ProcessEnv = process.env,
+  now?: Date
+): (asin: string) => Promise<SalesEstimatesQueryResult> {
   let client: JungleScoutClient | undefined;
-  return async (asins) => {
+  return async (asin) => {
     if (!client) {
       const config = readJungleScoutEnv(env);
       client = new JungleScoutClient({
@@ -135,7 +156,8 @@ export function createJungleScoutSalesEstimatesQuery(
         baseUrl: config.baseUrl
       });
     }
-    return querySalesEstimates(client, { marketplace: 'us', asins: [...asins] });
+    const range = buildCompleteDateRange(30, now ?? new Date());
+    return querySalesEstimates(client, { marketplace: 'us', asin, ...range });
   };
 }
 

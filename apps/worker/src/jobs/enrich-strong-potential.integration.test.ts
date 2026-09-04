@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
+import { JungleScoutClientError } from '@ara/jungle-scout';
 import { runEnrichStrongPotential } from './enrich-strong-potential';
 
 
@@ -185,10 +186,10 @@ integration('strong potential enrichment', () => {
     let salesCalls = 0;
     await runEnrichStrongPotential(candidateId, client, {
       budget,
-      querySalesEstimates: async (asins) => {
+      querySalesEstimates: async (asin) => {
         salesCalls += 1;
         return {
-          data: { estimates: asins.map((asin) => ({ asin, estimatedMonthlySales: null })) },
+          data: { estimates: [{ asin, estimatedMonthlySales: null }] },
           httpAttempts: 1,
           status: 200
         };
@@ -202,14 +203,14 @@ integration('strong potential enrichment', () => {
       .eq('endpoint', 'sales_estimates');
     expect(usage).toHaveLength(0);
 
-    let seen: readonly string[] = [];
+    const seen: string[] = [];
     await runEnrichStrongPotential(candidateId, client, {
       budget,
       asins: ['B0AAA', 'B0AAA', 'B0BBB'],
-      querySalesEstimates: async (asins) => {
-        seen = asins;
+      querySalesEstimates: async (asin) => {
+        seen.push(asin);
         return {
-          data: { estimates: asins.map((asin) => ({ asin, estimatedMonthlySales: null })) },
+          data: { estimates: [{ asin, estimatedMonthlySales: null }] },
           httpAttempts: 1,
           status: 200
         };
@@ -265,22 +266,28 @@ integration('strong potential enrichment', () => {
     await client.from('candidate_evidence').insert({
       candidate_id: candidateId,
       kind: 'relevant_asins',
-      payload: { asins: ['B0REL1', 'B0REL1', 'B0REL2'], parentKeys: ['B0REL1'] }
+      payload: {
+        asins: ['us/B0REL1', 'us/B0REL1', 'us/B0REL2', 'us/B0REL3', 'us/B0REL4'],
+        parentKeys: ['us/B0REL1']
+      }
     });
-    let seen: readonly string[] = [];
+    const seen: string[] = [];
     const result = await runEnrichStrongPotential(candidateId, client, {
       budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
-      querySalesEstimates: async (asins) => {
-        seen = asins;
+      querySalesEstimates: async (asin) => {
+        seen.push(asin);
+        if (asin === 'B0REL1') {
+          throw new JungleScoutClientError('rank data unavailable', 422, false, 1);
+        }
         return {
-          data: { estimates: asins.map((asin) => ({ asin, estimatedMonthlySales: 10 })) },
+          data: { estimates: [{ asin, estimatedMonthlySales: 10 }] },
           httpAttempts: 1,
           status: 200
         };
       }
     });
-    expect(seen).toEqual(['B0REL1', 'B0REL2']);
-    expect(result.salesAsins).toEqual(['B0REL1', 'B0REL2']);
+    expect(seen).toEqual(['B0REL1', 'B0REL2', 'B0REL3']);
+    expect(result.salesAsins).toEqual(['B0REL1', 'B0REL2', 'B0REL3']);
     expect(result.analysisVerdict).not.toBe('strong_potential');
   });
 
