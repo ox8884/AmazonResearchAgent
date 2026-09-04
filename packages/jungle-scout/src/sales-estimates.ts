@@ -3,7 +3,9 @@ import type { JungleScoutClient } from './client';
 
 export const SalesEstimatesInputSchema = z.object({
   marketplace: z.literal('us'),
-  asins: z.array(z.string().trim().min(1)).min(1)
+  asin: z.string().trim().min(1),
+  startDate: z.iso.date(),
+  endDate: z.iso.date()
 });
 export type SalesEstimatesInput = z.infer<typeof SalesEstimatesInputSchema>;
 
@@ -19,34 +21,6 @@ export const SalesEstimatesSchema = z.object({
 });
 export type SalesEstimates = z.infer<typeof SalesEstimatesSchema>;
 
-function readNumberSeries(value: unknown): number[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-  const series: number[] = [];
-  for (const item of value) {
-    if (typeof item === 'number' && Number.isFinite(item)) {
-      series.push(item);
-      continue;
-    }
-    if (item && typeof item === 'object') {
-      const record = item as Record<string, unknown>;
-      const units =
-        typeof record.units === 'number'
-          ? record.units
-          : typeof record.sales === 'number'
-            ? record.sales
-            : typeof record.price === 'number'
-              ? record.price
-              : null;
-      if (units !== null && Number.isFinite(units)) {
-        series.push(units);
-      }
-    }
-  }
-  return series.length > 0 ? series : undefined;
-}
-
 export interface SalesEstimatesQueryResult {
   readonly data: SalesEstimates;
   readonly httpAttempts: number;
@@ -55,22 +29,18 @@ export interface SalesEstimatesQueryResult {
 
 export function buildSalesEstimatesRequest(input: SalesEstimatesInput): {
   readonly path: string;
-  readonly method: 'POST';
-  readonly json: unknown;
+  readonly method: 'GET';
 } {
   const parsed = SalesEstimatesInputSchema.parse(input);
+  const params = new URLSearchParams({
+    marketplace: parsed.marketplace,
+    asin: parsed.asin,
+    start_date: parsed.startDate,
+    end_date: parsed.endDate
+  });
   return {
-    path: '/api/sales_estimates_query',
-    method: 'POST',
-    json: {
-      data: {
-        type: 'sales_estimates_query',
-        attributes: {
-          marketplace: parsed.marketplace,
-          asins: parsed.asins
-        }
-      }
-    }
+    path: `/api/sales_estimates_query?${params.toString()}`,
+    method: 'GET'
   };
 }
 
@@ -79,10 +49,7 @@ export async function querySalesEstimates(
   input: SalesEstimatesInput
 ): Promise<SalesEstimatesQueryResult> {
   const request = buildSalesEstimatesRequest(input);
-  const result = await client.request(request.path, {
-    method: request.method,
-    json: request.json
-  });
+  const result = await client.request(request.path, { method: request.method });
   const body = result.body;
   const estimates: Array<{
     asin: string;
@@ -92,29 +59,38 @@ export async function querySalesEstimates(
   }> = [];
   if (typeof body === 'object' && body !== null && 'data' in body && Array.isArray(body.data)) {
     for (const row of body.data) {
-      if (typeof row !== 'object' || row === null || !('id' in row)) {
+      if (typeof row !== 'object' || row === null || !('attributes' in row)) {
         continue;
       }
-      const asin = typeof row.id === 'string' ? row.id : null;
       const attributes =
         'attributes' in row && row.attributes && typeof row.attributes === 'object'
           ? row.attributes
           : {};
-      const estimatedMonthlySales =
-        'estimated_monthly_sales' in attributes &&
-        typeof attributes.estimated_monthly_sales === 'number'
-          ? attributes.estimated_monthly_sales
-          : null;
-      const dailySales = readNumberSeries(
-        'daily_sales' in attributes ? attributes.daily_sales : undefined
-      );
-      const prices = readNumberSeries('prices' in attributes ? attributes.prices : undefined);
+      const asin = typeof attributes.asin === 'string' ? attributes.asin : null;
+      const series = Array.isArray(attributes.data) ? attributes.data : [];
+      const dailySales: number[] = [];
+      const prices: number[] = [];
+      for (const point of series) {
+        if (!point || typeof point !== 'object') {
+          continue;
+        }
+        const record = point as Record<string, unknown>;
+        if (typeof record.estimated_units_sold === 'number') {
+          dailySales.push(record.estimated_units_sold);
+        }
+        if (typeof record.last_known_price === 'number') {
+          prices.push(record.last_known_price);
+        }
+      }
       if (asin) {
         estimates.push({
           asin,
-          estimatedMonthlySales,
-          ...(dailySales ? { dailySales } : {}),
-          ...(prices ? { prices } : {})
+          estimatedMonthlySales:
+            dailySales.length > 0
+              ? dailySales.reduce((total, value) => total + value, 0)
+              : null,
+          ...(dailySales.length > 0 ? { dailySales } : {}),
+          ...(prices.length > 0 ? { prices } : {})
         });
       }
     }

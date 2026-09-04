@@ -52,13 +52,22 @@ function stability(values: readonly number[]): number | null {
 }
 
 export function analyzeHistoricalSearchVolume(input: {
-  readonly points: readonly { readonly month: string; readonly searchVolume: number | null }[];
+  readonly points: readonly {
+    readonly periodStart: string;
+    readonly periodEnd: string;
+    readonly searchVolume: number | null;
+  }[];
 }): HistoricalSearchAnalysis {
   const usable = input.points.filter(
-    (point): point is { month: string; searchVolume: number } =>
+    (point): point is {
+      periodStart: string;
+      periodEnd: string;
+      searchVolume: number;
+    } =>
       typeof point.searchVolume === 'number'
   );
-  const months = usable.map((point) => point.month);
+  const periodStarts = usable.map((point) => point.periodStart);
+  const periodEnds = usable.map((point) => point.periodEnd);
   if (usable.length < 6) {
     return {
       source: 'historical_search_volume',
@@ -68,7 +77,10 @@ export function analyzeHistoricalSearchVolume(input: {
       seasonalityIndex: null,
       seasonal: null,
       consistency: null,
-      sourcePeriod: { from: months[0] ?? null, to: months[months.length - 1] ?? null }
+      sourcePeriod: {
+        from: periodStarts[0] ?? null,
+        to: periodEnds[periodEnds.length - 1] ?? null
+      }
     };
   }
   const volumes = usable.map((point) => point.searchVolume);
@@ -82,7 +94,10 @@ export function analyzeHistoricalSearchVolume(input: {
     seasonalityIndex,
     seasonal: seasonalityIndex !== null && seasonalityIndex >= 0.4,
     consistency: stability(volumes),
-    sourcePeriod: { from: months[0] ?? null, to: months[months.length - 1] ?? null }
+    sourcePeriod: {
+      from: periodStarts[0] ?? null,
+      to: periodEnds[periodEnds.length - 1] ?? null
+    }
   };
 }
 
@@ -121,25 +136,18 @@ export function analyzeSalesEstimates(input: {
 }
 
 export function analyzeShareOfVoice(input: {
-  readonly rows: readonly { readonly asin: string; readonly share: number | null }[];
-  readonly brandByAsin: Readonly<Record<string, string | null | undefined>>;
+  readonly brands: readonly { readonly brand: string; readonly share: number | null }[];
 }): ShareOfVoiceAnalysis {
   const brandShares = new Map<string, number>();
-  let mappedShare = 0;
   let totalShare = 0;
-  for (const row of input.rows) {
+  for (const row of input.brands) {
     if (row.share === null) {
       continue;
     }
     totalShare += row.share;
-    const brand = input.brandByAsin[row.asin];
-    if (!brand) {
-      continue;
-    }
-    mappedShare += row.share;
-    brandShares.set(brand, (brandShares.get(brand) ?? 0) + row.share);
+    brandShares.set(row.brand, (brandShares.get(row.brand) ?? 0) + row.share);
   }
-  if (mappedShare <= 0 || totalShare <= 0) {
+  if (totalShare <= 0) {
     return {
       source: 'share_of_voice',
       observedOrEstimated: 'observed',
@@ -155,9 +163,9 @@ export function analyzeShareOfVoice(input: {
   return {
     source: 'share_of_voice',
     observedOrEstimated: 'observed',
-    quality: mappedShare < totalShare ? 'unmapped_brands' : 'ok',
-    confidence: mappedShare < totalShare ? 'low' : 'high',
-    brandDominance: topShare / mappedShare,
+    quality: 'ok',
+    confidence: 'high',
+    brandDominance: topShare / totalShare,
     topBrand,
     sourcePeriod: { from: null, to: null }
   };

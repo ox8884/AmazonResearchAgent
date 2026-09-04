@@ -6,6 +6,10 @@ import {
 } from './client';
 
 const NullableNumberSchema = z.number().nullable();
+const ProductAsinSchema = z.string().min(1).transform((value) => {
+  const separator = value.indexOf('/');
+  return separator >= 0 ? value.slice(separator + 1) : value;
+});
 
 export const ProductDatabaseAttributesSchema = z.object({
   title: z.string(),
@@ -13,7 +17,7 @@ export const ProductDatabaseAttributesSchema = z.object({
   price: NullableNumberSchema,
   reviews: z.number().int().nullable().optional(),
   rating: NullableNumberSchema,
-  parent_asin: z.string().nullable(),
+  parent_asin: ProductAsinSchema.nullable(),
   seller_type: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   rank: z.number().int().nullable().optional(),
@@ -30,7 +34,7 @@ export const ProductDatabaseAttributesSchema = z.object({
 export type ProductDatabaseAttributes = z.infer<typeof ProductDatabaseAttributesSchema>;
 
 export const ProductDatabaseProductSchema = z.object({
-  id: z.string().min(1),
+  id: ProductAsinSchema,
   type: z.string().min(1),
   attributes: ProductDatabaseAttributesSchema
 });

@@ -30,23 +30,34 @@ describe('Jungle Scout Task 11 adapters', () => {
     });
   }
 
-  // Break: Historical Search Volume fabricates monthly volume.
-  it('parses Historical Search Volume nulls from the provider body', async () => {
+  it('parses official weekly Historical Search Volume fields', async () => {
     const client = await listen((_request, response) => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(
         JSON.stringify({
-          data: [{ attributes: { month: '2026-01', search_volume: null } }]
+          data: [
+            {
+              attributes: {
+                estimate_start_date: '2026-01-04',
+                estimate_end_date: '2026-01-10',
+                estimated_exact_search_volume: 123
+              }
+            }
+          ]
         })
       );
     });
     const result = await queryHistoricalSearchVolume(client, {
       marketplace: 'us',
-      keyword: 'faucet mat'
+      keyword: 'faucet mat',
+      startDate: '2025-09-02',
+      endDate: '2026-09-01'
     });
     expect(result.status).toBe(200);
     expect(result.httpAttempts).toBe(1);
-    expect(result.data.points).toEqual([{ month: '2026-01', searchVolume: null }]);
+    expect(result.data.points).toEqual([
+      { periodStart: '2026-01-04', periodEnd: '2026-01-10', searchVolume: 123 }
+    ]);
   });
 
   // Break: Sales Estimates invent 29.99 economics.
@@ -55,13 +66,20 @@ describe('Jungle Scout Task 11 adapters', () => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(
         JSON.stringify({
-          data: [{ id: 'B0ASINTEST', attributes: { estimated_monthly_sales: null } }]
+          data: [
+            {
+              id: 'us/B0ASINTEST',
+              attributes: { asin: 'B0ASINTEST', data: [] }
+            }
+          ]
         })
       );
     });
     const result = await querySalesEstimates(client, {
       marketplace: 'us',
-      asins: ['B0ASINTEST']
+      asin: 'B0ASINTEST',
+      startDate: '2026-08-03',
+      endDate: '2026-09-01'
     });
     expect(result.data.estimates).toEqual([
       { asin: 'B0ASINTEST', estimatedMonthlySales: null }
@@ -77,9 +95,12 @@ describe('Jungle Scout Task 11 adapters', () => {
             {
               id: 'B0ASINTEST',
               attributes: {
-                estimated_monthly_sales: 400,
-                daily_sales: [10, 12, 9, 11],
-                prices: [19.99, 19.5, 20]
+                asin: 'B0ASINTEST',
+                data: [
+                  { date: '2026-08-30', estimated_units_sold: 10, last_known_price: 19.99 },
+                  { date: '2026-08-31', estimated_units_sold: 12, last_known_price: 19.5 },
+                  { date: '2026-09-01', estimated_units_sold: 9, last_known_price: 20 }
+                ]
               }
             }
           ]
@@ -88,9 +109,12 @@ describe('Jungle Scout Task 11 adapters', () => {
     });
     const result = await querySalesEstimates(client, {
       marketplace: 'us',
-      asins: ['B0ASINTEST']
+      asin: 'B0ASINTEST',
+      startDate: '2026-08-03',
+      endDate: '2026-09-01'
     });
-    expect(result.data.estimates[0]?.dailySales).toEqual([10, 12, 9, 11]);
+    expect(result.data.estimates[0]?.estimatedMonthlySales).toBe(31);
+    expect(result.data.estimates[0]?.dailySales).toEqual([10, 12, 9]);
     expect(result.data.estimates[0]?.prices).toEqual([19.99, 19.5, 20]);
   });
 
@@ -101,7 +125,15 @@ describe('Jungle Scout Task 11 adapters', () => {
       response.setHeader('content-type', 'application/vnd.api+json');
       response.end(
         JSON.stringify({
-          data: [{ id: 'B0ASINTEST', attributes: { share: 0.12 } }]
+          data: {
+            id: 'us/faucet mat',
+            attributes: {
+              brands: [
+                { brand: 'Zulay', combined_weighted_sov: 0.7 },
+                { brand: 'Other', combined_weighted_sov: 0.3 }
+              ]
+            }
+          }
         })
       );
     });
@@ -109,17 +141,30 @@ describe('Jungle Scout Task 11 adapters', () => {
       marketplace: 'us',
       keyword: 'faucet mat'
     });
-    expect(result.data.rows).toEqual([{ asin: 'B0ASINTEST', share: 0.12 }]);
+    expect(result.data.brands).toEqual([
+      { brand: 'Zulay', share: 0.7 },
+      { brand: 'Other', share: 0.3 }
+    ]);
   });
 
   it('builds approved Task 11 request shapes', () => {
-    expect(buildHistoricalSearchVolumeRequest({ marketplace: 'us', keyword: 'faucet mat' })).toEqual({
-      path: '/api/keywords/historical_search_volume?marketplace=us&keyword=faucet+mat',
+    expect(buildHistoricalSearchVolumeRequest({
+      marketplace: 'us',
+      keyword: 'faucet mat',
+      startDate: '2025-09-02',
+      endDate: '2026-09-01'
+    })).toEqual({
+      path: '/api/keywords/historical_search_volume?marketplace=us&keyword=faucet+mat&start_date=2025-09-02&end_date=2026-09-01',
       method: 'GET'
     });
-    expect(buildSalesEstimatesRequest({ marketplace: 'us', asins: ['B0ASINTEST'] })).toMatchObject({
-      path: '/api/sales_estimates_query',
-      method: 'POST'
+    expect(buildSalesEstimatesRequest({
+      marketplace: 'us',
+      asin: 'B0ASINTEST',
+      startDate: '2026-08-03',
+      endDate: '2026-09-01'
+    })).toEqual({
+      path: '/api/sales_estimates_query?marketplace=us&asin=B0ASINTEST&start_date=2026-08-03&end_date=2026-09-01',
+      method: 'GET'
     });
     expect(buildShareOfVoiceRequest({ marketplace: 'us', keyword: 'faucet mat' })).toEqual({
       path: '/api/share_of_voice?marketplace=us&keyword=faucet+mat',
@@ -134,7 +179,9 @@ describe('Jungle Scout Task 11 adapters', () => {
     });
     const historical = await queryHistoricalSearchVolume(client, {
       marketplace: 'us',
-      keyword: 'faucet mat'
+      keyword: 'faucet mat',
+      startDate: '2025-09-02',
+      endDate: '2026-09-01'
     });
     expect(historical.data.points).toEqual([]);
     expect(historical.status).toBe(200);

@@ -52,6 +52,26 @@ describe('Jungle Scout Product Database adapter', () => {
     expect(page.data[0]?.attributes.weight).toBeUndefined();
   });
 
+  it('normalizes the JSON API marketplace prefix out of product ASINs', () => {
+    const page = ProductDatabasePageSchema.parse({
+      data: [
+        {
+          id: 'us/B0LIVE1',
+          type: 'product_database_result',
+          attributes: {
+            title: 'Drawer organizer',
+            price: 19.99,
+            rating: 4.5,
+            parent_asin: 'us/B0PARENT1'
+          }
+        }
+      ]
+    });
+
+    expect(page.data[0]?.id).toBe('B0LIVE1');
+    expect(page.data[0]?.attributes.parent_asin).toBe('B0PARENT1');
+  });
+
   it('keeps dimensions, sellers, buy box, and fee breakdown from the fixture', () => {
     const page = ProductDatabasePageSchema.parse(SINK_FIXTURE);
     const mat = page.data.find((product) => product.id === 'B0SINKMAT1');

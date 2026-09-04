@@ -7,14 +7,14 @@ export const ShareOfVoiceInputSchema = z.object({
 });
 export type ShareOfVoiceInput = z.infer<typeof ShareOfVoiceInputSchema>;
 
-const ShareOfVoiceRowSchema = z.object({
-  asin: z.string(),
+const ShareOfVoiceBrandSchema = z.object({
+  brand: z.string(),
   share: z.number().nullable()
 });
 
 export const ShareOfVoiceSchema = z.object({
   keyword: z.string(),
-  rows: z.array(ShareOfVoiceRowSchema)
+  brands: z.array(ShareOfVoiceBrandSchema)
 });
 export type ShareOfVoice = z.infer<typeof ShareOfVoiceSchema>;
 
@@ -46,22 +46,34 @@ export async function queryShareOfVoice(
   const request = buildShareOfVoiceRequest(input);
   const result = await client.request(request.path, { method: request.method });
   const body = result.body;
-  const rows: Array<{ asin: string; share: number | null }> = [];
-  if (typeof body === 'object' && body !== null && 'data' in body && Array.isArray(body.data)) {
-    for (const row of body.data) {
-      if (typeof row !== 'object' || row === null) {
+  const brands: Array<{ brand: string; share: number | null }> = [];
+  if (typeof body === 'object' && body !== null && 'data' in body) {
+    const data = body.data;
+    const attributes =
+      data && typeof data === 'object' && 'attributes' in data && data.attributes
+        && typeof data.attributes === 'object'
+        ? data.attributes
+        : {};
+    const providerBrands = 'brands' in attributes && Array.isArray(attributes.brands)
+      ? attributes.brands
+      : [];
+    for (const item of providerBrands) {
+      if (!item || typeof item !== 'object') {
         continue;
       }
-      const record = row as { id?: unknown; attributes?: Record<string, unknown> };
-      const asin = typeof record.id === 'string' ? record.id : null;
-      const share = typeof record.attributes?.share === 'number' ? record.attributes.share : null;
-      if (asin) {
-        rows.push({ asin, share });
+      const record = item as Record<string, unknown>;
+      const brand = typeof record.brand === 'string' ? record.brand : null;
+      const share =
+        typeof record.combined_weighted_sov === 'number'
+          ? record.combined_weighted_sov
+          : null;
+      if (brand) {
+        brands.push({ brand, share });
       }
     }
   }
   return {
-    data: ShareOfVoiceSchema.parse({ keyword: input.keyword, rows }),
+    data: ShareOfVoiceSchema.parse({ keyword: input.keyword, brands }),
     httpAttempts: result.httpAttempts,
     status: result.status
   };

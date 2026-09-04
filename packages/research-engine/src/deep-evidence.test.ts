@@ -9,8 +9,8 @@ describe('Task 11 derived analyses', () => {
   it('leaves seasonality unknown when fewer than six monthly points exist', () => {
     const result = analyzeHistoricalSearchVolume({
       points: [
-        { month: '2026-01', searchVolume: 100 },
-        { month: '2026-02', searchVolume: 110 }
+        { periodStart: '2026-01-04', periodEnd: '2026-01-10', searchVolume: 100 },
+        { periodStart: '2026-01-11', periodEnd: '2026-01-17', searchVolume: 110 }
       ]
     });
     expect(result.seasonalityIndex).toBeNull();
@@ -21,12 +21,12 @@ describe('Task 11 derived analyses', () => {
   it('flags seasonal Historical Search Volume when range exceeds 40% of mean', () => {
     const result = analyzeHistoricalSearchVolume({
       points: [
-        { month: '2025-03', searchVolume: 100 },
-        { month: '2025-04', searchVolume: 100 },
-        { month: '2025-05', searchVolume: 100 },
-        { month: '2025-06', searchVolume: 100 },
-        { month: '2025-07', searchVolume: 100 },
-        { month: '2025-08', searchVolume: 220 }
+        { periodStart: '2025-03-02', periodEnd: '2025-03-08', searchVolume: 100 },
+        { periodStart: '2025-03-09', periodEnd: '2025-03-15', searchVolume: 100 },
+        { periodStart: '2025-03-16', periodEnd: '2025-03-22', searchVolume: 100 },
+        { periodStart: '2025-03-23', periodEnd: '2025-03-29', searchVolume: 100 },
+        { periodStart: '2025-03-30', periodEnd: '2025-04-05', searchVolume: 100 },
+        { periodStart: '2025-04-06', periodEnd: '2025-04-12', searchVolume: 220 }
       ]
     });
     expect(result.seasonal).toBe(true);
@@ -71,14 +71,12 @@ describe('Task 11 derived analyses', () => {
     expect(result.confidence).toBe('low');
   });
 
-  it('maps Share of Voice ASINs to brands instead of treating ASIN share as dominance', () => {
+  it('computes brand dominance from official brand-level Share of Voice rows', () => {
     const result = analyzeShareOfVoice({
-      rows: [
-        { asin: 'B0A', share: 0.4 },
-        { asin: 'B0B', share: 0.3 },
-        { asin: 'B0C', share: 0.3 }
-      ],
-      brandByAsin: { B0A: 'Zulay', B0B: 'Zulay', B0C: 'Other' }
+      brands: [
+        { brand: 'Zulay', share: 0.7 },
+        { brand: 'Other', share: 0.3 }
+      ]
     });
     expect(result.topBrand).toBe('Zulay');
     expect(result.brandDominance).toBe(0.7);
