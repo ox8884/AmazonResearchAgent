@@ -106,4 +106,26 @@ describe('Jungle Scout authenticated client', () => {
     expect(result.body).toEqual({ data: [{ id: 'ok' }] });
     expect(hits).toBe(3);
   });
+
+  it('allows a controlled caller to disable retries', async () => {
+    let hits = 0;
+    const mock = await startMockServer((_request, response) => {
+      hits += 1;
+      response.statusCode = 500;
+      response.end(JSON.stringify({ errors: [{ status: '500' }] }));
+    });
+    server = mock.server;
+    const client = new JungleScoutClient({
+      keyName: 'AI',
+      apiKey: 'secret-key',
+      baseUrl: mock.baseUrl,
+      retryLimit: 0
+    });
+
+    await expect(client.request('/api/test', { method: 'GET' })).rejects.toMatchObject({
+      status: 500,
+      httpAttempts: 1
+    });
+    expect(hits).toBe(1);
+  });
 });

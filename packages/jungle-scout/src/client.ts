@@ -10,6 +10,7 @@ export interface JungleScoutClientConfig {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly timeoutMs?: number;
+  readonly retryLimit?: number;
   readonly log?: (message: string) => void;
 }
 
@@ -57,7 +58,7 @@ export class JungleScoutClient {
       timeout: config.timeoutMs ?? 30_000,
       redirect: 'manual',
       retry: {
-        limit: 2,
+        limit: config.retryLimit ?? 2,
         methods: ['get', 'post'],
         statusCodes: RETRY_STATUS_CODES
       },
