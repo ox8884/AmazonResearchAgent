@@ -6,6 +6,13 @@ const nextConfig = {
   // The dev-tools badge occludes content in visual-QA captures; it stays off
   // in dev so screenshots reflect the real product surface.
   devIndicators: false,
+  async redirects() {
+    return [{
+      source: '/',
+      destination: '/ko',
+      permanent: false
+    }];
+  },
   async headers() {
     return [{
       source: '/:path*',

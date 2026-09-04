@@ -15,3 +15,15 @@ describe('browser security headers', () => {
     expect(headers.get('X-Frame-Options')).toBe('DENY');
   });
 });
+
+describe('root locale redirect', () => {
+  it('redirects the root path to the Korean dashboard entry', async () => {
+    const redirects = await nextConfig.redirects();
+
+    expect(redirects).toEqual([{
+      source: '/',
+      destination: '/ko',
+      permanent: false
+    }]);
+  });
+});
