@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { loginAsAdmin } from '../e2e/test-admin';
 
 test('Research Now enqueues work and returns immediately', async ({ page }) => {
+  await loginAsAdmin(page);
   await page.route('**/api/research-now', async (route) => {
     await route.fulfill({
       status: 202,

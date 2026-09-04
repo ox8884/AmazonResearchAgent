@@ -3,6 +3,7 @@ import { CandidateScoreCard } from '../../../../components/candidate-score-card'
 import { CandidateStateBadge } from '../../../../components/ui';
 import { localizedHref, parseLocale } from '../../../../lib/locale';
 import { getCandidateDetailView } from '../../../../lib/server/dashboard-data';
+import { requireAdminPage } from '../../../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +22,7 @@ export default async function CandidateDetailPage({
 }) {
   const { locale: localeParam, id } = await params;
   const locale = parseLocale(localeParam);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const candidate = await getCandidateDetailView(id);
   const hasScore =

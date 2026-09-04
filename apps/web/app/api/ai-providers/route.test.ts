@@ -240,6 +240,29 @@ describe('provider settings route', () => {
     expect(fixtures.saveSettings).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'https://provider.example/v1?api_key=secret',
+    'https://provider.example/v1#secret'
+  ])('rejects provider URLs with query or fragment credentials: %s', async (baseUrl) => {
+    const response = await POST(
+      new Request('https://app.example.test/api/ai-providers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          product: 'openai_compatible_api',
+          name: 'Unsafe provider',
+          billingType: 'payg',
+          baseUrl,
+          networkScope: 'public',
+          roles: []
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(fixtures.saveSettings).not.toHaveBeenCalled();
+  });
+
 
   it('rejects a model ID equal to the stored secret on blank-key edit', async () => {
     fixtures.findSecret.mockResolvedValue({

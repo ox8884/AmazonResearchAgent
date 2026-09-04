@@ -16,6 +16,7 @@ import {
   getDashboardView,
   getJobCountsView
 } from '../../lib/server/dashboard-data';
+import { requireAdminPage } from '../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,7 @@ export default async function DashboardPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const [dashboard, jobCounts, apiBudget, stateCounts] = await Promise.all([
     getDashboardView(),

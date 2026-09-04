@@ -40,6 +40,28 @@ export class JungleScoutConfigurationError extends Error {
   }
 }
 
+function parseJungleScoutBaseUrl(value: string): string {
+  if (!URL.canParse(value)) {
+    throw new JungleScoutConfigurationError();
+  }
+  const url = new URL(value);
+  const loopbackHttp =
+    url.protocol === 'http:' &&
+    (url.hostname === '127.0.0.1' ||
+      url.hostname === 'localhost' ||
+      url.hostname === '[::1]');
+  if (
+    (url.protocol !== 'https:' && !loopbackHttp) ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search.length > 0 ||
+    url.hash.length > 0
+  ) {
+    throw new JungleScoutConfigurationError();
+  }
+  return url.toString();
+}
+
 export function readJungleScoutEnv(env: NodeJS.ProcessEnv = process.env): {
   readonly keyName: string;
   readonly apiKey: string;
@@ -54,7 +76,9 @@ export function readJungleScoutEnv(env: NodeJS.ProcessEnv = process.env): {
   return {
     keyName,
     apiKey,
-    baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : DEFAULT_BASE_URL
+    baseUrl: baseUrl && baseUrl.length > 0
+      ? parseJungleScoutBaseUrl(baseUrl)
+      : DEFAULT_BASE_URL
   };
 }
 

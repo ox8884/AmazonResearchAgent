@@ -1,6 +1,7 @@
 import { getCopy } from '@ara/shared';
 import { ImportUploadForm } from '../../../../components/import-upload-form';
 import { localizedHref, parseLocale } from '../../../../lib/locale';
+import { requireAdminPage } from '../../../../lib/server/admin-page-auth';
 
 export default async function NewImportPage({
   params
@@ -8,6 +9,7 @@ export default async function NewImportPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
 
   return (

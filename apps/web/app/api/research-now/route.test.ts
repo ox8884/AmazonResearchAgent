@@ -6,6 +6,12 @@ import { POST as login } from '../auth/login/route';
 
 const enqueueResearchNow = vi.fn();
 
+vi.mock('../../../lib/server/admin-session-store', () => ({
+  persistAdminSession: async () => undefined,
+  isAdminSessionActive: async () => true,
+  AdminSessionStoreError: class AdminSessionStoreError extends Error {}
+}));
+
 vi.mock('../../../lib/server/research-now', () => ({
   enqueueResearchNow: (...args: unknown[]) => enqueueResearchNow(...args),
   ResearchNowEnqueueError: class ResearchNowEnqueueError extends Error {}

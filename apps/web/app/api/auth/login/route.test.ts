@@ -11,6 +11,7 @@ const originalEnvironment = {
 const verifyAdminPassword = vi.fn();
 const consumeDurableLoginAttempt = vi.fn();
 const withDurableLoginScrypt = vi.fn();
+const persistAdminSession = vi.fn();
 
 vi.mock('../../../../lib/server/admin-session', async () => {
   const actual = await vi.importActual<
@@ -25,6 +26,11 @@ vi.mock('../../../../lib/server/admin-session', async () => {
 vi.mock('../../../../lib/server/login-guard', () => ({
   consumeDurableLoginAttempt: () => consumeDurableLoginAttempt(),
   withDurableLoginScrypt: <T>(work: () => Promise<T>) => withDurableLoginScrypt(work)
+}));
+
+vi.mock('../../../../lib/server/admin-session-store', () => ({
+  AdminSessionStoreError: class AdminSessionStoreError extends Error {},
+  persistAdminSession: (...args: unknown[]) => persistAdminSession(...args)
 }));
 
 function loginRequest(password: string): Request {
@@ -47,6 +53,8 @@ describe('login abuse protection', () => {
     withDurableLoginScrypt.mockImplementation(async (work: () => Promise<unknown>) => work());
     verifyAdminPassword.mockReset();
     verifyAdminPassword.mockResolvedValue(true);
+    persistAdminSession.mockReset();
+    persistAdminSession.mockResolvedValue(undefined);
     process.env.ADMIN_PASSWORD_SCRYPT = await hashAdminPassword(
       'correct horse battery staple',
       Buffer.alloc(16, 2)
@@ -84,6 +92,7 @@ describe('login abuse protection', () => {
     expect(
       response.headers.getSetCookie().some((cookie) => cookie.includes('ara_admin_session='))
     ).toBe(true);
+    expect(persistAdminSession).toHaveBeenCalledOnce();
   });
 
   it('does not start a second scrypt while one is in flight', async () => {

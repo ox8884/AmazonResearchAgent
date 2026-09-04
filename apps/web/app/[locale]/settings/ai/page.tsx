@@ -1,13 +1,7 @@
 import { getCopy } from '@ara/shared';
-import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
 import { AdminLogoutButton } from '../../../../components/admin-logout-button';
 import { AiProviderForm } from '../../../../components/ai-provider-form';
-import {
-  AdminCookieNames,
-  getSessionSigningKey,
-  verifyAdminSession
-} from '../../../../lib/server/admin-session';
+import { requireAdminPage } from '../../../../lib/server/admin-page-auth';
 import { parseLocale } from '../../../../lib/locale';
 
 export default async function AiSettingsPage({
@@ -16,20 +10,8 @@ export default async function AiSettingsPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
-  const cookieStore = await cookies();
-  const token = cookieStore.get(AdminCookieNames.session)?.value;
-  let authenticated = false;
-  if (token) {
-    try {
-      authenticated = verifyAdminSession(token, getSessionSigningKey()) !== null;
-    } catch {
-      authenticated = false;
-    }
-  }
-  if (!authenticated) {
-    redirect(`/${locale}/login`);
-  }
 
   return (
     <div className="content-stack">

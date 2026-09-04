@@ -50,12 +50,17 @@ const ModelStatusSchema = z.object({
   priority: z.number().int().nonnegative()
 }).strict();
 
+const ProviderBaseUrlSchema = z.url().refine((value) => {
+  const url = new URL(value);
+  return !url.search && !url.hash && !url.username && !url.password;
+}, 'Provider URL must not include credentials, a query string, or a fragment.');
+
 const HttpProviderInputSchema = z.object({
   product: z.literal('openai_compatible_api'),
   id: z.string().trim().min(1).max(120).optional(),
   name: z.string().trim().min(1).max(120),
   billingType: BillingTypeSchema,
-  baseUrl: z.union([z.literal(''), z.url()]).transform((value) => value || undefined),
+  baseUrl: z.union([z.literal(''), ProviderBaseUrlSchema]).transform((value) => value || undefined),
   networkScope: z.enum(['public', 'private', 'loopback']).default('public'),
   apiKey: z.string().optional(),
   modelId: z.string().trim().transform((value) => value || undefined).optional(),
@@ -327,7 +332,7 @@ async function readJson(request: Request): Promise<unknown> {
 
 export async function GET(request: Request): Promise<NextResponse> {
   try {
-    requireAdminRead(request);
+    await requireAdminRead(request);
     const { client } = getServerDatabaseContext();
     const repository = createProviderRepository(client);
     const [providers, models, secrets, runtimeStates] = await Promise.all([
@@ -536,7 +541,7 @@ async function disableSubscriptionProvider(providerId: string): Promise<NextResp
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    requireAdminMutation(request);
+    await requireAdminMutation(request);
     const parsed = ProviderMutationSchema.safeParse(await readJson(request));
     if (!parsed.success) {
       return NextResponse.json({ error: 'invalid_provider' }, { status: 400 });

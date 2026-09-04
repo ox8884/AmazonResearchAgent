@@ -155,6 +155,9 @@ export async function pinProviderDestination(
   if (url.username || url.password) {
     throw new ProviderUrlPolicyError('Provider URL credentials are not allowed.');
   }
+  if (url.search || url.hash) {
+    throw new ProviderUrlPolicyError('Provider URL query strings and fragments are not allowed.');
+  }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ProviderUrlPolicyError('Provider URL must use HTTP or HTTPS.');
   }
@@ -283,6 +286,10 @@ export function createPinnedProviderFetch(
       method,
       headers
     };
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    if (signal) {
+      requestInit.signal = signal;
+    }
     const requestBody =
       typeof init?.body === 'string' || init?.body instanceof Uint8Array
         ? init.body

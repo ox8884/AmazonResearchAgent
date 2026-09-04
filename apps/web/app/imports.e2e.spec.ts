@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import path from 'node:path';
+import { loginAsAdmin } from '../e2e/test-admin';
 
 const fixtureRoot = path.resolve('../../tests/fixtures/opportunity-finder');
 const fixtureFiles = [
@@ -8,6 +9,7 @@ const fixtureFiles = [
 ];
 
 test('queues multiple CSV files and reports the import in Korean', async ({ page }) => {
+  await loginAsAdmin(page);
   await page.route('**/api/imports', async (route) => {
     await route.fulfill({
       status: 202,
@@ -34,6 +36,7 @@ test('queues multiple CSV files and reports the import in Korean', async ({ page
 });
 
 test('preserves the import route when switching to English', async ({ page }) => {
+  await loginAsAdmin(page);
   await page.goto('/ko/imports/new');
   await page.getByRole('link', { name: 'English' }).click();
 
@@ -50,6 +53,7 @@ test('shows Korean showcase labels without mixed-language section headings', asy
 });
 
 test('blocks a selection above the 20-file upload limit', async ({ page }) => {
+  await loginAsAdmin(page);
   await page.goto('/ko/imports/new');
   await page.waitForLoadState('networkidle');
   const files = Array.from({ length: 21 }, (_, index) => ({

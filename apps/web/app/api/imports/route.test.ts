@@ -11,6 +11,12 @@ import { POST as login } from '../auth/login/route';
 
 const enqueueImport = vi.fn();
 
+vi.mock('../../../lib/server/admin-session-store', () => ({
+  persistAdminSession: async () => undefined,
+  isAdminSessionActive: async () => true,
+  AdminSessionStoreError: class AdminSessionStoreError extends Error {}
+}));
+
 vi.mock('../../../lib/server/enqueue-import', () => ({
   enqueueImport: (...args: unknown[]) => enqueueImport(...args),
   ImportEnqueueError: class ImportEnqueueError extends Error {}

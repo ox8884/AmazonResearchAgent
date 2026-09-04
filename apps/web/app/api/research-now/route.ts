@@ -15,7 +15,7 @@ export const runtime = 'nodejs';
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    requireAdminMutation(request);
+    await requireAdminMutation(request);
     const body = await request.json().catch(() => null);
     const modeResult = ResearchNowModeSchema.safeParse(
       body && typeof body === 'object' && 'mode' in body ? body.mode : undefined

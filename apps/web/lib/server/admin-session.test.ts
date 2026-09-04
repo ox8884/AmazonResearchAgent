@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createAdminSession,
   hashAdminPassword,
+  parseCookieHeader,
   verifyAdminPassword,
   verifyAdminSession
 } from './admin-session';
@@ -20,6 +21,7 @@ describe('single-admin session', () => {
     const issued = createAdminSession(key, new Date('2026-08-27T00:00:00.000Z'), 3_600);
 
     expect(verifyAdminSession(issued.token, key, new Date('2026-08-27T00:59:59.000Z'))).toMatchObject({
+      sessionId: issued.sessionId,
       csrfToken: issued.csrfToken
     });
     expect(verifyAdminSession(issued.token, key, new Date('2026-08-27T01:00:01.000Z'))).toBeNull();
@@ -49,5 +51,11 @@ describe('single-admin session', () => {
         new Date('2026-08-27T00:10:00.000Z')
       )
     ).toThrow();
+  });
+
+  it('ignores malformed percent-encoded cookies instead of throwing', () => {
+    expect(parseCookieHeader('ara_admin_session=%ZZ; safe=value')).toEqual(
+      new Map([['safe', 'value']])
+    );
   });
 });

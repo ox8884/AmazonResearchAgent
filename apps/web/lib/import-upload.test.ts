@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_FILE_BYTES,
+  MAX_TOTAL_FILE_BYTES,
   prepareUploadFiles
 } from './import-upload';
 
@@ -37,6 +38,18 @@ describe('prepareUploadFiles', () => {
       { type: 'text/csv' }
     );
     await expect(prepareUploadFiles([oversized])).rejects.toThrow('10 MB');
+  });
+
+  it('rejects a selection whose aggregate size exceeds the request limit', async () => {
+    const files = Array.from({ length: 3 }, (_, index) =>
+      new File(
+        [new Uint8Array(Math.floor(MAX_TOTAL_FILE_BYTES / 2)).fill(97)],
+        `${index}.csv`,
+        { type: 'text/csv' }
+      )
+    );
+
+    await expect(prepareUploadFiles(files)).rejects.toThrow('combined');
   });
 
   it('creates stable file and submission hashes independent of selection order', async () => {

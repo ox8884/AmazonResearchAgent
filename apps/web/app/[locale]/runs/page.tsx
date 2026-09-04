@@ -2,6 +2,7 @@ import { getCopy } from '@ara/shared';
 import { EmptyState, localeDate, RunStatusBadge } from '../../../components/ui';
 import { localizedHref, parseLocale } from '../../../lib/locale';
 import { getResearchRunsView } from '../../../lib/server/dashboard-data';
+import { requireAdminPage } from '../../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,7 @@ export default async function RunsPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const runs = await getResearchRunsView();
   return (

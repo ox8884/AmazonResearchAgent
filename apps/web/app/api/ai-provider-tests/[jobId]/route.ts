@@ -14,7 +14,7 @@ export async function GET(
   context: { params: Promise<{ jobId: string }> }
 ): Promise<NextResponse> {
   try {
-    requireAdminRead(request);
+    await requireAdminRead(request);
     const { jobId } = await context.params;
     const { client } = getServerDatabaseContext();
     const { data, error } = await client

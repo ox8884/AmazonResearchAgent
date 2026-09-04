@@ -9,6 +9,7 @@ import {
   type CandidateRecordRef
 } from '../../../lib/research-objects';
 import { formatCount } from '../../../lib/dashboard-metrics';
+import { requireAdminPage } from '../../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,6 +124,7 @@ export default async function CandidatesPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const candidates = await getCandidatesView();
   const objects = buildResearchObjects(candidates);

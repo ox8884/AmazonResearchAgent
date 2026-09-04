@@ -28,7 +28,7 @@ async function readJson(request: Request): Promise<unknown> {
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    requireAdminMutation(request);
+    await requireAdminMutation(request);
     const payload = TestAiProviderConnectionJobPayloadSchema.strict().safeParse(
       await readJson(request)
     );

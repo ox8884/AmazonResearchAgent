@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import { MAX_FILE_BYTES, MAX_FILE_COUNT } from './import-upload-limits';
+import {
+  MAX_FILE_BYTES,
+  MAX_FILE_COUNT,
+  MAX_TOTAL_FILE_BYTES
+} from './import-upload-limits';
 
-export { MAX_FILE_BYTES, MAX_FILE_COUNT } from './import-upload-limits';
+export { MAX_FILE_BYTES, MAX_FILE_COUNT, MAX_TOTAL_FILE_BYTES } from './import-upload-limits';
 
 const CSV_MIME_TYPES = new Set([
   '',
@@ -62,19 +66,22 @@ export async function prepareUploadFiles(files: File[]): Promise<PreparedUpload>
   if (files.length > MAX_FILE_COUNT) {
     throw new UploadValidationError('Select at most 20 CSV files.');
   }
+  if (files.reduce((total, file) => total + file.size, 0) > MAX_TOTAL_FILE_BYTES) {
+    throw new UploadValidationError('Selected CSV files exceed the 20 MB combined limit.');
+  }
 
-  const prepared = await Promise.all(
-    files.map(async (file) => {
-      validateFile(file);
-      const [content, text] = await Promise.all([file.arrayBuffer(), file.text()]);
-      return {
+  const prepared: PreparedUploadFile[] = [];
+  for (const file of files) {
+    validateFile(file);
+    const content = await file.arrayBuffer();
+    const text = new TextDecoder().decode(content);
+    prepared.push({
         sourceFileName: file.name.normalize('NFC'),
         contentSha256: sha256(text),
         content,
         mimeType: file.type || 'text/csv'
-      } satisfies PreparedUploadFile;
-    })
-  );
+      });
+  }
 
   prepared.sort(
     (left, right) =>

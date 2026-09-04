@@ -61,6 +61,24 @@ export type Database = {
         }
         Relationships: []
       }
+      admin_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+        }
+        Relationships: []
+      }
       ai_analyses: {
         Row: {
           attempts: number

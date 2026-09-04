@@ -11,6 +11,13 @@ vi.mock('./login-guard', () => ({
   withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
 }));
 
+vi.mock('./admin-session-store', () => ({
+  persistAdminSession: async () => undefined,
+  isAdminSessionActive: async () => true,
+  revokeAdminSession: async () => undefined,
+  AdminSessionStoreError: class AdminSessionStoreError extends Error {}
+}));
+
 const originalEnvironment = {
   ADMIN_PASSWORD_SCRYPT: process.env.ADMIN_PASSWORD_SCRYPT,
   APP_SESSION_SIGNING_KEY_B64: process.env.APP_SESSION_SIGNING_KEY_B64

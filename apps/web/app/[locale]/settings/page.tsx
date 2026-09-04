@@ -2,6 +2,7 @@ import { getCopy } from '@ara/shared';
 import { ButtonLink } from '../../../components/ui';
 import { localizedHref, parseLocale } from '../../../lib/locale';
 import { getResearchSettingsView } from '../../../lib/server/dashboard-data';
+import { requireAdminPage } from '../../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,7 @@ export default async function SettingsPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const settings = await getResearchSettingsView();
   const configuredLocale = settings?.locale === 'ko' ? copy.languageKorean : copy.languageEnglish;

@@ -18,7 +18,7 @@ export const runtime = 'nodejs';
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    const session = requireAdminMutation(request);
+    const session = await requireAdminMutation(request);
     importRateLimit.consume(session.csrfToken);
     return await importConcurrencyGate.run(session.csrfToken, async () => {
       const formData = await request.formData();

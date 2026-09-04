@@ -70,6 +70,8 @@ describe('worker provider URL policy', () => {
   // Break: URL credentials or one unsafe DNS answer are accepted.
   it('rejects credentials and mixed DNS answers', async () => {
     await rejects('https://user:password@8.8.8.8/v1', 'public');
+    await rejects('https://8.8.8.8/v1?api_key=secret', 'public');
+    await rejects('https://8.8.8.8/v1#secret', 'public');
     await rejects(
       'https://provider.example/v1',
       'public',
@@ -146,6 +148,21 @@ describe('worker provider URL policy', () => {
 
       expect(response.status).toBe(200);
       expect(receivedBody).toBe('{"model":"manual-model"}');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('aborts a pinned request when the caller cancels it', async () => {
+    const server = createServer(() => undefined);
+    const address = await listenOnFetchSafeLoopback(server);
+    const fetchPinned = createPinnedProviderFetch('loopback');
+    const controller = new AbortController();
+
+    try {
+      const pending = fetchPinned(`${address.url}/models`, { signal: controller.signal });
+      controller.abort();
+      await expect(pending).rejects.toThrow();
     } finally {
       server.close();
     }

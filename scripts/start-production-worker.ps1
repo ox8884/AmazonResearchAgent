@@ -5,7 +5,10 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 
 function Import-DotEnvFile {
-  param([Parameter(Mandatory)][string] $Path)
+  param(
+    [Parameter(Mandatory)][string] $Path,
+    [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]] $AllowedNames
+  )
 
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "Missing private environment file: $Path"
@@ -16,6 +19,9 @@ function Import-DotEnvFile {
       continue
     }
     $name = $matches[1]
+    if (-not $AllowedNames.Contains($name)) {
+      continue
+    }
     $value = $matches[2].Trim()
     if (
       $value.Length -ge 2 -and
@@ -28,7 +34,43 @@ function Import-DotEnvFile {
   }
 }
 
-Import-DotEnvFile -Path (Join-Path $projectRoot '.env.local')
+$workerEnvironmentNames = [System.Collections.Generic.HashSet[string]]::new(
+  [string[]] @(
+    'APP_SECRET_ENCRYPTION_KEY_B64',
+    'JUNGLE_SCOUT_KEY_NAME',
+    'JUNGLE_SCOUT_API_KEY',
+    'JUNGLE_SCOUT_BASE_URL',
+    'JUNGLE_SCOUT_DAILY_LIMIT',
+    'JUNGLE_SCOUT_RESERVED_LIMIT',
+    'TELEGRAM_BOT_TOKEN',
+    'WORKER_ID'
+  ),
+  [System.StringComparer]::Ordinal
+)
+$runtimeEnvironmentNames = @(
+  'ALLUSERSPROFILE', 'APPDATA', 'ComSpec', 'HOMEDRIVE', 'HOMEPATH',
+  'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'OS', 'Path', 'PATHEXT',
+  'PROCESSOR_ARCHITECTURE', 'ProgramData', 'ProgramFiles',
+  'ProgramFiles(x86)', 'ProgramW6432', 'PSModulePath', 'SystemDrive',
+  'SystemRoot', 'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'windir'
+)
+$runtimeEnvironment = @{}
+foreach ($name in $runtimeEnvironmentNames) {
+  $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+  if ($null -ne $value) {
+    $runtimeEnvironment[$name] = $value
+  }
+}
+Get-ChildItem Env: | ForEach-Object {
+  [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+}
+foreach ($entry in $runtimeEnvironment.GetEnumerator()) {
+  [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+}
+$env:NODE_ENV = 'production'
+Import-DotEnvFile `
+  -Path (Join-Path $projectRoot '.env.local') `
+  -AllowedNames $workerEnvironmentNames
 
 $projectRefPath = Join-Path $projectRoot 'supabase/.temp/project-ref'
 if (-not (Test-Path -LiteralPath $projectRefPath -PathType Leaf)) {

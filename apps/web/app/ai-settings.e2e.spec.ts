@@ -1,14 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { E2E_ADMIN_PASSWORD } from '../e2e/test-admin';
-
-async function loginAsAdmin(page: Page, locale: 'ko' | 'en'): Promise<void> {
-  await page.goto(`/${locale}/login`);
-  await page.getByLabel(locale === 'ko' ? '관리자 비밀번호' : 'Admin password').fill(
-    E2E_ADMIN_PASSWORD
-  );
-  await page.getByRole('button', { name: locale === 'ko' ? '로그인' : 'Log in' }).click();
-  await expect(page).toHaveURL(new RegExp(`/${locale}/settings/ai$`, 'u'));
-}
+import { expect, test } from '@playwright/test';
+import { E2E_ADMIN_PASSWORD, loginAsAdmin } from '../e2e/test-admin';
 
 test('redirects unauthenticated AI settings to login', async ({ page }) => {
   await page.goto('/ko/settings/ai');

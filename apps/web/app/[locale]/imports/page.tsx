@@ -3,6 +3,7 @@ import { ButtonLink, EmptyState, localeDate, LocalizedStatusBadge } from '../../
 import { localizedHref, parseLocale } from '../../../lib/locale';
 import { getImportsView } from '../../../lib/server/dashboard-data';
 import { formatCount } from '../../../lib/dashboard-metrics';
+import { requireAdminPage } from '../../../lib/server/admin-page-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,7 @@ export default async function ImportsPage({
   params: Promise<{ locale: string }>;
 }) {
   const locale = parseLocale((await params).locale);
+  await requireAdminPage(locale);
   const copy = getCopy(locale);
   const importsView = await getImportsView();
   const imports = importsView.imports;

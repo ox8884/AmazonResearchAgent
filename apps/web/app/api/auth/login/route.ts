@@ -13,6 +13,10 @@ import {
   withDurableLoginScrypt
 } from '../../../../lib/server/login-guard';
 import { ServerConfigurationError } from '../../../../lib/server/database';
+import {
+  AdminSessionStoreError,
+  persistAdminSession
+} from '../../../../lib/server/admin-session-store';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -41,6 +45,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return invalidCredentials();
     }
     const issued = createAdminSession(getSessionSigningKey());
+    await persistAdminSession(issued);
     const response = NextResponse.json({ authenticated: true });
     for (const cookie of adminSessionCookies(
       issued,
@@ -54,6 +59,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       error instanceof AbuseGuardError ||
       error instanceof AdminAuthError ||
       error instanceof ServerConfigurationError ||
+      error instanceof AdminSessionStoreError ||
       error instanceof SyntaxError ||
       error instanceof z.ZodError
     ) {

@@ -15,11 +15,13 @@ const SESSION_KEY_BYTES = 32;
 const SESSION_TTL_SECONDS = 12 * 60 * 60;
 
 export interface AdminSession {
+  readonly sessionId: string;
   readonly expiresAtSeconds: number;
   readonly csrfToken: string;
 }
 
 export interface IssuedAdminSession {
+  readonly sessionId: string;
   readonly token: string;
   readonly csrfToken: string;
   readonly expiresAt: Date;
@@ -103,12 +105,16 @@ function parseSessionPayload(payload: string): AdminSession | null {
       value === null ||
       !('expiresAtSeconds' in value) ||
       !('csrfToken' in value) ||
+      !('sessionId' in value) ||
       typeof value.expiresAtSeconds !== 'number' ||
-      typeof value.csrfToken !== 'string'
+      typeof value.csrfToken !== 'string' ||
+      typeof value.sessionId !== 'string' ||
+      value.sessionId.length < 32
     ) {
       return null;
     }
     return {
+      sessionId: value.sessionId,
       expiresAtSeconds: value.expiresAtSeconds,
       csrfToken: value.csrfToken
     };
@@ -164,12 +170,14 @@ export function createAdminSession(
     throw new AdminAuthError('Session TTL is invalid.', 401);
   }
   const session: AdminSession = {
+    sessionId: randomBytes(24).toString('base64url'),
     expiresAtSeconds: Math.floor(now.getTime() / 1000) + ttlSeconds,
     csrfToken: randomBytes(24).toString('base64url')
   };
   const payload = Buffer.from(JSON.stringify(session)).toString('base64url');
   const signature = sessionSignature(payload, key).toString('base64url');
   return {
+    sessionId: session.sessionId,
     token: `${payload}.${signature}`,
     csrfToken: session.csrfToken,
     expiresAt: new Date(session.expiresAtSeconds * 1000)
@@ -208,10 +216,13 @@ export function parseCookieHeader(cookieHeader: string | null): ReadonlyMap<stri
     if (separator < 1) {
       continue;
     }
-    cookies.set(
-      entry.slice(0, separator).trim(),
-      decodeURIComponent(entry.slice(separator + 1).trim())
-    );
+    let value: string;
+    try {
+      value = decodeURIComponent(entry.slice(separator + 1).trim());
+    } catch {
+      continue;
+    }
+    cookies.set(entry.slice(0, separator).trim(), value);
   }
   return cookies;
 }
