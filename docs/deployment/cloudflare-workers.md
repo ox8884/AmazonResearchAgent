@@ -21,6 +21,21 @@ The launcher starts local Supabase when necessary, imports `.env.local` into
 the child processes without printing values, and serves the web app at
 `http://127.0.0.1:3100/ko` while the worker consumes queued jobs.
 
+## Production queue worker
+
+The Cloudflare web application writes jobs to the linked remote Supabase
+project. After registering providers in the deployed AI Settings page, run the
+remote queue consumer on the Windows machine:
+
+```powershell
+pnpm worker:production:check
+pnpm worker:production
+```
+
+The first command verifies the remote canonical writer capability without
+claiming a job. The second starts the long-running worker. You can also
+double-click `start-amazon-research-production-worker.cmd`.
+
 ## Cloudflare web deployment
 
 The Worker needs these encrypted secrets:

@@ -2,7 +2,9 @@
 
 > **Authoritative release update — 2026-09-03**
 >
-> - Current source is the repository root on `main` at `e3524f8811f5`.
+> - Current source is the repository root on `main`; the Cloudflare release
+>   implementation starts at `e3524f8811f5` and later commits add its handoff
+>   and production-worker launcher.
 > - Custom API Tasks 16C, 17C, and 18C are complete. The original Codex/Grok
 >   subscription OAuth track remains deferred until provider authorization.
 > - Next.js web is live on Cloudflare Workers at
@@ -11,6 +13,10 @@
 >   `20260903203236_authorize_initial_openrouter_zai_payg_primary.sql`.
 > - Local web and queue worker start together with
 >   `start-amazon-research-agent.cmd` or `pnpm dev:local`.
+> - Cloudflare-created remote jobs are consumed by the Windows production
+>   worker via `pnpm worker:production`; run
+>   `pnpm worker:production:check` first. Do not confuse it with the local-DB
+>   development worker.
 > - The local database contains three real enabled providers: OpenRouter API,
 >   Opencode-Go, and CommanderCode(GOAT). Test-only providers and the 18
 >   shared-integration fixture candidates/jobs created during release QA were
