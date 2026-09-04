@@ -73,6 +73,16 @@ async function apply022(sql: ReturnType<typeof postgres>): Promise<void> {
   ));
 }
 
+async function applyPromptVersionCompatibility(sql: ReturnType<typeof postgres>): Promise<void> {
+  await sql.unsafe(await readFile(
+    resolve(
+      migrationsDirectory,
+      '202609040002_accept_cutover_prompt_version_on_normalization_enqueue.sql'
+    ),
+    'utf8'
+  ));
+}
+
 async function seedCandidate(
   sql: ReturnType<typeof postgres>,
   state: 'AI Screening' | 'Waiting for AI Capacity' = 'AI Screening'
@@ -462,6 +472,27 @@ describe('normalization generation cutover', () => {
       select mode, migration_identity from normalization_writer_capability
     `;
     expect(capability).toEqual({ mode: 'canonical', migration_identity: '202608290022' });
+    await sql.end();
+  }, 60_000);
+
+  it('accepts a cutover-preserved promptVersion when re-enqueuing the same canonical job', async () => {
+    const sql = await provisionThrough021();
+    const candidateId = await seedCandidate(sql);
+    await sql`
+      insert into jobs (type, payload, status, idempotency_key)
+      values (
+        'NORMALIZE_OPPORTUNITIES',
+        ${sql.json({ candidateIds: [candidateId], locale: 'ko', promptVersion: 'legacy-v1' })},
+        'failed', ${`normalize:${candidateId}`}
+      )
+    `;
+    await apply022(sql);
+    await applyPromptVersionCompatibility(sql);
+
+    const [first] = await sql<{ result: { job_id: string; idempotency_key: string } }[]>`
+      select enqueue_initial_candidate_normalization(${candidateId}, 'ko', 'canonical') as result
+    `;
+    expect(first?.result.idempotency_key).toBe(`normalize:${candidateId}:0`);
     await sql.end();
   }, 60_000);
 
