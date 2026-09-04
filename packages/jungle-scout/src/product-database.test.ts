@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { JungleScoutClient } from './client';
+import { JungleScoutClient, JungleScoutClientError } from './client';
 import {
   ProductDatabasePageSchema,
   buildProductDatabaseRequest,
@@ -33,6 +33,25 @@ describe('Jungle Scout Product Database adapter', () => {
     expect(missingPrice?.attributes.parent_asin).toBeNull();
   });
 
+  it('accepts a Product Database row when weight is omitted', () => {
+    const page = ProductDatabasePageSchema.parse({
+      data: [
+        {
+          id: 'B0LIVE1',
+          type: 'product_database_result',
+          attributes: {
+            title: 'Drawer organizer',
+            price: 19.99,
+            rating: 4.5,
+            parent_asin: null
+          }
+        }
+      ]
+    });
+
+    expect(page.data[0]?.attributes.weight).toBeUndefined();
+  });
+
   it('keeps dimensions, sellers, buy box, and fee breakdown from the fixture', () => {
     const page = ProductDatabasePageSchema.parse(SINK_FIXTURE);
     const mat = page.data.find((product) => product.id === 'B0SINKMAT1');
@@ -53,15 +72,15 @@ describe('Jungle Scout Product Database adapter', () => {
       pageSize: 100
     });
 
-    expect(request.path).toBe('/api/product_database_query');
+    expect(request.path).toBe(
+      '/api/product_database_query?marketplace=us&page%5Bsize%5D=100'
+    );
     expect(request.method).toBe('POST');
     expect(request.json).toMatchObject({
       data: {
         type: 'product_database_query',
         attributes: {
-          marketplace: 'us',
           include_keywords: ['faucet mat', 'sink splash guard'],
-          page_size: 100
         }
       }
     });
@@ -75,11 +94,13 @@ describe('Jungle Scout Product Database adapter', () => {
       filters: { min_price: 10 },
       sort: 'units_sold_30_desc'
     });
+    expect(request.path).toBe(
+      '/api/product_database_query?marketplace=us&page%5Bsize%5D=50'
+    );
     expect(request.json).toMatchObject({
       data: {
         attributes: {
           include_keywords: ['faucet mat'],
-          page_size: 50,
           filters: { min_price: 10 },
           sort: 'units_sold_30_desc'
         }
@@ -122,6 +143,30 @@ describe('Jungle Scout Product Database adapter', () => {
     expect(result.httpAttempts).toBe(3);
     expect(result.status).toBe(200);
     expect(result.page.data).toEqual([]);
+  });
+
+  it('keeps HTTP metadata when a successful response has an invalid schema', async () => {
+    const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      response.setHeader('content-type', 'application/vnd.api+json');
+      response.end(JSON.stringify({ data: [{ type: 'product_database_result' }] }));
+    });
+    const address = await listenOnFetchSafeLoopback(http);
+    server = http;
+    const client = new JungleScoutClient({
+      keyName: 'AI',
+      apiKey: 'secret-key',
+      baseUrl: address.url
+    });
+
+    await expect(
+      queryProductDatabase(client, { marketplace: 'us', phrases: ['faucet mat'] })
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof JungleScoutClientError &&
+        error.status === 200 &&
+        error.httpAttempts === 1 &&
+        error.retryable === false
+    );
   });
 
 

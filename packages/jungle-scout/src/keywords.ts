@@ -9,16 +9,24 @@ export type KeywordQueryInput = z.infer<typeof KeywordQueryInputSchema>;
 
 export function buildKeywordRequest(input: KeywordQueryInput): {
   readonly path: string;
-  readonly method: 'GET';
+  readonly method: 'POST';
+  readonly json: unknown;
 } {
   const parsed = KeywordQueryInputSchema.parse(input);
   const params = new URLSearchParams({
-    marketplace: parsed.marketplace,
-    keyword: parsed.keyword
+    marketplace: parsed.marketplace
   });
   return {
-    path: `/api/keywords/by_keyword?${params.toString()}`,
-    method: 'GET'
+    path: `/api/keywords/keywords_by_keyword_query?${params.toString()}`,
+    method: 'POST',
+    json: {
+      data: {
+        type: 'keywords_by_keyword_query',
+        attributes: {
+          search_terms: parsed.keyword
+        }
+      }
+    }
   };
 }
 
@@ -44,6 +52,7 @@ function parseKeywordAttributes(attributes: Record<string, unknown>): {
   readonly isUpperBound: boolean;
 } {
   const volume =
+    readNumber(attributes.monthly_search_volume_exact) ??
     readNumber(attributes.monthly_search_volume) ??
     readNumber(attributes.search_volume) ??
     readNumber(attributes.exact_monthly_search_volume);
@@ -59,7 +68,10 @@ export async function queryKeywordMetrics(
   input: KeywordQueryInput
 ): Promise<KeywordQueryResult> {
   const request = buildKeywordRequest(input);
-  const result = await client.request(request.path, { method: request.method });
+  const result = await client.request(request.path, {
+    method: request.method,
+    json: request.json
+  });
   const body = result.body;
   if (typeof body !== 'object' || body === null || !('data' in body) || !Array.isArray(body.data)) {
     throw new Error('Keyword metrics response was malformed.');

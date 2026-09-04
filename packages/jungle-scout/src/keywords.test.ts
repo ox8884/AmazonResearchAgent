@@ -16,10 +16,18 @@ describe('Jungle Scout keyword adapter', () => {
       marketplace: 'us',
       keyword: 'sink splash guard'
     });
-    expect(request.method).toBe('GET');
-    expect(request.path).toContain('/api/keywords/by_keyword');
-    expect(request.path).toContain('marketplace=us');
-    expect(request.path).toContain('sink+splash+guard');
+    expect(request).toEqual({
+      path: '/api/keywords/keywords_by_keyword_query?marketplace=us',
+      method: 'POST',
+      json: {
+        data: {
+          type: 'keywords_by_keyword_query',
+          attributes: {
+            search_terms: 'sink splash guard'
+          }
+        }
+      }
+    });
   });
 
   it('parses monthly search volume and upper-bound flag from the provider body', async () => {
@@ -30,7 +38,7 @@ describe('Jungle Scout keyword adapter', () => {
           data: [
             {
               attributes: {
-                monthly_search_volume: 1800,
+                monthly_search_volume_exact: 1800,
                 is_upper_bound: true
               }
             }

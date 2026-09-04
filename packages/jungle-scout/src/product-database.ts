@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import type { JungleScoutClient, JungleScoutRequestResult } from './client';
+import {
+  JungleScoutClientError,
+  type JungleScoutClient,
+  type JungleScoutRequestResult
+} from './client';
 
 const NullableNumberSchema = z.number().nullable();
 
@@ -13,7 +17,7 @@ export const ProductDatabaseAttributesSchema = z.object({
   seller_type: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   rank: z.number().int().nullable().optional(),
-  weight: NullableNumberSchema,
+  weight: NullableNumberSchema.optional(),
   listing_date: z.string().nullable().optional(),
   units_sold_30: z.number().nullable().optional(),
   revenue_30: z.number().nullable().optional(),
@@ -57,16 +61,18 @@ export function buildProductDatabaseRequest(input: ProductDatabaseQueryInput): {
   readonly json: unknown;
 } {
   const parsed = ProductDatabaseQueryInputSchema.parse(input);
+  const query = new URLSearchParams({
+    marketplace: parsed.marketplace,
+    'page[size]': String(parsed.pageSize)
+  });
   return {
-    path: '/api/product_database_query',
+    path: `/api/product_database_query?${query.toString()}`,
     method: 'POST',
     json: {
       data: {
         type: 'product_database_query',
         attributes: {
-          marketplace: parsed.marketplace,
           include_keywords: parsed.phrases,
-          page_size: parsed.pageSize,
           ...(parsed.filters ? { filters: parsed.filters } : {}),
           ...(parsed.sort ? { sort: parsed.sort } : {})
         }
@@ -90,8 +96,18 @@ export async function queryProductDatabase(
     method: request.method,
     json: request.json
   });
+  const parsed = ProductDatabasePageSchema.safeParse(result.body);
+  if (!parsed.success) {
+    throw new JungleScoutClientError(
+      'Jungle Scout response did not match the Product Database schema.',
+      result.status,
+      false,
+      result.httpAttempts,
+      parsed.error
+    );
+  }
   return {
-    page: ProductDatabasePageSchema.parse(result.body),
+    page: parsed.data,
     httpAttempts: result.httpAttempts,
     status: result.status
   };
