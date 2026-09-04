@@ -121,7 +121,7 @@ function selection(providerId: string, modelId: string): RouteSelection {
       async listModels() {
         return [];
       },
-      async runStructured<T>() {
+      async runStructured<T>(): Promise<T> {
         throw new Error(`Unexpected execution for ${providerId}.`);
       }
     },
