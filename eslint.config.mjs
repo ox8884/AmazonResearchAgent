@@ -5,7 +5,9 @@ export default tseslint.config(
   {
     ignores: [
       '**/.next/**',
+      '**/.open-next/**',
       '**/.turbo/**',
+      '**/.wrangler/**',
       '**/coverage/**',
       '**/dist/**',
       '**/node_modules/**',
