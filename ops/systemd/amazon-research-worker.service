@@ -8,6 +8,7 @@ User=amazon-research
 WorkingDirectory=/opt/amazon-research/current
 EnvironmentFile=/etc/amazon-research/worker.env
 Environment=NODE_ENV=production
+Environment=NORMALIZATION_WRITER_RELEASE_SHA=13b51161a28f3fbef7a193f13c4fe8bb35c0f21f
 ExecStart=/usr/bin/env pnpm --filter @ara/worker start
 Restart=always
 RestartSec=5

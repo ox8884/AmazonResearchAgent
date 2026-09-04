@@ -24,6 +24,10 @@ Worker environment variable names:
 - `JUNGLE_SCOUT_RESERVED_LIMIT`
 - `TELEGRAM_BOT_TOKEN`
 
+`NORMALIZATION_WRITER_RELEASE_SHA` is a non-secret immutable release identity. The
+repository-owned worker systemd unit pins it directly; do not duplicate or override
+it in `/etc/amazon-research/worker.env`.
+
 ## systemd
 
 ```bash

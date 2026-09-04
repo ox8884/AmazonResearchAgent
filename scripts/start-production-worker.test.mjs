@@ -37,4 +37,9 @@ test('systemd production worker disables development command profiles', async ()
   const source = await readFile(systemdServiceUrl, 'utf8');
 
   assert.match(source, /^Environment=NODE_ENV=production$/mu);
+  assert.match(
+    source,
+    /^Environment=NORMALIZATION_WRITER_RELEASE_SHA=13b51161a28f3fbef7a193f13c4fe8bb35c0f21f$/mu,
+    'systemd must claim the immutable normalization writer release before the worker starts'
+  );
 });
