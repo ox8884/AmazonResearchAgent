@@ -2568,6 +2568,17 @@ progress::-moz-progress-bar {
 }
 
 @media (max-width: 48rem) {
+  .business-workspace > .business-workspace__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .business-workspace__heading .button {
+    align-self: start;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
   .settings-list > div {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);

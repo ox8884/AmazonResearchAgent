@@ -45,8 +45,9 @@ export function BusinessAssessment({ result, onCopyDraft }: { readonly result: C
   const { assessment, evidence } = result;
   const action = nextAction(assessment);
   const source = evidence?.selectedQuote?.source ?? evidence?.salePrice.source;
+  const statusTone = assessment.stage === 'reject' ? 'status--tone-reject' : 'status--tone-waiting';
   return <section className="business-assessment" aria-labelledby="business-assessment-title">
-    <div className="section-heading"><h3 id="business-assessment-title">현재 상업 판단</h3><span className="status status--tone-waiting">{stageLabels[assessment.stage]}</span></div>
+    <div className="section-heading"><h3 id="business-assessment-title">현재 상업 판단</h3><span className={`status ${statusTone}`}>{stageLabels[assessment.stage]}</span></div>
     <dl className="business-assessment__metrics">
       <div><dt>예상 출시 현금</dt><dd>{usd(assessment.estimatedLaunchCashUsd)}</dd></div>
       <div><dt>광고 후 단위 기여이익</dt><dd>{usd(assessment.estimatedUnitContributionUsd)}</dd></div>

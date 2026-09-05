@@ -7,7 +7,7 @@ const beforeEvidenceRoot = path.resolve(
   '../../.superpowers/sdd/2026-09-04-budget-first-research/review-logs/evidence/2026-09-05-budget-first-workflow'
 );
 const finalEvidenceRoot = path.resolve('../../review-logs/evidence/2026-09-05-budget-first-workflow');
-const finalAcceptanceEvidenceRoot = path.join(finalEvidenceRoot, 'final-acceptance');
+const visualFixEvidenceRoot = path.join(finalEvidenceRoot, 'visual-fix-round-1');
 const settingLabels = {
   launchBudgetUsd: '출시 예산 (USD)',
   minimumPreAdMarginPct: '광고 전 최소 마진 (%)',
@@ -241,6 +241,11 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   await loginAsAdmin(page);
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
   await openCandidateWithFreshAssessment(page);
+  await page.setViewportSize({ width: 375, height: 1000 });
+  const refreshButton = page.getByRole('button', { name: '현재 기준 다시 확인' });
+  await expect(refreshButton).toHaveCSS('white-space', 'nowrap');
+  await expect.poll(() => refreshButton.evaluate((button) => button.scrollWidth <= button.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 1000 });
   await page.getByLabel('출처 성격').selectOption('quote');
   await page.getByLabel('사업 단계').selectOption('awaiting_quote');
   await page.getByLabel('제품 비용 포함 범위').selectOption('included');
@@ -265,8 +270,8 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   expect(businessPostCount).toBe(0);
 });
 
-test('captures fresh final acceptance states without overwriting prior evidence', async ({ page }) => {
-  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] !== 'final-acceptance', 'Final acceptance capture is explicit.');
+test('captures fresh visual-fix states without overwriting final acceptance evidence', async ({ page }) => {
+  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] !== 'visual-fix-round-1', 'Visual-fix capture is explicit.');
   await loginAsAdmin(page);
 
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
@@ -275,12 +280,18 @@ test('captures fresh final acceptance states without overwriting prior evidence'
   await page.getByLabel('사업 단계').selectOption('research');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   await expect(page.getByText('견적 초안 준비')).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-saved-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-saved-db');
 
   await page.getByLabel('사업 단계').selectOption('awaiting_quote');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   await expect(page.getByLabel('현재 상업 판단').getByText('견적 회신 대기', { exact: true })).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-waiting-quote-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-waiting-quote-db');
+
+  await page.getByLabel('사업 단계').selectOption('rejected');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  const rejectedAssessment = page.getByLabel('현재 상업 판단').getByText('제외', { exact: true });
+  await expect(rejectedAssessment).toHaveClass(/status--tone-reject/);
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-rejected-db');
 
   await page.route(`**/api/candidates/${candidateId}/business`, async (route) => {
     await route.fulfill({
@@ -297,13 +308,13 @@ test('captures fresh final acceptance states without overwriting prior evidence'
   });
   await openCandidateWithFreshAssessment(page);
   await expect(page.getByText('상업 근거가 아직 기록되지 않았습니다.')).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-missing-evidence-route-mock');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-missing-evidence-route-mock');
   await page.unroute(`**/api/candidates/${candidateId}/business`);
 
   await saveSettings(page, defaultSettings);
   await openCandidateWithFreshAssessment(page);
   await expect(page.getByText('출시 현금이 현재 예산을 초과합니다.')).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-overbudget-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-overbudget-db');
 
   let businessPostCount = 0;
   page.on('request', (request) => {
@@ -315,10 +326,10 @@ test('captures fresh final acceptance states without overwriting prior evidence'
   await refreshPromise;
   await expect(page.getByLabel('제품 사양 설명')).toHaveValue('Final acceptance unsaved draft remains visible.');
   expect(businessPostCount).toBe(0);
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-get-only-draft-refresh-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-get-only-draft-refresh-db');
 
   await saveSettings(page, defaultSettings);
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'settings-saved-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'settings-saved-db');
   await page.route('**/api/research-settings', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'settings_unavailable' }) });
@@ -328,12 +339,14 @@ test('captures fresh final acceptance states without overwriting prior evidence'
   });
   await page.getByLabel('출시 예산 (USD)').fill('4000');
   await page.getByRole('button', { name: '상업 기준 저장' }).click();
-  await expect(page.getByText('출시 예산·수익성 기준을 저장하지 못했습니다. 기본값으로 대체하지 않습니다.')).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'settings-save-failure-route-mock');
+  const settingsFailure = page.getByRole('alert');
+  await expect(settingsFailure).toHaveText('출시 예산·수익성 기준을 저장하지 못했습니다. 기본값으로 대체하지 않습니다.');
+  await expect(settingsFailure).toHaveClass(/notice--error/);
+  await captureAtViewports(page, visualFixEvidenceRoot, 'settings-save-failure-route-mock');
   await page.unroute('**/api/research-settings');
 
   await openSharedPage(page, '/ko/imports/new');
   await expect(page.getByText('웹 리서치 인계')).toBeVisible();
-  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'imports-handoff-db');
+  await captureAtViewports(page, visualFixEvidenceRoot, 'imports-handoff-db');
   await page.setViewportSize({ width: 1280, height: 1000 });
 });

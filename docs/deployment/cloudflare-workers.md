@@ -1,8 +1,9 @@
 # Cloudflare Workers deployment
 
 The Next.js web application runs on Cloudflare Workers through OpenNext. The
-long-running queue worker remains a local process and starts with the web app
-through the repository launcher.
+production queue worker runs on the approved Oracle systemd host only. The
+local development launcher described below starts a local worker with the web
+app for development.
 
 ## Local full stack
 

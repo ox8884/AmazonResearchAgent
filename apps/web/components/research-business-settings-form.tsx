@@ -93,6 +93,6 @@ export function ResearchBusinessSettingsForm() {
     <BusinessSettingsExplanation settings={settings} />
     <p className="field-help">광고 전 마진은 판매가를 분모로 단위 광고비를 더한 단위 기여이익, 광고 후 마진은 판매가를 분모로 한 단위 기여이익입니다. ROI는 광고 후 단위 기여이익 ÷ 도착 단가입니다.</p>
     <button className="button button--primary" type="submit" disabled={state.kind === 'saving'}>{state.kind === 'saving' ? '상업 기준 저장 중…' : '상업 기준 저장'}</button>
-    {notice ? <p className={notice === '출시 예산·수익성 기준을 저장했습니다.' ? 'notice notice--success' : 'notice'} role="status">{notice}</p> : null}
+    {notice ? <p className={notice === '출시 예산·수익성 기준을 저장했습니다.' ? 'notice notice--success' : 'notice notice--error'} role={notice === '출시 예산·수익성 기준을 저장했습니다.' ? 'status' : 'alert'}>{notice}</p> : null}
   </form>;
 }

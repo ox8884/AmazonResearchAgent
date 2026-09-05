@@ -114,7 +114,7 @@ export function CandidateBusinessForm({ candidateId }: { readonly candidateId: s
   if (formState.kind === 'unavailable') return <section className="panel business-workspace" aria-label="상업 근거"><p className="notice notice--error" role="alert">상업 기준을 확인할 수 없어 저장을 열지 않았습니다. 기본값으로 판단하지 않습니다.</p></section>;
   const result = formState.result;
   return <section className="panel business-workspace" aria-labelledby="business-workspace-title">
-    <div className="section-heading"><div><h2 id="business-workspace-title">상업 근거 및 다음 조치</h2><p>기록된 근거만 저장하며 후보별 목표 변경, 자동 메시지·발주·작업 실행은 하지 않습니다.</p></div><button className="button button--secondary" type="button" onClick={() => void reloadAssessment('savedAssessment')} disabled={formState.kind === 'saving'}>현재 기준 다시 확인</button></div>
+    <div className="section-heading business-workspace__heading"><div><h2 id="business-workspace-title">상업 근거 및 다음 조치</h2><p>기록된 근거만 저장하며 후보별 목표 변경, 자동 메시지·발주·작업 실행은 하지 않습니다.</p></div><button className="button button--secondary" type="button" onClick={() => void reloadAssessment('savedAssessment')} disabled={formState.kind === 'saving'}>현재 기준 다시 확인</button></div>
     <BusinessAssessment result={result} onCopyDraft={result.assessment.stage === 'quote_ready' ? () => void copyRfqDraft() : null} />
     <form className="business-form" onSubmit={submit}>
       <CandidateBusinessInputs values={values} onChange={onChange} onRequestedApiPurposes={(requestedApiPurposes) => setValues((current) => ({ ...current, requestedApiPurposes }))} />
