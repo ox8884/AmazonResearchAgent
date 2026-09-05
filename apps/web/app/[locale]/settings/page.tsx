@@ -25,7 +25,7 @@ export default async function SettingsPage({
       <header className="page-heading page-heading--split">
         <div>
           <h1>{copy.settingsTitle}</h1>
-          <p>{locale === 'ko' ? '일반 운영 설정은 읽기 전용입니다. 아래 출시 예산·수익성 기준은 관리자만 저장할 수 있으며, 후보가 자체 목표를 덮어쓰지 않습니다.' : 'General operating settings are read-only. Administrators can save the commercial targets below; candidates cannot override them.'}</p>
+          <p>{locale === 'ko' ? '일반 운영 설정은 읽기 전용입니다. 아래 출시 예산·수익성 기준은 관리자만이 저장·관리하는 기준이며, 후보별 변경은 허용하지 않습니다.' : 'General operating settings are read-only. Administrators can save the commercial targets below; candidates cannot override them.'}</p>
         </div>
         <ButtonLink href={localizedHref(locale, '/settings/ai')} variant="secondary">
           {copy.navAiSettings}
