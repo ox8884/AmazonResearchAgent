@@ -21,6 +21,7 @@ test.use({ bypassCSP: true });
 async function captureAtViewports(page: Page, root: string, name: string): Promise<void> {
   for (const width of [375, 768, 1280] as const) {
     await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: path.join(root, `${name}-${width}.png`), fullPage: true });
   }
@@ -144,10 +145,12 @@ test('uses GET-only assessment refresh after each saved target change and quanti
   await expect(page.getByLabel('수량')).toHaveValue('100');
   expect(businessPostCount).toBe(0);
 
+  await page.getByLabel('제품 사양 설명').fill('Unsaved QA description stays in the form.');
   const manualRefreshPromise = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'GET');
   await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
   const manualRefresh = await manualRefreshPromise;
   expect((await manualRefresh.json() as { assessment: { settings: { launchBudgetUsd: number } } }).assessment.settings.launchBudgetUsd).toBe(600);
+  await expect(page.getByLabel('제품 사양 설명')).toHaveValue('Unsaved QA description stays in the form.');
   expect(businessPostCount).toBe(0);
 
   const targetResponse = await saveSettings(page, { ...defaultSettings, minimumPreAdMarginPct: '60', minimumPostAdMarginPct: '60', minimumRoiPct: '400' });
@@ -210,5 +213,19 @@ test('captures populated, missing, and overbudget Task 3 views', async ({ page }
   await openSharedPage(page, '/ko/imports/new');
   await expect(page.getByText('웹 리서치 인계')).toBeVisible();
   await captureAtViewports(page, path.join(finalEvidenceRoot, 'after'), 'imports');
+  await page.setViewportSize({ width: 1280, height: 1000 });
+});
+
+test('captures a draft-preserving criteria refresh', async ({ page }) => {
+  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] !== 'fix-round-1', 'Capture the changed refresh feedback separately.');
+  await loginAsAdmin(page);
+  await openCandidateWithFreshAssessment(page);
+  await page.getByLabel('제품 사양 설명').fill('Unsaved QA description stays in the form.');
+  const refreshPromise = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'GET');
+  await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
+  await refreshPromise;
+  await expect(page.getByLabel('제품 사양 설명')).toHaveValue('Unsaved QA description stays in the form.');
+  await expect(page.getByRole('status')).toBeVisible();
+  await captureAtViewports(page, path.join(finalEvidenceRoot, 'fix-round-1'), 'candidate-draft-refresh');
   await page.setViewportSize({ width: 1280, height: 1000 });
 });

@@ -24,6 +24,8 @@ type FormState =
   | { readonly kind: 'saving'; readonly result: CandidateBusinessResult }
   | { readonly kind: 'unavailable' };
 
+type AssessmentReload = 'initial' | 'savedAssessment';
+
 export function CandidateBusinessForm({ candidateId }: { readonly candidateId: string }) {
   const [formState, setFormState] = useState<FormState>({ kind: 'loading' });
   const [values, setValues] = useState<BusinessFormValues>(() => initialBusinessFormValues(null));
@@ -31,16 +33,19 @@ export function CandidateBusinessForm({ candidateId }: { readonly candidateId: s
   const [notice, setNotice] = useState<string | null>(null);
   const latestAssessmentRequest = useRef(0);
 
-  const reloadAssessment = useCallback(async () => {
+  const reloadAssessment = useCallback(async (reload: AssessmentReload) => {
     const request = ++latestAssessmentRequest.current;
     setNotice(null);
     setFormState({ kind: 'loading' });
     try {
       const result = CandidateBusinessResultSchema.parse(await ky.get(`/api/candidates/${candidateId}/business`, { credentials: 'same-origin', cache: 'no-store' }).json<unknown>());
       if (request !== latestAssessmentRequest.current) return;
-      setValues(initialBusinessFormValues(result.evidence));
-      setSavedEvidence(result.evidence);
+      if (reload === 'initial') {
+        setValues(initialBusinessFormValues(result.evidence));
+        setSavedEvidence(result.evidence);
+      }
       setFormState({ kind: 'ready', result });
+      if (reload === 'savedAssessment') setNotice('현재 판단은 저장된 근거 기준이며, 저장하지 않은 입력값은 그대로 유지됩니다.');
     } catch (error) {
       if (request !== latestAssessmentRequest.current) return;
       if (error instanceof Error) {
@@ -51,7 +56,7 @@ export function CandidateBusinessForm({ candidateId }: { readonly candidateId: s
     }
   }, [candidateId]);
 
-  useEffect(() => { void reloadAssessment(); }, [reloadAssessment]);
+  useEffect(() => { void reloadAssessment('initial'); }, [reloadAssessment]);
 
   const onChange = (id: Exclude<keyof BusinessFormValues, 'requestedApiPurposes'>, value: string) => {
     setValues((current) => ({ ...current, [id]: value }));
@@ -109,7 +114,7 @@ export function CandidateBusinessForm({ candidateId }: { readonly candidateId: s
   if (formState.kind === 'unavailable') return <section className="panel business-workspace" aria-label="상업 근거"><p className="notice notice--error" role="alert">상업 기준을 확인할 수 없어 저장을 열지 않았습니다. 기본값으로 판단하지 않습니다.</p></section>;
   const result = formState.result;
   return <section className="panel business-workspace" aria-labelledby="business-workspace-title">
-    <div className="section-heading"><div><h2 id="business-workspace-title">상업 근거 및 다음 조치</h2><p>기록된 근거만 저장하며 후보별 목표 변경, 자동 메시지·발주·작업 실행은 하지 않습니다.</p></div><button className="button button--secondary" type="button" onClick={() => void reloadAssessment()} disabled={formState.kind === 'saving'}>현재 기준 다시 확인</button></div>
+    <div className="section-heading"><div><h2 id="business-workspace-title">상업 근거 및 다음 조치</h2><p>기록된 근거만 저장하며 후보별 목표 변경, 자동 메시지·발주·작업 실행은 하지 않습니다.</p></div><button className="button button--secondary" type="button" onClick={() => void reloadAssessment('savedAssessment')} disabled={formState.kind === 'saving'}>현재 기준 다시 확인</button></div>
     <BusinessAssessment result={result} onCopyDraft={result.assessment.stage === 'quote_ready' ? () => void copyRfqDraft() : null} />
     <form className="business-form" onSubmit={submit}>
       <CandidateBusinessInputs values={values} onChange={onChange} onRequestedApiPurposes={(requestedApiPurposes) => setValues((current) => ({ ...current, requestedApiPurposes }))} />
