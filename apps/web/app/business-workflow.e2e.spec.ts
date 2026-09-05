@@ -8,7 +8,7 @@ const beforeEvidenceRoot = path.resolve(
 );
 const finalEvidenceRoot = path.resolve('../../review-logs/evidence/2026-09-05-budget-first-workflow');
 const visualFixCapturePhase = process.env['BUSINESS_CAPTURE_PHASE'];
-const isVisualFixCapturePhase = visualFixCapturePhase === 'visual-fix-round-1' || visualFixCapturePhase === 'visual-fix-round-2';
+const isVisualFixCapturePhase = visualFixCapturePhase === 'visual-fix-round-1' || visualFixCapturePhase === 'visual-fix-round-2' || visualFixCapturePhase === 'visual-fix-round-3';
 const visualFixEvidenceRoot = path.join(finalEvidenceRoot, isVisualFixCapturePhase ? visualFixCapturePhase : 'visual-fix-round-1');
 const settingLabels = {
   launchBudgetUsd: '출시 예산 (USD)',
@@ -102,6 +102,10 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('시장 검증').selectOption('pass');
   await page.getByLabel('관측 시작').fill('2026-08-01T00:00');
   await page.getByLabel('관측 종료').fill('2026-08-31T23:59');
+  await page.getByLabel('시장 관측 출처 레퍼런스').fill('QA Top Products observation');
+  await page.getByLabel('시장 관측 URL').fill('https://market.example/qa-top-products');
+  await page.getByLabel('시장 출처 성격').selectOption('observed');
+  await page.getByLabel('시장 관측 기록 시각 (현지 시간)').fill('2026-09-04T09:30');
   await page.getByLabel('비교 근거').fill('QA fixture comparison against the saved Top Products notes.');
 }
 
@@ -131,6 +135,37 @@ test('persists four saved settings and candidate evidence after reload', async (
   await page.reload();
   await expect(page.getByLabel('수량')).toHaveValue('100');
   await expect(page.getByText('견적 초안 준비')).toBeVisible();
+});
+
+test('rejects a blank profitability target without a POST and saves explicit zero targets', async ({ page }) => {
+  await loginAsAdmin(page);
+  await saveSettings(page, defaultSettings);
+  await openSharedPage(page, '/ko/settings');
+
+  let settingsPostCount = 0;
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/research-settings') && request.method() === 'POST') settingsPostCount += 1;
+  });
+  await page.getByLabel('광고 전 최소 마진 (%)').fill('');
+  await page.getByRole('button', { name: '상업 기준 저장' }).click();
+  await expect(page.getByRole('alert')).toHaveText('네 기준은 0 이상인 유한 숫자로 입력하세요. 출시 예산은 0보다 커야 합니다.');
+  expect(settingsPostCount).toBe(0);
+  await page.reload();
+  await expect(page.getByLabel('광고 전 최소 마진 (%)')).toHaveValue(defaultSettings.minimumPreAdMarginPct);
+
+  const zeroTargets = await saveSettings(page, {
+    ...defaultSettings,
+    minimumPreAdMarginPct: '0',
+    minimumPostAdMarginPct: '0',
+    minimumRoiPct: '0'
+  });
+  expect(zeroTargets).toMatchObject({
+    launchBudgetUsd: 3000,
+    minimumPreAdMarginPct: 0,
+    minimumPostAdMarginPct: 0,
+    minimumRoiPct: 0
+  });
+  expect(settingsPostCount).toBe(1);
 });
 
 test('uses GET-only assessment refresh after each saved target change and quantity edit', async ({ page }) => {
@@ -269,6 +304,43 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   await expect(page.getByText('현재 판단은 저장된 근거 기준이며, 저장하지 않은 입력값은 그대로 유지됩니다.')).toBeVisible();
   await expect(page.getByLabel('사업 단계')).toHaveValue('awaiting_quote');
   await expect(page.getByLabel('배송 포함 범위')).toHaveValue('included');
+  expect(businessPostCount).toBe(0);
+});
+
+test('persists an observed market source separately through reload and GET-only criteria refresh', async ({ page }) => {
+  await loginAsAdmin(page);
+  await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
+  await openCandidateWithFreshAssessment(page);
+  await saveCommercialEvidence(page);
+
+  const initialSave = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'POST');
+  await page.getByLabel('비교 근거').fill('Updated QA Top Products comparison after the original observation.');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  const saved = await initialSave;
+  expect(saved.status()).toBe(200);
+  const payload = await saved.json() as { evidence: { marketCheck: { source: { reference: string; url: string | null; basis: string; recordedAt: string } | null } } };
+  expect(payload.evidence.marketCheck.source).toMatchObject({
+    reference: 'QA Top Products observation',
+    url: 'https://market.example/qa-top-products',
+    basis: 'observed'
+  });
+
+  await page.reload();
+  await expect(page.getByLabel('시장 관측 출처 레퍼런스')).toHaveValue('QA Top Products observation');
+  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products');
+  await expect(page.getByLabel('시장 출처 성격')).toHaveValue('observed');
+  await expect(page.getByLabel('시장 관측 기록 시각 (현지 시간)')).toHaveValue('2026-09-04T09:30');
+
+  let businessPostCount = 0;
+  page.on('request', (request) => {
+    if (request.url().includes(`/api/candidates/${candidateId}/business`) && request.method() === 'POST') businessPostCount += 1;
+  });
+  const refresh = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'GET');
+  await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
+  await refresh;
+  await expect(page.getByLabel('시장 관측 출처 레퍼런스')).toHaveValue('QA Top Products observation');
+  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products');
+  await expect(page.getByLabel('시장 출처 성격')).toHaveValue('observed');
   expect(businessPostCount).toBe(0);
 });
 

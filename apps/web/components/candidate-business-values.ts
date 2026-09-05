@@ -2,10 +2,12 @@ import { ResearchBusinessEvidenceSchema, type ResearchBusinessEvidence, type Res
 
 type CheckStatus = 'unknown' | 'pass' | 'fail';
 type SourceBasis = 'estimate' | 'quote';
+type MarketSourceBasis = ResearchBusinessSource['basis'];
 type LandedCostCoverage = NonNullable<ResearchBusinessEvidence['selectedQuote']>['landedCostCoverage'];
 
 export type BusinessFormValues = {
   readonly specificationReference: string; readonly specificationDescription: string; readonly sourceReference: string; readonly sourceUrl: string; readonly sourceBasis: SourceBasis;
+  readonly marketSourceReference: string; readonly marketSourceUrl: string; readonly marketSourceBasis: MarketSourceBasis; readonly marketSourceRecordedAt: string;
   readonly disposition: ResearchBusinessEvidence['disposition'];
   readonly salePrice: string; readonly referralFee: string; readonly fulfillmentFee: string; readonly otherVariableCost: string; readonly perUnitAdCost: string; readonly perUnitReturnCost: string;
   readonly supplierName: string; readonly orderQuantity: string; readonly minimumOrderQuantity: string; readonly landedUnitCost: string; readonly landedShipmentTotal: string;
@@ -14,7 +16,7 @@ export type BusinessFormValues = {
 };
 
 const emptyValues: BusinessFormValues = {
-  specificationReference: '', specificationDescription: '', sourceReference: '', sourceUrl: '', sourceBasis: 'estimate', salePrice: '', referralFee: '', fulfillmentFee: '', otherVariableCost: '', perUnitAdCost: '', perUnitReturnCost: '',
+  specificationReference: '', specificationDescription: '', sourceReference: '', sourceUrl: '', sourceBasis: 'estimate', marketSourceReference: '', marketSourceUrl: '', marketSourceBasis: 'observed', marketSourceRecordedAt: '', salePrice: '', referralFee: '', fulfillmentFee: '', otherVariableCost: '', perUnitAdCost: '', perUnitReturnCost: '',
   disposition: 'research',
   supplierName: '', orderQuantity: '', minimumOrderQuantity: '', landedUnitCost: '', landedShipmentTotal: '', upfrontLaunchCost: '', launchAdvertisingCash: '', launchReserveCash: '', incoterm: '', destination: '', leadTimeDays: '', quoteExpiresAt: '',
   productCoverage: 'unknown', packagingCoverage: 'unknown', freightCoverage: 'unknown', dutiesCoverage: 'unknown', deliveryCoverage: 'unknown',
@@ -32,6 +34,14 @@ function asSource(values: BusinessFormValues): ResearchBusinessSource | null {
   return { reference, url: url === '' ? null : url, recordedAt: new Date().toISOString(), basis: values.sourceBasis };
 }
 
+function marketSource(values: BusinessFormValues): ResearchBusinessSource | null {
+  const reference = values.marketSourceReference.trim();
+  const recordedAt = values.marketSourceRecordedAt.trim();
+  if (reference === '' || recordedAt === '' || Number.isNaN(Date.parse(recordedAt))) return null;
+  const url = values.marketSourceUrl.trim();
+  return { reference, url: url === '' ? null : url, recordedAt: new Date(recordedAt).toISOString(), basis: values.marketSourceBasis };
+}
+
 function money(value: string, source: ResearchBusinessSource | null) {
   const usd = amount(value);
   return usd === null ? { amount: null, currency: null, amountUsd: null, source: null, usdConversionSource: null } : { amount: usd, currency: 'USD', amountUsd: usd, source, usdConversionSource: null };
@@ -45,6 +55,10 @@ function coverage(values: BusinessFormValues): LandedCostCoverage {
 
 function sameQuoteSource(values: BusinessFormValues, initial: BusinessFormValues): boolean {
   return values.sourceReference === initial.sourceReference && values.sourceUrl === initial.sourceUrl && values.sourceBasis === initial.sourceBasis;
+}
+
+function sameMarketSource(values: BusinessFormValues, initial: BusinessFormValues): boolean {
+  return values.marketSourceReference === initial.marketSourceReference && values.marketSourceUrl === initial.marketSourceUrl && values.marketSourceBasis === initial.marketSourceBasis && values.marketSourceRecordedAt === initial.marketSourceRecordedAt;
 }
 
 function sameQuote(values: BusinessFormValues, initial: BusinessFormValues): boolean {
@@ -78,8 +92,9 @@ export function initialBusinessFormValues(evidence: ResearchBusinessEvidence | n
   if (evidence === null) return emptyValues;
   const source = evidence.selectedQuote?.source ?? evidence.salePrice.source;
   const quote = evidence.selectedQuote;
+  const savedMarketSource = evidence.marketCheck.source;
   return {
-    specificationReference: evidence.specification.reference, specificationDescription: evidence.specification.description, sourceReference: source?.reference ?? '', sourceUrl: source?.url ?? '', sourceBasis: source?.basis === 'quote' ? 'quote' : 'estimate', disposition: evidence.disposition,
+    specificationReference: evidence.specification.reference, specificationDescription: evidence.specification.description, sourceReference: source?.reference ?? '', sourceUrl: source?.url ?? '', sourceBasis: source?.basis === 'quote' ? 'quote' : 'estimate', marketSourceReference: savedMarketSource?.reference ?? '', marketSourceUrl: savedMarketSource?.url ?? '', marketSourceBasis: savedMarketSource?.basis ?? 'observed', marketSourceRecordedAt: inputDateTime(savedMarketSource?.recordedAt ?? null), disposition: evidence.disposition,
     salePrice: String(evidence.salePrice.amountUsd ?? ''), referralFee: String(evidence.amazonUnitCosts.referralFee.amountUsd ?? ''), fulfillmentFee: String(evidence.amazonUnitCosts.fulfillmentFee.amountUsd ?? ''), otherVariableCost: String(evidence.amazonUnitCosts.otherVariableCost.amountUsd ?? ''),
     perUnitAdCost: String(evidence.perUnitAdCost.amountUsd ?? ''), perUnitReturnCost: String(evidence.perUnitReturnCost.amountUsd ?? ''), supplierName: quote?.supplierName ?? '', orderQuantity: String(quote?.orderQuantity ?? ''), minimumOrderQuantity: String(quote?.minimumOrderQuantity ?? ''),
     landedUnitCost: String(quote?.landedUnitCost.amountUsd ?? ''), landedShipmentTotal: String(quote?.landedShipmentTotal.amountUsd ?? ''), upfrontLaunchCost: String(evidence.upfrontLaunchCost.amountUsd ?? ''), launchAdvertisingCash: String(evidence.launchAdvertisingCash.amountUsd ?? ''), launchReserveCash: String(evidence.launchReserveCash.amountUsd ?? ''),
@@ -96,6 +111,12 @@ export function businessEvidenceFrom(values: BusinessFormValues, saved: Research
   const source = asSource(values);
   const initial = initialBusinessFormValues(saved);
   const sameMarket = saved !== null && values.marketStatus === initial.marketStatus && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo && values.comparisonRationale === initial.comparisonRationale;
+  const savedMarketSource = saved?.marketCheck.source ?? null;
+  const resolvedMarketSource = values.marketStatus === 'unknown'
+    ? null
+    : saved !== null && sameMarketSource(values, initial)
+      ? savedMarketSource
+      : marketSource(values);
   const parsed = ResearchBusinessEvidenceSchema.safeParse({
     kind: 'research_business_v1', specification: { reference: values.specificationReference, description: values.specificationDescription }, marketplace: 'US', disposition: values.disposition,
     brandFit: saved !== null && values.brandFitStatus === initial.brandFitStatus ? saved.brandFit : check(values.brandFitStatus, source), salePrice: savedMoney(values.salePrice, initial.salePrice, saved, 'salePrice', source),
@@ -105,7 +126,7 @@ export function businessEvidenceFrom(values: BusinessFormValues, saved: Research
       otherVariableCost: saved !== null && values.otherVariableCost === initial.otherVariableCost ? saved.amazonUnitCosts.otherVariableCost : money(values.otherVariableCost, source)
     },
     selectedQuote: selectedQuote(values, source, saved), upfrontLaunchCost: savedMoney(values.upfrontLaunchCost, initial.upfrontLaunchCost, saved, 'upfrontLaunchCost', source), launchAdvertisingCash: savedMoney(values.launchAdvertisingCash, initial.launchAdvertisingCash, saved, 'launchAdvertisingCash', source), launchReserveCash: savedMoney(values.launchReserveCash, initial.launchReserveCash, saved, 'launchReserveCash', source), perUnitAdCost: savedMoney(values.perUnitAdCost, initial.perUnitAdCost, saved, 'perUnitAdCost', source), perUnitReturnCost: savedMoney(values.perUnitReturnCost, initial.perUnitReturnCost, saved, 'perUnitReturnCost', source),
-    marketCheck: sameMarket ? saved.marketCheck : { status: values.marketStatus, source: values.marketStatus === 'unknown' ? null : source, sourcePeriod: values.marketPeriodFrom === '' || values.marketPeriodTo === '' ? null : { from: new Date(values.marketPeriodFrom).toISOString(), to: new Date(values.marketPeriodTo).toISOString() }, comparisonRationale: values.comparisonRationale.trim() === '' ? null : values.comparisonRationale, sellerEstimatedMonthlySales: saved?.marketCheck.sellerEstimatedMonthlySales ?? null, sellerEstimateSource: saved?.marketCheck.sellerEstimateSource ?? null },
+    marketCheck: sameMarket ? saved.marketCheck : { status: values.marketStatus, source: resolvedMarketSource, sourcePeriod: values.marketPeriodFrom === '' || values.marketPeriodTo === '' ? null : { from: new Date(values.marketPeriodFrom).toISOString(), to: new Date(values.marketPeriodTo).toISOString() }, comparisonRationale: values.comparisonRationale.trim() === '' ? null : values.comparisonRationale, sellerEstimatedMonthlySales: saved?.marketCheck.sellerEstimatedMonthlySales ?? null, sellerEstimateSource: saved?.marketCheck.sellerEstimateSource ?? null },
     sampleCheck: saved !== null && values.sampleStatus === initial.sampleStatus ? saved.sampleCheck : check(values.sampleStatus, source), safetyIpCheck: saved !== null && values.safetyIpStatus === initial.safetyIpStatus ? saved.safetyIpCheck : check(values.safetyIpStatus, source), requestedApiPurposes: values.requestedApiPurposes
   });
   return parsed.success ? { kind: 'valid', evidence: parsed.data } : { kind: 'invalid', message: '필수 사양·출처·수량을 확인하세요. 알려진 금액과 통과한 검증에는 출처가 필요합니다.' };

@@ -53,11 +53,13 @@ export function ResearchBusinessSettingsForm() {
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (state.kind !== 'ready' || values === null) return;
-    const parsed = ResearchBusinessSettingsSchema.safeParse({
-      launchBudgetUsd: Number(values.launchBudgetUsd), minimumPreAdMarginPct: Number(values.minimumPreAdMarginPct),
-      minimumPostAdMarginPct: Number(values.minimumPostAdMarginPct), minimumRoiPct: Number(values.minimumRoiPct)
-    });
-    if (!parsed.success) {
+    const parsed = Object.values(values).some((value) => value.trim() === '')
+      ? null
+      : ResearchBusinessSettingsSchema.safeParse({
+          launchBudgetUsd: Number(values.launchBudgetUsd), minimumPreAdMarginPct: Number(values.minimumPreAdMarginPct),
+          minimumPostAdMarginPct: Number(values.minimumPostAdMarginPct), minimumRoiPct: Number(values.minimumRoiPct)
+        });
+    if (parsed === null || !parsed.success) {
       setNotice('네 기준은 0 이상인 유한 숫자로 입력하세요. 출시 예산은 0보다 커야 합니다.');
       return;
     }

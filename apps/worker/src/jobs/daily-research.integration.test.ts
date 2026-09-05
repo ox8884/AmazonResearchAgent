@@ -471,6 +471,103 @@ integration('daily research orchestration', () => {
     }
   });
 
+  it('resumes exactly one explicit Needs Review keyword gap without reopening commercial, budget, fresh-cache, or legacy states', async () => {
+    const date = `${fixtureYear}-01-08`;
+    const now = new Date('2099-01-08T12:00:00.000Z');
+    const validCandidateId = randomUUID();
+    const validKeyword = `${fixturePrefix}-needs-review-keyword-gap`;
+    const fixtures = [
+      { id: validCandidateId, keyword: validKeyword, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-no-intent`, state: 'Needs Review', requestedApiPurposes: [] as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-fresh`, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-quote`, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const, disposition: 'awaiting_quote' as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-sample`, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const, disposition: 'awaiting_sample' as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-rejected`, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const, disposition: 'rejected' as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-needs-review-overbudget`, state: 'Needs Review', requestedApiPurposes: ['keywords_by_keyword'] as const, launchCashUsd: 3_001 },
+      { id: randomUUID(), keyword: `${fixturePrefix}-waiting-api-budget`, state: 'Waiting for API Budget', requestedApiPurposes: ['keywords_by_keyword'] as const },
+      { id: randomUUID(), keyword: `${fixturePrefix}-legacy-strong`, state: 'Strong', requestedApiPurposes: ['keywords_by_keyword'] as const }
+    ];
+    const importRunIds: string[] = [];
+    await cleanupDailyFixtures(client, [date]);
+    await client.from('candidates').update({ state: 'Reject' }).in('id', candidateIds);
+    try {
+      for (const fixture of fixtures) {
+        const importRunId = randomUUID();
+        importRunIds.push(importRunId);
+        const { error: importError } = await client.from('import_runs').insert({
+          id: importRunId,
+          submission_hash: `${fixturePrefix}-${importRunId}`
+        });
+        if (importError) throw importError;
+        const { error: candidateError } = await client.from('candidates').insert({
+          id: fixture.id,
+          import_run_id: importRunId,
+          keyword: fixture.keyword,
+          normalized_exact_keyword: fixture.keyword,
+          state: fixture.state,
+          rule_passed: true,
+          preliminary_score: 100
+        });
+        if (candidateError) throw candidateError;
+        await appendResearchBusinessEvidence(client, fixture.id, {
+          requestedApiPurposes: fixture.requestedApiPurposes,
+          ...(fixture.disposition === undefined ? {} : { disposition: fixture.disposition }),
+          ...(fixture.launchCashUsd === undefined ? {} : { launchCashUsd: fixture.launchCashUsd })
+        });
+      }
+      const freshFixture = fixtures[2];
+      if (!freshFixture) throw new Error('Fresh Needs Review fixture was not created.');
+      const { error: freshEvidenceError } = await client.from('candidate_evidence').insert({
+        candidate_id: freshFixture.id,
+        kind: 'keyword_metrics',
+        payload: { observation: { cacheCapturedAt: now.toISOString() } },
+        created_at: now.toISOString()
+      });
+      if (freshEvidenceError) throw freshEvidenceError;
+
+      const scheduled = await enqueueDailyResearch(client, { logicalRunDate: date });
+      await runDailyResearch(
+        makeOrchestratorJob(randomUUID(), scheduled.researchRunId, date),
+        { client, queue: queueFor(client), now: () => now }
+      );
+      const { data: run, error: runError } = await client
+        .from('research_runs')
+        .select('selected_candidate_ids')
+        .eq('id', scheduled.researchRunId)
+        .single();
+      if (runError) throw runError;
+      expect(run.selected_candidate_ids).toEqual([validCandidateId]);
+      const { data: children, error: childrenError } = await client
+        .from('jobs')
+        .select('type,payload')
+        .like('idempotency_key', `daily-research:${scheduled.researchRunId}:%`);
+      if (childrenError) throw childrenError;
+      expect(children).toEqual([{ type: 'DEEP_VALIDATION', payload: { candidateId: validCandidateId, locale: 'ko' } }]);
+
+      let queryCalls = 0;
+      const result = await runDeepValidation(validCandidateId, 'ko', {
+        client,
+        budget: new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, `daily-needs-review-${validCandidateId}`),
+        queryKeyword: async (keyword) => {
+          queryCalls += 1;
+          expect(keyword).toBe(validKeyword);
+          return { keyword, monthlySearchVolume: 88, isUpperBound: false };
+        }
+      });
+      expect(result).toMatchObject({ completed: true, keywordCalls: 1 });
+      expect(queryCalls).toBe(1);
+    } finally {
+      await cleanupDailyFixtures(client, [date]);
+      await client.from('api_usage').delete().in('candidate_id', fixtures.map((fixture) => fixture.id));
+      await client.from('candidate_evidence').delete().in('candidate_id', fixtures.map((fixture) => fixture.id));
+      await client.from('candidates').delete().in('id', fixtures.map((fixture) => fixture.id));
+      await client.from('import_runs').delete().in('id', importRunIds);
+      const [readyCandidateId, watchCandidateId] = candidateIds;
+      if (readyCandidateId) await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
+      if (watchCandidateId) await client.from('candidates').update({ state: 'Watch' }).eq('id', watchCandidateId);
+    }
+  });
+
   it('selects a missing requested keyword despite fresh Product Database evidence and skips an already-fresh keyword', async () => {
     const date = `${fixtureYear}-01-06`;
     const missingImportRunId = randomUUID();

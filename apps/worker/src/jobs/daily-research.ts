@@ -499,7 +499,7 @@ async function selectResearchPlan(
     client
       .from('candidates')
       .select('id,state,preliminary_score')
-      .in('state', ['Ready for API Validation', 'Watch'])
+      .in('state', ['Ready for API Validation', 'Watch', 'Needs Review'])
       .order('id', { ascending: true })
       .range(from, to)
   );

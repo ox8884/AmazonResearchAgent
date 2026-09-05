@@ -72,4 +72,49 @@ describe('candidate business form provenance', () => {
     expect(result.evidence.salePrice).toEqual(evidence.salePrice);
     expect(result.evidence.amazonUnitCosts).toEqual(evidence.amazonUnitCosts);
   });
+
+  it('preserves observed market provenance when only the comparison rationale changes', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      comparisonRationale: 'Updated Top Products comparison after the saved observation.'
+    }, evidence);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.marketCheck.source).toEqual(evidence.marketCheck.source);
+    expect(result.evidence.selectedQuote).toEqual(evidence.selectedQuote);
+    expect(result.evidence.salePrice).toEqual(evidence.salePrice);
+  });
+
+  it('requires an explicit valid market observation source when changing market evidence', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      marketSourceReference: '',
+      marketSourceUrl: '',
+      marketSourceRecordedAt: '',
+      comparisonRationale: 'Updated Top Products comparison after the saved observation.'
+    }, evidence);
+
+    expect(result).toMatchObject({ kind: 'invalid' });
+  });
+
+  it('records an explicitly edited market observation separately from quote and money provenance', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      marketSourceReference: 'Top Products follow-up',
+      marketSourceUrl: 'https://market.example/top-products',
+      marketSourceBasis: 'observed',
+      marketSourceRecordedAt: '2026-09-04T15:30',
+      comparisonRationale: 'Updated Top Products comparison after the saved observation.'
+    }, evidence);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.marketCheck.source).toEqual({
+      reference: 'Top Products follow-up',
+      url: 'https://market.example/top-products',
+      basis: 'observed',
+      recordedAt: new Date('2026-09-04T15:30').toISOString()
+    });
+    expect(result.evidence.selectedQuote).toEqual(evidence.selectedQuote);
+    expect(result.evidence.salePrice).toEqual(evidence.salePrice);
+  });
 });
