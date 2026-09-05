@@ -123,7 +123,8 @@ describe('candidate business form provenance', () => {
       ...evidence,
       marketCheck: {
         ...evidence.marketCheck,
-        source: { ...evidence.marketCheck.source, recordedAt: '2026-09-03T00:00:17.123Z' }
+        source: { ...evidence.marketCheck.source, recordedAt: '2026-09-03T00:00:17.123Z' },
+        sourcePeriod: { from: '2026-08-01T00:00:17.123Z', to: '2026-08-31T23:59:42.456Z' }
       }
     });
     const result = businessEvidenceFrom({
@@ -138,6 +139,7 @@ describe('candidate business form provenance', () => {
       basis: 'observed',
       recordedAt: '2026-09-03T00:00:17.123Z'
     });
+    expect(result.evidence.marketCheck.sourcePeriod).toEqual(saved.marketCheck.sourcePeriod);
   });
 
   it('treats an explicitly edited market timestamp as UTC', () => {

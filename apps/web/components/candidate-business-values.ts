@@ -123,6 +123,11 @@ export function businessEvidenceFrom(values: BusinessFormValues, saved: Research
   const initial = initialBusinessFormValues(saved);
   const savedMarketSource = saved?.marketCheck.source ?? null;
   const marketSourceUnchanged = saved !== null && sameMarketSource(values, initial);
+  const marketPeriod = saved !== null && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo
+    ? saved.marketCheck.sourcePeriod
+    : values.marketPeriodFrom === '' || values.marketPeriodTo === ''
+      ? null
+      : { from: new Date(values.marketPeriodFrom).toISOString(), to: new Date(values.marketPeriodTo).toISOString() };
   const sameMarket = saved !== null && values.marketStatus === initial.marketStatus && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo && values.comparisonRationale === initial.comparisonRationale && marketSourceUnchanged;
   const resolvedMarketSource = values.marketStatus === 'unknown'
     ? null
@@ -138,7 +143,7 @@ export function businessEvidenceFrom(values: BusinessFormValues, saved: Research
       otherVariableCost: saved !== null && values.otherVariableCost === initial.otherVariableCost ? saved.amazonUnitCosts.otherVariableCost : money(values.otherVariableCost, source)
     },
     selectedQuote: selectedQuote(values, source, saved), upfrontLaunchCost: savedMoney(values.upfrontLaunchCost, initial.upfrontLaunchCost, saved, 'upfrontLaunchCost', source), launchAdvertisingCash: savedMoney(values.launchAdvertisingCash, initial.launchAdvertisingCash, saved, 'launchAdvertisingCash', source), launchReserveCash: savedMoney(values.launchReserveCash, initial.launchReserveCash, saved, 'launchReserveCash', source), perUnitAdCost: savedMoney(values.perUnitAdCost, initial.perUnitAdCost, saved, 'perUnitAdCost', source), perUnitReturnCost: savedMoney(values.perUnitReturnCost, initial.perUnitReturnCost, saved, 'perUnitReturnCost', source),
-    marketCheck: sameMarket ? saved.marketCheck : { status: values.marketStatus, source: resolvedMarketSource, sourcePeriod: values.marketPeriodFrom === '' || values.marketPeriodTo === '' ? null : { from: new Date(values.marketPeriodFrom).toISOString(), to: new Date(values.marketPeriodTo).toISOString() }, comparisonRationale: values.comparisonRationale.trim() === '' ? null : values.comparisonRationale, sellerEstimatedMonthlySales: saved?.marketCheck.sellerEstimatedMonthlySales ?? null, sellerEstimateSource: saved?.marketCheck.sellerEstimateSource ?? null },
+    marketCheck: sameMarket ? saved.marketCheck : { status: values.marketStatus, source: resolvedMarketSource, sourcePeriod: marketPeriod, comparisonRationale: values.comparisonRationale.trim() === '' ? null : values.comparisonRationale, sellerEstimatedMonthlySales: saved?.marketCheck.sellerEstimatedMonthlySales ?? null, sellerEstimateSource: saved?.marketCheck.sellerEstimateSource ?? null },
     sampleCheck: saved !== null && values.sampleStatus === initial.sampleStatus ? saved.sampleCheck : check(values.sampleStatus, source), safetyIpCheck: saved !== null && values.safetyIpStatus === initial.safetyIpStatus ? saved.safetyIpCheck : check(values.safetyIpStatus, source), requestedApiPurposes: values.requestedApiPurposes
   });
   return parsed.success ? { kind: 'valid', evidence: parsed.data } : { kind: 'invalid', message: '필수 사양·출처·수량을 확인하세요. 알려진 금액과 통과한 검증에는 출처가 필요합니다.' };
