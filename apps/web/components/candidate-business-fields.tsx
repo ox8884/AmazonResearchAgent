@@ -2,6 +2,7 @@ import type { ChangeEvent } from 'react';
 import type { BusinessFormValues } from './candidate-business-values';
 
 type EditableTextField = Exclude<keyof BusinessFormValues, 'requestedApiPurposes'>;
+type CoverageStatus = BusinessFormValues['productCoverage'];
 
 const endpointOptions = [
   ['product_database', 'Product Database'], ['keywords_by_keyword', 'Keywords by keyword'], ['historical_search_volume', 'Historical search volume'], ['sales_estimates', 'Sales estimates'], ['share_of_voice', 'Share of voice']
@@ -13,6 +14,10 @@ function MoneyField({ id, label, value, onChange }: { readonly id: EditableTextF
 
 function StatusField({ id, label, value, onChange }: { readonly id: EditableTextField; readonly label: string; readonly value: BusinessFormValues['brandFitStatus']; readonly onChange: (id: EditableTextField, value: string) => void }) {
   return <div className="field-stack"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={(event) => onChange(id, event.currentTarget.value)}><option value="unknown">미확인</option><option value="pass">통과</option><option value="fail">미통과</option></select></div>;
+}
+
+function CoverageField({ id, label, value, onChange }: { readonly id: EditableTextField; readonly label: string; readonly value: CoverageStatus; readonly onChange: (id: EditableTextField, value: string) => void }) {
+  return <div className="field-stack"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={(event) => onChange(id, event.currentTarget.value)}><option value="unknown">미확인</option><option value="included">포함</option><option value="excluded">제외</option></select></div>;
 }
 
 export function CandidateBusinessInputs({ values, onChange, onRequestedApiPurposes }: { readonly values: BusinessFormValues; readonly onChange: (id: EditableTextField, value: string) => void; readonly onRequestedApiPurposes: (value: readonly string[]) => void }) {
@@ -31,12 +36,15 @@ export function CandidateBusinessInputs({ values, onChange, onRequestedApiPurpos
     </div></fieldset>
     <fieldset className="business-form__group" id="business-quote"><legend>수량·견적</legend><div className="form-grid">
       <div className="field-stack"><label htmlFor="supplierName">공급처 이름</label><input id="supplierName" value={values.supplierName} onChange={(event) => onChange('supplierName', event.currentTarget.value)} /></div>
+      <div className="field-stack"><label htmlFor="disposition">사업 단계</label><select id="disposition" value={values.disposition} onChange={(event) => onChange('disposition', event.currentTarget.value)}><option value="research">리서치 진행</option><option value="awaiting_quote">견적 회신 대기</option><option value="awaiting_sample">샘플 확인 대기</option><option value="rejected">제외</option></select></div>
       <div className="field-stack"><label htmlFor="orderQuantity">수량</label><input id="orderQuantity" type="number" min="1" step="1" value={values.orderQuantity} onChange={(event) => onChange('orderQuantity', event.currentTarget.value)} /></div>
       <div className="field-stack"><label htmlFor="minimumOrderQuantity">MOQ</label><input id="minimumOrderQuantity" type="number" min="1" step="1" value={values.minimumOrderQuantity} onChange={(event) => onChange('minimumOrderQuantity', event.currentTarget.value)} /></div>
       <MoneyField id="landedUnitCost" label="도착 단가 (USD)" value={values.landedUnitCost} onChange={onChange} /><MoneyField id="landedShipmentTotal" label="도착 총액 (USD)" value={values.landedShipmentTotal} onChange={onChange} />
       <div className="field-stack"><label htmlFor="incoterm">Incoterm</label><input id="incoterm" value={values.incoterm} onChange={(event) => onChange('incoterm', event.currentTarget.value)} /></div><div className="field-stack"><label htmlFor="destination">도착지</label><input id="destination" value={values.destination} onChange={(event) => onChange('destination', event.currentTarget.value)} /></div>
       <div className="field-stack"><label htmlFor="leadTimeDays">리드타임 (일)</label><input id="leadTimeDays" type="number" min="1" step="1" value={values.leadTimeDays} onChange={(event) => onChange('leadTimeDays', event.currentTarget.value)} /></div><div className="field-stack"><label htmlFor="quoteExpiresAt">견적 만료</label><input id="quoteExpiresAt" type="datetime-local" value={values.quoteExpiresAt} onChange={(event) => onChange('quoteExpiresAt', event.currentTarget.value)} /></div>
+      <CoverageField id="productCoverage" label="제품 비용 포함 범위" value={values.productCoverage} onChange={onChange} /><CoverageField id="packagingCoverage" label="포장 비용 포함 범위" value={values.packagingCoverage} onChange={onChange} /><CoverageField id="freightCoverage" label="운임 포함 범위" value={values.freightCoverage} onChange={onChange} /><CoverageField id="dutiesCoverage" label="관세 포함 범위" value={values.dutiesCoverage} onChange={onChange} /><CoverageField id="deliveryCoverage" label="배송 포함 범위" value={values.deliveryCoverage} onChange={onChange} />
     </div></fieldset>
+    <p className="field-help">사업 단계는 공급처에 메시지를 보내거나 주문을 생성하지 않습니다. 비용 포함 범위는 실제 견적의 포함·제외를 기록하며, 미확인 값은 통과로 처리하지 않습니다.</p>
     <fieldset className="business-form__group"><legend>출시 현금·단위 비용</legend><div className="form-grid">
       <MoneyField id="referralFee" label="Amazon referral fee (USD)" value={values.referralFee} onChange={onChange} /><MoneyField id="fulfillmentFee" label="FBA fulfillment fee (USD)" value={values.fulfillmentFee} onChange={onChange} /><MoneyField id="otherVariableCost" label="Other variable cost (USD)" value={values.otherVariableCost} onChange={onChange} /><MoneyField id="perUnitAdCost" label="예상 단위 광고비 (USD)" value={values.perUnitAdCost} onChange={onChange} /><MoneyField id="perUnitReturnCost" label="예상 단위 반품비 (USD)" value={values.perUnitReturnCost} onChange={onChange} /><MoneyField id="upfrontLaunchCost" label="선행 출시 비용 (USD)" value={values.upfrontLaunchCost} onChange={onChange} /><MoneyField id="launchAdvertisingCash" label="출시 광고 현금 (USD)" value={values.launchAdvertisingCash} onChange={onChange} /><MoneyField id="launchReserveCash" label="출시 예비 현금 (USD)" value={values.launchReserveCash} onChange={onChange} />
     </div></fieldset>

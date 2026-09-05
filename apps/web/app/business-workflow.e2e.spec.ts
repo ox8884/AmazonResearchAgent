@@ -76,6 +76,7 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('제품 사양 설명').fill('Countertop bamboo utensil holder with removable drip tray.');
   await page.getByLabel('금액·견적 출처 레퍼런스').fill('QA supplier quote');
   await page.getByLabel('출처 URL').fill('https://supplier.example/qa-bamboo-utensil-holder');
+  await page.getByLabel('사업 단계').selectOption('research');
   await page.getByLabel('공급처 이름').fill('QA Supplier');
   await page.getByLabel('판매가 (USD)').fill('30');
   await page.getByLabel('Amazon referral fee (USD)').fill('3');
@@ -90,6 +91,11 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('선행 출시 비용 (USD)').fill('100');
   await page.getByLabel('출시 광고 현금 (USD)').fill('100');
   await page.getByLabel('출시 예비 현금 (USD)').fill('100');
+  await page.getByLabel('제품 비용 포함 범위').selectOption('included');
+  await page.getByLabel('포장 비용 포함 범위').selectOption('included');
+  await page.getByLabel('운임 포함 범위').selectOption('included');
+  await page.getByLabel('관세 포함 범위').selectOption('included');
+  await page.getByLabel('배송 포함 범위').selectOption('included');
   await page.getByLabel('브랜드 적합성').selectOption('pass');
   await page.getByLabel('시장 검증').selectOption('pass');
   await page.getByLabel('관측 시작').fill('2026-08-01T00:00');

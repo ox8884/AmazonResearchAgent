@@ -35,4 +35,41 @@ describe('candidate business form provenance', () => {
   it('round-trips untouched evidence without merging sources, conversion evidence, or quote totals', () => {
     expect(businessEvidenceFrom(initialBusinessFormValues(evidence), evidence)).toEqual({ kind: 'valid', evidence });
   });
+
+  it('preserves unchanged money sources while recording a quote wait, coverage, and changed quote source', () => {
+    const values = {
+      ...initialBusinessFormValues(evidence),
+      disposition: 'awaiting_quote' as const,
+      sourceBasis: 'quote' as const,
+      productCoverage: 'included' as const,
+      packagingCoverage: 'excluded' as const,
+      freightCoverage: 'included' as const,
+      dutiesCoverage: 'included' as const,
+      deliveryCoverage: 'included' as const
+    };
+
+    const result = businessEvidenceFrom(values, evidence);
+
+    expect(result).toMatchObject({
+      kind: 'valid',
+      evidence: {
+        disposition: 'awaiting_quote',
+        selectedQuote: {
+          source: { basis: 'quote' },
+          landedUnitCost: { source: { basis: 'quote' } },
+          landedShipmentTotal: { source: { basis: 'quote' } },
+          landedCostCoverage: {
+            product: 'included',
+            packaging: 'excluded',
+            freight: 'included',
+            duties: 'included',
+            delivery: 'included'
+          }
+        }
+      }
+    });
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.salePrice).toEqual(evidence.salePrice);
+    expect(result.evidence.amazonUnitCosts).toEqual(evidence.amazonUnitCosts);
+  });
 });
