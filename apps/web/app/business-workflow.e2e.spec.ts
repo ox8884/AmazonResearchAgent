@@ -77,7 +77,7 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('제품 사양 설명').fill('Countertop bamboo utensil holder with removable drip tray.');
   await page.getByLabel('금액·견적 출처 레퍼런스').fill('QA supplier quote');
   await page.getByLabel('출처 URL').fill('https://supplier.example/qa-bamboo-utensil-holder');
-  await page.getByLabel('출처 성격').selectOption('estimate');
+  await page.getByLabel('출처 성격', { exact: true }).selectOption('estimate');
   await page.getByLabel('사업 단계').selectOption('research');
   await page.getByLabel('공급처 이름').fill('QA Supplier');
   await page.getByLabel('판매가 (USD)').fill('30');
@@ -148,7 +148,7 @@ test('rejects a blank profitability target without a POST and saves explicit zer
   });
   await page.getByLabel('광고 전 최소 마진 (%)').fill('');
   await page.getByRole('button', { name: '상업 기준 저장' }).click();
-  await expect(page.getByRole('alert')).toHaveText('네 기준은 0 이상인 유한 숫자로 입력하세요. 출시 예산은 0보다 커야 합니다.');
+  await expect(page.locator('.notice--error[role="alert"]')).toHaveText('네 기준은 0 이상인 유한 숫자로 입력하세요. 출시 예산은 0보다 커야 합니다.');
   expect(settingsPostCount).toBe(0);
   await page.reload();
   await expect(page.getByLabel('광고 전 최소 마진 (%)')).toHaveValue(defaultSettings.minimumPreAdMarginPct);
@@ -283,7 +283,7 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   await expect(refreshButton).toHaveCSS('white-space', 'nowrap');
   await expect.poll(() => refreshButton.evaluate((button) => button.scrollWidth <= button.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 1280, height: 1000 });
-  await page.getByLabel('출처 성격').selectOption('quote');
+  await page.getByLabel('출처 성격', { exact: true }).selectOption('quote');
   await page.getByLabel('사업 단계').selectOption('awaiting_quote');
   await page.getByLabel('제품 비용 포함 범위').selectOption('included');
   await page.getByLabel('포장 비용 포함 범위').selectOption('included');
@@ -294,7 +294,7 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   await expect(page.getByLabel('현재 상업 판단').getByText('견적 회신 대기', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('사업 단계')).toHaveValue('awaiting_quote');
-  await expect(page.getByLabel('출처 성격')).toHaveValue('quote');
+  await expect(page.getByLabel('출처 성격', { exact: true })).toHaveValue('quote');
   await expect(page.getByLabel('운임 포함 범위')).toHaveValue('included');
   let businessPostCount = 0;
   page.on('request', (request) => {
@@ -317,7 +317,7 @@ test('persists a source-only observed market edit through reload and GET-only cr
   await page.getByLabel('시장 관측 URL').fill('https://market.example/qa-top-products-revised');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   const saved = await initialSave;
-  expect(saved.status()).toBe(200);
+  expect(saved.status()).toBe(201);
   const payload = await saved.json() as { evidence: { marketCheck: { source: { reference: string; url: string | null; basis: string; recordedAt: string } | null } } };
   expect(payload.evidence.marketCheck.source).toMatchObject({
     reference: 'QA Top Products observation',
@@ -351,7 +351,7 @@ test('captures fresh visual-fix states without overwriting final acceptance evid
 
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
   await openCandidateWithFreshAssessment(page);
-  await page.getByLabel('출처 성격').selectOption('estimate');
+  await page.getByLabel('출처 성격', { exact: true }).selectOption('estimate');
   await page.getByLabel('사업 단계').selectOption('research');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   await expect(page.getByText('견적 초안 준비')).toBeVisible();
