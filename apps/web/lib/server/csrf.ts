@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import {
   AdminAuthError,
   AdminCookieNames,
@@ -7,10 +8,17 @@ import {
 } from './admin-session';
 
 function requestHost(request: Request): string | null {
-  return (
-    request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() ??
-    request.headers.get('host')
-  );
+  return request.headers.get('host');
+}
+
+function secretsEqual(left: string, right: string): boolean {
+  const actual = Buffer.from(left);
+  const expected = Buffer.from(right);
+  if (actual.length !== expected.length) {
+    timingSafeEqual(expected, expected);
+    return false;
+  }
+  return timingSafeEqual(actual, expected);
 }
 
 export function verifyRequestOrigin(request: Request): void {
@@ -46,8 +54,8 @@ export function verifyCsrfRequest(
   if (
     !cookieToken ||
     !headerToken ||
-    cookieToken !== session.csrfToken ||
-    headerToken !== session.csrfToken
+    !secretsEqual(cookieToken, session.csrfToken) ||
+    !secretsEqual(headerToken, session.csrfToken)
   ) {
     throw new AdminAuthError('CSRF validation failed.', 403);
   }

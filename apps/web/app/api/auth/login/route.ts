@@ -4,15 +4,21 @@ import {
   createAdminSession,
   getAdminPasswordVerifier,
   getSessionSigningKey,
+  requestUsesSecureCookies,
   verifyAdminPassword
 } from '../../../../lib/server/admin-session';
 import { verifyRequestOrigin } from '../../../../lib/server/csrf';
 import { AbuseGuardError } from '../../../../lib/server/abuse-guard';
 import {
+  assertAdminClientAllowed,
   consumeDurableLoginAttempt,
   trustedCloudflareClientIdentityHash,
   withDurableLoginScrypt
 } from '../../../../lib/server/login-guard';
+import {
+  configuredAdminTotpSecret,
+  verifyAdminTotp
+} from '../../../../lib/server/admin-totp';
 import { ServerConfigurationError } from '../../../../lib/server/database';
 import {
   AdminSessionStoreError,
@@ -24,7 +30,8 @@ import { z } from 'zod';
 export const runtime = 'nodejs';
 
 const LoginSchema = z.object({
-  password: z.string().min(1).max(1024)
+  password: z.string().min(1).max(1024),
+  totp: z.string().max(16).optional()
 });
 
 function invalidCredentials(): NextResponse {
@@ -34,6 +41,7 @@ function invalidCredentials(): NextResponse {
 export async function POST(request: Request): Promise<NextResponse> {
   try {
     verifyRequestOrigin(request);
+    assertAdminClientAllowed(request);
     const clientIdentityHash = trustedCloudflareClientIdentityHash(request);
     if (clientIdentityHash === undefined && process.env.NODE_ENV === 'production') {
       throw new AbuseGuardError();
@@ -49,12 +57,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!valid) {
       return invalidCredentials();
     }
+    const totpSecret = configuredAdminTotpSecret();
+    if (totpSecret && !verifyAdminTotp(totpSecret, parsed.data.totp)) {
+      return invalidCredentials();
+    }
     const issued = createAdminSession(getSessionSigningKey());
     await persistAdminSession(issued);
     const response = NextResponse.json({ authenticated: true });
     for (const cookie of adminSessionCookies(
       issued,
-      process.env.NODE_ENV === 'production'
+      requestUsesSecureCookies(request)
     )) {
       response.headers.append('set-cookie', cookie);
     }

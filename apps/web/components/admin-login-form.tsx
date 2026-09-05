@@ -14,10 +14,12 @@ export function AdminLoginForm({ locale }: { locale: Locale }) {
     setSubmitting(true);
     setFailed(false);
     const form = event.currentTarget;
-    const password = new FormData(form).get('password');
+    const formData = new FormData(form);
+    const password = formData.get('password');
+    const totpValue = String(formData.get('totp') ?? '').trim();
     try {
       await ky.post('/api/auth/login', {
-        json: { password },
+        json: totpValue.length > 0 ? { password, totp: totpValue } : { password },
         credentials: 'same-origin'
       });
       window.location.assign(`/${locale}/settings/ai`);
@@ -41,6 +43,15 @@ export function AdminLoginForm({ locale }: { locale: Locale }) {
           type="password"
           autoComplete="current-password"
           required
+        />
+        <label htmlFor="admin-totp">{copy.adminTotp}</label>
+        <input
+          id="admin-totp"
+          name="totp"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          pattern="[0-9]*"
         />
       </div>
       <button className="button button--primary" type="submit" disabled={submitting}>

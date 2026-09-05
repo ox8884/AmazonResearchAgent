@@ -70,8 +70,8 @@ export function createConcurrencyGate(max: number): ConcurrencyGate {
  *
  * Vercel/proxy `x-forwarded-for` is attacker-controlled unless the deployment
  * terminates TLS at a trusted hop that overwrites the header. This MVP does
- * not treat that header as identity. A single-admin process uses one global
- * login bucket plus a concurrent scrypt cap.
+ * not treat that header as identity. Production login uses a per-client
+ * durable bucket plus a concurrent scrypt cap.
  */
 export const LOGIN_RATE_KEY = 'admin-login';
 export const loginRateLimit = createTokenBucket({ max: 8, windowMs: 5 * 60_000 });

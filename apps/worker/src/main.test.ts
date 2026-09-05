@@ -236,6 +236,9 @@ describe('worker job execution', () => {
     expect(redactSecrets('Bearer abc sk-secret sb_secret_value')).toBe(
       'Bearer [REDACTED] [REDACTED] [REDACTED]'
     );
+    expect(
+      redactSecrets('https://api.telegram.org/bot123456:AAExampleToken/sendMessage')
+    ).toBe('https://api.telegram.org/bot[REDACTED]/sendMessage');
   });
 
   // Break: subscription execution starts with multiple worker processes and only local permits.

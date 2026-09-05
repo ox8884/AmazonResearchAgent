@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createAdminSession,
   hashAdminPassword,
   parseCookieHeader,
+  requestUsesSecureCookies,
   verifyAdminPassword,
   verifyAdminSession
 } from './admin-session';
@@ -51,6 +52,30 @@ describe('single-admin session', () => {
         new Date('2026-08-27T00:10:00.000Z')
       )
     ).toThrow();
+    expect(() =>
+      verifyCsrfRequest(
+        new Request(request, {
+          headers: {
+            ...Object.fromEntries(request.headers),
+            origin: 'https://evil.example',
+            'x-forwarded-host': 'evil.example'
+          }
+        }),
+        key,
+        new Date('2026-08-27T00:10:00.000Z')
+      )
+    ).toThrow(/origin is not allowed/u);
+  });
+
+  it('marks HTTPS requests as Secure even when NODE_ENV is not production', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    expect(
+      requestUsesSecureCookies(new Request('https://app.example.test/api/auth/login'))
+    ).toBe(true);
+    expect(
+      requestUsesSecureCookies(new Request('http://127.0.0.1:3100/api/auth/login'))
+    ).toBe(false);
+    vi.unstubAllEnvs();
   });
 
   it('ignores malformed percent-encoded cookies instead of throwing', () => {

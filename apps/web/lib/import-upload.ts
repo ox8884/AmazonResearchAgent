@@ -71,9 +71,17 @@ export async function prepareUploadFiles(files: File[]): Promise<PreparedUpload>
   }
 
   const prepared: PreparedUploadFile[] = [];
+  let totalBytes = 0;
   for (const file of files) {
     validateFile(file);
     const content = await file.arrayBuffer();
+    if (content.byteLength > MAX_FILE_BYTES) {
+      throw new UploadValidationError(`${file.name} exceeds the 10 MB limit.`);
+    }
+    totalBytes += content.byteLength;
+    if (totalBytes > MAX_TOTAL_FILE_BYTES) {
+      throw new UploadValidationError('Selected CSV files exceed the 20 MB combined limit.');
+    }
     prepared.push({
       sourceFileName: file.name.normalize('NFC'),
       contentSha256: sha256(content),

@@ -47,6 +47,13 @@ The Worker needs these encrypted secrets:
 - `APP_SESSION_SIGNING_KEY_B64`
 - `APP_SECRET_ENCRYPTION_KEY_B64`
 
+Optional web secrets:
+
+- `ARA_ADMIN_ALLOWED_IPS` — comma-separated IPv4/IPv6 allowlist. When set,
+  production logins and admin routes require a matching `CF-Connecting-IP`.
+- `ADMIN_TOTP_SECRET_BASE32` — authenticator secret. When set, login also
+  requires a current 6-digit TOTP code.
+
 Set them with `wrangler secret put` from `apps/web`, then deploy:
 
 ```powershell

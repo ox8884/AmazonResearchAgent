@@ -13,6 +13,7 @@ import {
   importConcurrencyGate,
   importRateLimit
 } from '../../../lib/server/abuse-guard';
+import { consumeDurableImportAttempt } from '../../../lib/server/login-guard';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +21,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const session = await requireAdminMutation(request);
     importRateLimit.consume(session.csrfToken);
+    await consumeDurableImportAttempt(session.sessionId);
     return await importConcurrencyGate.run(session.csrfToken, async () => {
       const formData = await request.formData();
       const localeResult = LocaleSchema.safeParse(formData.get('locale'));

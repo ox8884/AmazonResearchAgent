@@ -561,7 +561,7 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(otherClientAllowed?.result).toBe(true);
   });
 
-  it('does not create a client bucket after the shared login backstop is exhausted', async () => {
+  it('does not let one client exhaust logins for a different client', async () => {
     const firstClient = 'd'.repeat(64);
     const laterClient = 'e'.repeat(64);
     await sql`
@@ -576,43 +576,39 @@ describe('AI analysis and cluster hardening RPCs', () => {
     const [firstAllowed] = await sql<{ result: boolean }[]>`
       select consume_admin_login_attempt(${firstClient}, 1, 1, 300) as result
     `;
-    const [laterBlocked] = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(${laterClient}, 1, 1, 300) as result
+    const [firstBlocked] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${firstClient}, 1, 1, 300) as result
     `;
-    const [laterBucket] = await sql<{ count: string }[]>`
-      select count(*)::text as count
-      from admin_login_guard
-      where bucket = ${`admin-login:client:${laterClient}`}
+    const [laterAllowed] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${laterClient}, 1, 1, 300) as result
     `;
 
     expect(firstAllowed?.result).toBe(true);
-    expect(laterBlocked?.result).toBe(false);
-    expect(laterBucket?.count).toBe('0');
+    expect(firstBlocked?.result).toBe(false);
+    expect(laterAllowed?.result).toBe(true);
   });
 
-  it('does not charge the shared login backstop for a rejected client retry', async () => {
-    const clientHash = 'f'.repeat(64);
+  it('rate-limits authenticated admin actions without a global lockout', async () => {
+    const subject = 'a'.repeat(64);
     await sql`
       delete from admin_login_guard
-      where bucket in ${sql([
-        `admin-login:client:${clientHash}`,
-        'admin-login:global'
-      ])}
+      where bucket = ${`admin-action:import:${subject}`}
     `;
 
     const [firstAllowed] = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(${clientHash}, 1, 80, 300) as result
+      select consume_admin_action_attempt('import', ${subject}, 1, 60) as result
     `;
-    const [retryBlocked] = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(${clientHash}, 1, 80, 300) as result
+    const [blocked] = await sql<{ result: boolean }[]>`
+      select consume_admin_action_attempt('import', ${subject}, 1, 60) as result
     `;
-    const [globalBucket] = await sql<{ attempts: number }[]>`
-      select attempts from admin_login_guard where bucket = 'admin-login:global'
+    const otherSubject = 'b'.repeat(64);
+    const [otherAllowed] = await sql<{ result: boolean }[]>`
+      select consume_admin_action_attempt('import', ${otherSubject}, 1, 60) as result
     `;
 
     expect(firstAllowed?.result).toBe(true);
-    expect(retryBlocked?.result).toBe(false);
-    expect(globalBucket?.attempts).toBe(1);
+    expect(blocked?.result).toBe(false);
+    expect(otherAllowed?.result).toBe(true);
   });
 
   // Break: punctuation, full-width, or extra whitespace create extra clusters.

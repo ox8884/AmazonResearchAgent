@@ -75,6 +75,40 @@ function mappedIpv4Address(address: string): string | null {
   return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
 }
 
+function parseIpv6Groups(address: string): number[] | null {
+  const halves = address.split('::');
+  if (halves.length > 2) {
+    return null;
+  }
+  const parsePart = (part: string | undefined): number[] | null => {
+    if (part === undefined || part.length === 0) {
+      return [];
+    }
+    const groups = part.split(':').map((group) => Number.parseInt(group, 16));
+    if (groups.some((group) => !Number.isInteger(group) || group < 0 || group > 0xffff)) {
+      return null;
+    }
+    return groups;
+  };
+  const head = parsePart(halves[0]);
+  const tail = halves.length === 2 ? parsePart(halves[1]) : [];
+  if (head === null || tail === null) {
+    return null;
+  }
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2) {
+    if (missing < 0) {
+      return null;
+    }
+    return [...head, ...Array.from({ length: missing }, () => 0), ...tail];
+  }
+  return head.length === 8 ? head : null;
+}
+
+function groupsToIpv4(high: number, low: number): string {
+  return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+}
+
 function ipv6Category(address: string): AddressCategory {
   const normalized = address.toLocaleLowerCase('en-US');
   const mappedIpv4 = mappedIpv4Address(normalized);
@@ -86,6 +120,18 @@ function ipv6Category(address: string): AddressCategory {
   }
   if (normalized === 'fd00:ec2::254') {
     return 'blocked';
+  }
+  const groups = parseIpv6Groups(normalized);
+  if (groups) {
+    if (groups[0] === 0x2002) {
+      return ipv4Category(groupsToIpv4(groups[1] ?? 0, groups[2] ?? 0));
+    }
+    if (groups[0] === 0x64 && groups[1] === 0xff9b) {
+      return ipv4Category(groupsToIpv4(groups[6] ?? 0, groups[7] ?? 0));
+    }
+    if (groups[0] === 0x2001 && groups[1] === 0) {
+      return 'blocked';
+    }
   }
   if (normalized.startsWith('fc') || normalized.startsWith('fd')) {
     return 'private';

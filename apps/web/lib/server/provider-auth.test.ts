@@ -8,7 +8,9 @@ import { loginRateLimit, loginScryptGate } from './abuse-guard';
 
 vi.mock('./login-guard', () => ({
   consumeDurableLoginAttempt: async () => undefined,
+  consumeDurableImportAttempt: async () => undefined,
   trustedCloudflareClientIdentityHash: () => undefined,
+  assertAdminClientAllowed: () => undefined,
   withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
 }));
 

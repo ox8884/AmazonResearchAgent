@@ -3,6 +3,7 @@
 import { getCopy, type Locale } from '@ara/shared';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
+import { isPublicAppPath } from '../lib/admin-route-guard';
 import { localizedHref } from '../lib/locale';
 import { LanguageSwitcher } from './language-switcher';
 
@@ -57,6 +58,7 @@ export function AppShell({
 }) {
   const copy = getCopy(locale);
   const pathname = usePathname();
+  const publicSurface = isPublicAppPath(pathname);
   const currentPageLabel = (() => {
     const suffix = pathname.replace(/^\/(ko|en)(?=\/|$)/u, '') || '/';
     for (const phase of navPhases) {
@@ -78,32 +80,36 @@ export function AppShell({
               <span className="wordmark__mark" aria-hidden="true">AR</span>
               <span>{copy.appName}</span>
             </a>
-            <p className="primary-nav__current-location" aria-hidden="true">
-              {copy.navCurrentLocation.replace('{page}', currentPageLabel)}
-            </p>
-            <nav className="primary-nav" aria-label="Primary">
-              {navPhases.map((phase) => (
-                <div className="primary-nav__phase" key={phase.key}>
-                  <p className="primary-nav__group-label">{copy[phase.key]}</p>
-                  <ul className="primary-nav__list">
-                    {phase.items.map((item) => {
-                      const active = isActivePath(pathname, item.path);
-                      return (
-                        <li key={item.path}>
-                          <a
-                            href={localizedHref(locale, item.path)}
-                            aria-current={active ? 'page' : undefined}
-                            className={active ? 'is-active' : undefined}
-                          >
-                            {copy[item.copyKey as NavCopyKey]}
-                          </a>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </nav>
+            {publicSurface ? null : (
+              <>
+                <p className="primary-nav__current-location" aria-hidden="true">
+                  {copy.navCurrentLocation.replace('{page}', currentPageLabel)}
+                </p>
+                <nav className="primary-nav" aria-label="Primary">
+                  {navPhases.map((phase) => (
+                    <div className="primary-nav__phase" key={phase.key}>
+                      <p className="primary-nav__group-label">{copy[phase.key]}</p>
+                      <ul className="primary-nav__list">
+                        {phase.items.map((item) => {
+                          const active = isActivePath(pathname, item.path);
+                          return (
+                            <li key={item.path}>
+                              <a
+                                href={localizedHref(locale, item.path)}
+                                aria-current={active ? 'page' : undefined}
+                                className={active ? 'is-active' : undefined}
+                              >
+                                {copy[item.copyKey as NavCopyKey]}
+                              </a>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </nav>
+              </>
+            )}
             <LanguageSwitcher
               locale={locale}
               koreanLabel={copy.languageKorean}

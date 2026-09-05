@@ -67,6 +67,17 @@ describe('worker provider URL policy', () => {
     await rejects('https://[::ffff:127.0.0.1]/v1', 'public');
   });
 
+  it('classifies IPv6 6to4 and NAT64 by the embedded IPv4 and blocks Teredo', async () => {
+    await expect(
+      validateProviderBaseUrl('https://[2002:808:808::]/v1', 'public')
+    ).resolves.toMatchObject({ protocol: 'https:' });
+    await rejects('https://[2002:a9fe:a9fe::]/latest', 'public');
+    await rejects('https://[2002:a9fe:a9fe::]/latest', 'private');
+    await rejects('https://[64:ff9b::a9fe:a9fe]/latest', 'public');
+    await rejects('http://[2002:7f00:1::]/v1', 'private');
+    await rejects('https://[2001:0:53aa:64c::]/v1', 'public');
+  });
+
   // Break: URL credentials or one unsafe DNS answer are accepted.
   it('rejects credentials and mixed DNS answers', async () => {
     await rejects('https://user:password@8.8.8.8/v1', 'public');

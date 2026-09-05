@@ -1,6 +1,7 @@
 import {
   AdminAuthError,
-  clearedAdminCookies
+  clearedAdminCookies,
+  requestUsesSecureCookies
 } from '../../../../lib/server/admin-session';
 import { requireAdminMutation } from '../../../../lib/server/api-auth';
 import { revokeAdminSession } from '../../../../lib/server/admin-session-store';
@@ -13,7 +14,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const session = await requireAdminMutation(request);
     await revokeAdminSession(session);
     const response = NextResponse.json({ authenticated: false });
-    for (const cookie of clearedAdminCookies(process.env.NODE_ENV === 'production')) {
+    for (const cookie of clearedAdminCookies(requestUsesSecureCookies(request))) {
       response.headers.append('set-cookie', cookie);
     }
     return response;

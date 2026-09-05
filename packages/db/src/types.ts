@@ -2228,6 +2228,15 @@ export type Database = {
         }
         Returns: boolean
       }
+      consume_admin_action_attempt: {
+        Args: {
+          action_name: string
+          max_attempts: number
+          subject_hash: string
+          window_seconds: number
+        }
+        Returns: boolean
+      }
       consume_admin_login_attempt: {
         Args: {
           client_identity_hash: string

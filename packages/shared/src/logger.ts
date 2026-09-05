@@ -1,4 +1,6 @@
-const SECRET_KEY = /key|token|authorization|cookie|secret|password/iu;
+const SECRET_KEY = /key|token|authorization|cookie|secret|password|ciphertext/iu;
+const TELEGRAM_BOT_PATH = /\/bot\d+:[A-Za-z0-9_-]+\//gu;
+const TELEGRAM_BOT_URL = /https?:\/\/[^\s"]*\/bot\d+:[A-Za-z0-9_-]+\/[^\s"]*/giu;
 
 export type StructuredLog = {
   readonly timestamp: string;
@@ -13,7 +15,16 @@ export type StructuredLog = {
   readonly [key: string]: unknown;
 };
 
+function redactString(value: string): string {
+  return value
+    .replace(TELEGRAM_BOT_URL, '[REDACTED_URL]')
+    .replace(TELEGRAM_BOT_PATH, '/bot[REDACTED]/');
+}
+
 function redactValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactString(value);
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => redactValue(entry));
   }

@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_OPPORTUNITY_CSV_ROWS,
   OpportunityCsvParseError,
-  parseOpportunityFinderCsv
+  parseOpportunityFinderCsv,
+  REQUIRED_OPPORTUNITY_HEADERS
 } from './opportunity-csv';
 
 const pageOnePath = fileURLToPath(
@@ -87,5 +89,13 @@ describe('Opportunity Finder CSV parser', () => {
     expect(() =>
       parseOpportunityFinderCsv(malformed, 'bad-number.csv')
     ).toThrow('bad-number.csv row 2');
+  });
+
+  it('rejects Opportunity Finder exports above the row cap', () => {
+    const header = REQUIRED_OPPORTUNITY_HEADERS.join(',');
+    const row = 'keyword,1,1,$1,1,1%,1%,Low,Low,2026-08-26';
+    const csv = [header, ...Array.from({ length: MAX_OPPORTUNITY_CSV_ROWS + 1 }, () => row)].join('\n');
+
+    expect(() => parseOpportunityFinderCsv(csv, 'huge.csv')).toThrow('20000 row limit');
   });
 });

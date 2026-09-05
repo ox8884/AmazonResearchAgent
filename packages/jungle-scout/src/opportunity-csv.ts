@@ -183,6 +183,8 @@ function mapRow(
   }
 }
 
+export const MAX_OPPORTUNITY_CSV_ROWS = 20_000;
+
 export function parseOpportunityFinderCsv(
   input: string,
   sourceFileName: string
@@ -218,8 +220,16 @@ export function parseOpportunityFinderCsv(
       raw: true,
       relax_column_count: false,
       skip_empty_lines: true,
-      trim: false
+      trim: false,
+      to: MAX_OPPORTUNITY_CSV_ROWS + 1
     }) as CsvRecordWithInfo[];
+
+    if (entries.length > MAX_OPPORTUNITY_CSV_ROWS) {
+      throw new OpportunityCsvParseError(
+        `${sourceFileName} exceeds the ${MAX_OPPORTUNITY_CSV_ROWS} row limit.`,
+        sourceFileName
+      );
+    }
 
     if (headers.length === 0) {
       throw new OpportunityCsvParseError(

@@ -103,7 +103,8 @@ export function redactSecrets(message: string): string {
   return message
     .replace(/\bsb_secret_[A-Za-z0-9_-]+\b/g, '[REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]+\b/g, '[REDACTED]')
-    .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]');
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/\/bot\d+:[A-Za-z0-9_-]+\//g, '/bot[REDACTED]/');
 }
 
 function errorMessage(error: unknown): string {

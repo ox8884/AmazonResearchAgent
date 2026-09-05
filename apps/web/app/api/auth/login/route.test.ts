@@ -7,6 +7,8 @@ const originalEnvironment = {
   ADMIN_PASSWORD_SCRYPT: process.env.ADMIN_PASSWORD_SCRYPT,
   APP_SESSION_SIGNING_KEY_B64: process.env.APP_SESSION_SIGNING_KEY_B64,
   ARA_TRUST_CLOUDFLARE_CLIENT_IP: process.env.ARA_TRUST_CLOUDFLARE_CLIENT_IP,
+  ARA_ADMIN_ALLOWED_IPS: process.env.ARA_ADMIN_ALLOWED_IPS,
+  ADMIN_TOTP_SECRET_BASE32: process.env.ADMIN_TOTP_SECRET_BASE32,
   NODE_ENV: process.env.NODE_ENV
 };
 
@@ -182,5 +184,46 @@ describe('login abuse protection', () => {
 
     expect(response.status).toBe(200);
     expect(attemptsByClient.size).toBe(2);
+  });
+
+  it('does not treat x-forwarded-host as the request host', async () => {
+    const response = await POST(loginRequest('correct horse battery staple', {
+      origin: 'https://evil.example',
+      'x-forwarded-host': 'evil.example'
+    }));
+
+    expect(response.status).toBe(401);
+    expect(consumeDurableLoginAttempt).not.toHaveBeenCalled();
+    expect(verifyAdminPassword).not.toHaveBeenCalled();
+  });
+
+  it('sets Secure cookies for HTTPS requests outside NODE_ENV=production', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const response = await POST(loginRequest('correct horse battery staple'));
+    const cookies = response.headers.getSetCookie();
+
+    expect(response.status).toBe(200);
+    expect(cookies.every((cookie) => cookie.includes('Secure'))).toBe(true);
+  });
+
+  it('rejects a correct password when TOTP is configured and the code is missing', async () => {
+    vi.stubEnv('ADMIN_TOTP_SECRET_BASE32', 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    const response = await POST(loginRequest('correct horse battery staple'));
+
+    expect(response.status).toBe(401);
+    expect(persistAdminSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects production logins from an IP outside the admin allowlist', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('ARA_TRUST_CLOUDFLARE_CLIENT_IP', 'true');
+    vi.stubEnv('ARA_ADMIN_ALLOWED_IPS', '203.0.113.10');
+    const response = await POST(loginRequest('correct horse battery staple', {
+      'cf-connecting-ip': '198.51.100.20'
+    }));
+
+    expect(response.status).toBe(401);
+    expect(consumeDurableLoginAttempt).not.toHaveBeenCalled();
+    expect(verifyAdminPassword).not.toHaveBeenCalled();
   });
 });

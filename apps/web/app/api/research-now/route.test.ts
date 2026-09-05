@@ -19,7 +19,9 @@ vi.mock('../../../lib/server/research-now', () => ({
 
 vi.mock('../../../lib/server/login-guard', () => ({
   consumeDurableLoginAttempt: async () => undefined,
+  consumeDurableImportAttempt: async () => undefined,
   trustedCloudflareClientIdentityHash: () => undefined,
+  assertAdminClientAllowed: () => undefined,
   withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
 }));
 
