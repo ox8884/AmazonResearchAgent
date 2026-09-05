@@ -311,6 +311,10 @@ test('captures fresh visual-fix states without overwriting final acceptance evid
   await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-missing-evidence-route-mock');
   await page.unroute(`**/api/candidates/${candidateId}/business`);
 
+  await openCandidateWithFreshAssessment(page);
+  await page.getByLabel('사업 단계').selectOption('research');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await expect(page.getByText('견적 초안 준비')).toBeVisible();
   await saveSettings(page, defaultSettings);
   await openCandidateWithFreshAssessment(page);
   await expect(page.getByText('출시 현금이 현재 예산을 초과합니다.')).toBeVisible();
@@ -339,7 +343,7 @@ test('captures fresh visual-fix states without overwriting final acceptance evid
   });
   await page.getByLabel('출시 예산 (USD)').fill('4000');
   await page.getByRole('button', { name: '상업 기준 저장' }).click();
-  const settingsFailure = page.getByRole('alert');
+  const settingsFailure = page.locator('.notice--error[role="alert"]');
   await expect(settingsFailure).toHaveText('출시 예산·수익성 기준을 저장하지 못했습니다. 기본값으로 대체하지 않습니다.');
   await expect(settingsFailure).toHaveClass(/notice--error/);
   await captureAtViewports(page, visualFixEvidenceRoot, 'settings-save-failure-route-mock');
