@@ -7,7 +7,9 @@ const beforeEvidenceRoot = path.resolve(
   '../../.superpowers/sdd/2026-09-04-budget-first-research/review-logs/evidence/2026-09-05-budget-first-workflow'
 );
 const finalEvidenceRoot = path.resolve('../../review-logs/evidence/2026-09-05-budget-first-workflow');
-const visualFixEvidenceRoot = path.join(finalEvidenceRoot, 'visual-fix-round-1');
+const visualFixCapturePhase = process.env['BUSINESS_CAPTURE_PHASE'];
+const isVisualFixCapturePhase = visualFixCapturePhase === 'visual-fix-round-1' || visualFixCapturePhase === 'visual-fix-round-2';
+const visualFixEvidenceRoot = path.join(finalEvidenceRoot, isVisualFixCapturePhase ? visualFixCapturePhase : 'visual-fix-round-1');
 const settingLabels = {
   launchBudgetUsd: '출시 예산 (USD)',
   minimumPreAdMarginPct: '광고 전 최소 마진 (%)',
@@ -271,7 +273,7 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
 });
 
 test('captures fresh visual-fix states without overwriting final acceptance evidence', async ({ page }) => {
-  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] !== 'visual-fix-round-1', 'Visual-fix capture is explicit.');
+  test.skip(!isVisualFixCapturePhase, 'Visual-fix capture is explicit.');
   await loginAsAdmin(page);
 
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
@@ -333,6 +335,19 @@ test('captures fresh visual-fix states without overwriting final acceptance evid
   await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-get-only-draft-refresh-db');
 
   await saveSettings(page, defaultSettings);
+  await page.setViewportSize({ width: 375, height: 1000 });
+  const settingsPurpose = page.locator('.page-heading p');
+  await expect(settingsPurpose).toContainText('후보별 변경은 허용하지 않습니다.');
+  await expect.poll(() => settingsPurpose.evaluate((element) => {
+    const copy = '후보별 변경은 허용하지 않습니다.';
+    const text = element.firstChild;
+    const start = text?.textContent?.indexOf(copy) ?? -1;
+    if (text === null || start < 0) return false;
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, start + copy.length);
+    return range.getClientRects().length === 1;
+  })).toBe(true);
   await captureAtViewports(page, visualFixEvidenceRoot, 'settings-saved-db');
   await page.route('**/api/research-settings', async (route) => {
     if (route.request().method() === 'POST') {
