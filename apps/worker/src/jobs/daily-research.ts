@@ -19,8 +19,10 @@ import {
   type Locale,
   type LogicalRunDate,
   type ResearchSettings,
-  type ScheduledMarketProbePayload
+  type ScheduledMarketProbePayload,
+  type JungleScoutEndpoint
 } from '@ara/shared';
+import { DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
 import {
   planDailyResearch,
   ResearchPlanBucket,
@@ -47,6 +49,22 @@ type DailyResearchQueryError = {
   readonly code?: string;
   readonly message: string;
 };
+
+type EndpointEvidenceRow = {
+  readonly candidate_id: string;
+  readonly created_at: string;
+  readonly id: string;
+  readonly kind: string;
+};
+
+const endpointResultEvidenceKind = {
+  keywords_by_keyword: 'keyword_metrics',
+  historical_search_volume: 'historical_search_volume',
+  sales_estimates: 'sales_estimates',
+  share_of_voice: 'share_of_voice'
+} as const satisfies Partial<Record<JungleScoutEndpoint, string>>;
+
+const endpointResultEvidenceKinds = Object.values(endpointResultEvidenceKind);
 
 export interface DailyResearchRunRecord {
   readonly id: string;
@@ -356,6 +374,96 @@ function isFresh(
   );
 }
 
+function freshnessHoursForBucket(
+  settings: ResearchSettings,
+  bucket: ResearchPlanBucket
+): number {
+  return bucket === ResearchPlanBucket.new
+    ? settings.newFreshnessHours
+    : bucket === ResearchPlanBucket.watch
+      ? settings.watchFreshnessHours
+      : settings.strongFreshnessHours;
+}
+
+function isFreshForDuration(
+  capturedAt: string | undefined,
+  durationMs: number,
+  nowMilliseconds: number
+): boolean {
+  if (!capturedAt) {
+    return false;
+  }
+  const capturedMilliseconds = Date.parse(capturedAt);
+  return (
+    !Number.isNaN(capturedMilliseconds) &&
+    capturedMilliseconds <= nowMilliseconds &&
+    nowMilliseconds - capturedMilliseconds < durationMs
+  );
+}
+
+function latestByCandidateAndKind(
+  rows: readonly EndpointEvidenceRow[]
+): Map<string, Map<string, EndpointEvidenceRow>> {
+  const latest = new Map<string, Map<string, EndpointEvidenceRow>>();
+  for (const row of rows) {
+    const byKind = latest.get(row.candidate_id) ?? new Map<string, EndpointEvidenceRow>();
+    const previous = byKind.get(row.kind);
+    if (
+      !previous ||
+      row.created_at > previous.created_at ||
+      (row.created_at === previous.created_at && row.id > previous.id)
+    ) {
+      byKind.set(row.kind, row);
+    }
+    latest.set(row.candidate_id, byKind);
+  }
+  return latest;
+}
+
+function admittedRequestedEndpoints(
+  businessContext: Awaited<ReturnType<typeof loadResearchBusinessAdmissionContext>>
+): JungleScoutEndpoint[] {
+  const evidence = businessContext.evidence;
+  if (evidence === null) {
+    return [];
+  }
+  return evidence.requestedApiPurposes.filter((requestedEndpoint) =>
+    assessResearchApiAdmission({
+      assessment: businessContext.assessment,
+      evidence,
+      requestedEndpoint,
+      explicitInitialCheck: isExplicitInitialCheck(evidence, requestedEndpoint)
+    }).allowed
+  );
+}
+
+function missingAdmittedEndpoints(input: {
+  readonly admittedEndpoints: readonly JungleScoutEndpoint[];
+  readonly endpointEvidence: ReadonlyMap<string, EndpointEvidenceRow> | undefined;
+  readonly productSnapshotAt: string | undefined;
+  readonly productFreshnessHours: number;
+  readonly nowMilliseconds: number;
+}): JungleScoutEndpoint[] {
+  return input.admittedEndpoints.filter((endpoint) => {
+    if (endpoint === 'product_database') {
+      return !isFresh(
+        input.productSnapshotAt,
+        input.productFreshnessHours,
+        input.nowMilliseconds
+      );
+    }
+    const evidenceKind = endpointResultEvidenceKind[endpoint];
+    const observedAt = evidenceKind
+      ? input.endpointEvidence?.get(evidenceKind)?.created_at
+      : undefined;
+    return !isFreshForDuration(
+      observedAt,
+      DEFAULT_CACHE_TTL_MS[endpoint],
+      input.nowMilliseconds
+    );
+  });
+}
+
 export function snapshotCacheObservationAt(
   metrics: unknown,
   nowMilliseconds: number
@@ -393,22 +501,13 @@ async function selectResearchPlan(
   );
 
   const actionableCandidates: Array<(typeof candidates)[number]> = [];
+  const admittedEndpointsByCandidate = new Map<string, JungleScoutEndpoint[]>();
   for (const candidate of candidates) {
     const businessContext = await loadResearchBusinessAdmissionContext(client, candidate.id, now);
-    const requestedEndpoints = businessContext.evidence?.requestedApiPurposes ?? [];
-    const hasActionableEndpoint = requestedEndpoints.some((requestedEndpoint) =>
-      assessResearchApiAdmission({
-        assessment: businessContext.assessment,
-        evidence: businessContext.evidence,
-        requestedEndpoint,
-        explicitInitialCheck: isExplicitInitialCheck(
-          businessContext.evidence,
-          requestedEndpoint
-        )
-      }).allowed
-    );
-    if (hasActionableEndpoint) {
+    const admittedEndpoints = admittedRequestedEndpoints(businessContext);
+    if (admittedEndpoints.length > 0) {
       actionableCandidates.push(candidate);
+      admittedEndpointsByCandidate.set(candidate.id, admittedEndpoints);
     }
   }
 
@@ -428,6 +527,22 @@ async function selectResearchPlan(
             .range(from, to)
         );
   const latestEvidence = latestByCandidate(evidenceRows);
+
+  const endpointEvidenceRows: EndpointEvidenceRow[] =
+    candidateIds.length === 0
+      ? []
+      : await collectDailyResearchPages((from, to) =>
+          client
+            .from('candidate_evidence')
+            .select('id,candidate_id,created_at,kind')
+            .in('candidate_id', candidateIds)
+            .in('kind', endpointResultEvidenceKinds)
+            .order('candidate_id', { ascending: true })
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to)
+        );
+  const latestEndpointEvidence = latestByCandidateAndKind(endpointEvidenceRows);
 
   const snapshotRows =
     candidateIds.length === 0
@@ -475,14 +590,16 @@ async function selectResearchPlan(
       : candidate.state === 'Watch'
         ? ResearchPlanBucket.watch
         : ResearchPlanBucket.new;
-    const freshnessHours =
-      bucket === ResearchPlanBucket.new
-        ? settings.newFreshnessHours
-        : bucket === ResearchPlanBucket.watch
-          ? settings.watchFreshnessHours
-          : settings.strongFreshnessHours;
+    const freshnessHours = freshnessHoursForBucket(settings, bucket);
     const snapshot = latestSnapshots.get(candidate.id);
-    const capturedAt = snapshot?.cacheCapturedAt;
+    const missingEndpoints = missingAdmittedEndpoints({
+      admittedEndpoints: admittedEndpointsByCandidate.get(candidate.id) ?? [],
+      endpointEvidence: latestEndpointEvidence.get(candidate.id),
+      productSnapshotAt: snapshot?.cacheCapturedAt,
+      productFreshnessHours: freshnessHours,
+      nowMilliseconds
+    });
+    const capturedAt = missingEndpoints.length > 0 ? undefined : snapshot?.cacheCapturedAt;
     return {
       id: candidate.id,
       bucket,
@@ -492,7 +609,7 @@ async function selectResearchPlan(
         freshnessHours,
         nowMilliseconds
       ),
-      isFresh: isFresh(capturedAt, freshnessHours, nowMilliseconds)
+      isFresh: missingEndpoints.length === 0
     };
   });
 
@@ -624,32 +741,77 @@ function childPayload(
   });
 }
 
+async function loadMissingAdmittedEndpoints(
+  client: QueueDatabaseClient,
+  candidateId: string,
+  admittedEndpoints: readonly JungleScoutEndpoint[],
+  bucket: ResearchPlanBucket,
+  now: Date
+): Promise<JungleScoutEndpoint[]> {
+  const [settings, endpointEvidenceResult, snapshotResult] = await Promise.all([
+    readSettings(client),
+    client
+      .from('candidate_evidence')
+      .select('id,candidate_id,created_at,kind')
+      .eq('candidate_id', candidateId)
+      .in('kind', endpointResultEvidenceKinds)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false }),
+    client
+      .from('market_snapshots')
+      .select('id,captured_at,metrics')
+      .eq('candidate_id', candidateId)
+      .order('captured_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+  ]);
+  if (endpointEvidenceResult.error) {
+    throw new DailyResearchError(
+      `Could not read endpoint evidence: ${errorMessage(endpointEvidenceResult.error)}`
+    );
+  }
+  if (snapshotResult.error) {
+    throw new DailyResearchError(
+      `Could not read Product Database snapshot: ${errorMessage(snapshotResult.error)}`
+    );
+  }
+  const endpointEvidence = latestByCandidateAndKind(
+    endpointEvidenceResult.data ?? []
+  ).get(candidateId);
+  return missingAdmittedEndpoints({
+    admittedEndpoints,
+    endpointEvidence,
+    productSnapshotAt: snapshotCacheObservationAt(snapshotResult.data?.metrics, now.getTime()),
+    productFreshnessHours: freshnessHoursForBucket(settings, bucket),
+    nowMilliseconds: now.getTime()
+  });
+}
+
 async function enqueueDecisionAwareChild(
   client: QueueDatabaseClient,
   queue: DailyResearchQueue,
   item: ResearchPlanItem,
   locale: DailyResearchJobPayload['locale'],
   researchRunId: string,
-  mode: string | undefined
+  mode: string | undefined,
+  now: Date
 ): Promise<void> {
   const businessContext = await loadResearchBusinessAdmissionContext(client, item.id);
-  const admits = (
-    endpoint:
-      | 'product_database'
-      | 'keywords_by_keyword'
-      | 'historical_search_volume'
-      | 'sales_estimates'
-      | 'share_of_voice'
-  ) =>
-    assessResearchApiAdmission({
-      assessment: businessContext.assessment,
-      evidence: businessContext.evidence,
-      requestedEndpoint: endpoint,
-      explicitInitialCheck: isExplicitInitialCheck(businessContext.evidence, endpoint)
-    }).allowed;
+  const admittedEndpoints = admittedRequestedEndpoints(businessContext);
+  if (admittedEndpoints.length === 0) {
+    return;
+  }
+  const missingEndpoints = await loadMissingAdmittedEndpoints(
+    client,
+    item.id,
+    admittedEndpoints,
+    item.bucket,
+    now
+  );
 
   const idempotencyPrefix = `daily-research:${researchRunId}:${item.bucket}:${item.id}`;
-  if (admits('product_database')) {
+  if (missingEndpoints.includes('product_database')) {
     await queue.enqueueJob({
       type: 'MARKET_PROBE',
       payload: childPayload(item, locale, researchRunId, mode),
@@ -662,7 +824,7 @@ async function enqueueDecisionAwareChild(
   if (suffix === null) {
     return;
   }
-  if (admits('keywords_by_keyword')) {
+  if (missingEndpoints.includes('keywords_by_keyword')) {
     await queue.enqueueJob({
       type: 'DEEP_VALIDATION',
       payload: DeepValidationJobPayloadSchema.parse({ candidateId: item.id, locale }),
@@ -670,9 +832,9 @@ async function enqueueDecisionAwareChild(
     });
   }
   if (
-    admits('historical_search_volume') ||
-    admits('sales_estimates') ||
-    admits('share_of_voice')
+    missingEndpoints.includes('historical_search_volume') ||
+    missingEndpoints.includes('sales_estimates') ||
+    missingEndpoints.includes('share_of_voice')
   ) {
     await queue.enqueueJob({
       type: 'ENRICH_STRONG_POTENTIAL',
@@ -828,7 +990,8 @@ export async function runDailyResearch(
         item,
         payload.locale,
         run.id,
-        run.mode
+        run.mode,
+        now
       );
     } else {
       await dependencies.queue.enqueueJob({

@@ -468,6 +468,93 @@ integration('daily research orchestration', () => {
     }
   });
 
+  it('selects a missing requested keyword despite fresh Product Database evidence and skips an already-fresh keyword', async () => {
+    const date = `${fixtureYear}-01-06`;
+    const missingImportRunId = randomUUID();
+    const freshImportRunId = randomUUID();
+    const missingCandidateId = randomUUID();
+    const freshCandidateId = randomUUID();
+    const now = new Date();
+    await cleanupDailyFixtures(client, [date]);
+    await client.from('candidates').update({ state: 'Reject' }).in('id', candidateIds);
+    try {
+      for (const [importRunId, candidateId, keyword] of [
+        [missingImportRunId, missingCandidateId, `${fixturePrefix}-keyword-gap`],
+        [freshImportRunId, freshCandidateId, `${fixturePrefix}-keyword-fresh`]
+      ] as const) {
+        const { error: importError } = await client.from('import_runs').insert({
+          id: importRunId,
+          submission_hash: `${fixturePrefix}-${importRunId}`
+        });
+        if (importError) throw importError;
+        const { error: candidateError } = await client.from('candidates').insert({
+          id: candidateId,
+          import_run_id: importRunId,
+          keyword,
+          normalized_exact_keyword: keyword,
+          state: 'Ready for API Validation',
+          rule_passed: true,
+          preliminary_score: 100
+        });
+        if (candidateError) throw candidateError;
+        await appendResearchBusinessEvidence(client, candidateId, {
+          requestedApiPurposes: ['product_database', 'keywords_by_keyword']
+        });
+      }
+      const { error: snapshotError } = await client.from('market_snapshots').insert([
+        {
+          candidate_id: missingCandidateId,
+          captured_at: now.toISOString(),
+          metrics: { observation: { cacheCapturedAt: now.toISOString() } }
+        },
+        {
+          candidate_id: freshCandidateId,
+          captured_at: now.toISOString(),
+          metrics: { observation: { cacheCapturedAt: now.toISOString() } }
+        }
+      ]);
+      if (snapshotError) throw snapshotError;
+      const { error: keywordEvidenceError } = await client.from('candidate_evidence').insert({
+        candidate_id: freshCandidateId,
+        kind: 'keyword_metrics',
+        payload: { keyword: `${fixturePrefix}-keyword-fresh` },
+        created_at: now.toISOString()
+      });
+      if (keywordEvidenceError) throw keywordEvidenceError;
+
+      const scheduled = await enqueueDailyResearch(client, { logicalRunDate: date });
+      await runDailyResearch(
+        makeOrchestratorJob(randomUUID(), scheduled.researchRunId, date),
+        { client, queue: queueFor(client), now: () => now }
+      );
+      const { data: children, error: childrenError } = await client
+        .from('jobs')
+        .select('type,payload')
+        .like('idempotency_key', `daily-research:${scheduled.researchRunId}:%`);
+      if (childrenError) throw childrenError;
+      expect(children).toHaveLength(1);
+      expect(children?.[0]).toMatchObject({
+        type: 'DEEP_VALIDATION',
+        payload: { candidateId: missingCandidateId, locale: 'ko' }
+      });
+    } finally {
+      await cleanupDailyFixtures(client, [date]);
+      await client
+        .from('candidate_evidence')
+        .delete()
+        .in('candidate_id', [missingCandidateId, freshCandidateId]);
+      await client.from('candidates').delete().in('id', [missingCandidateId, freshCandidateId]);
+      await client.from('import_runs').delete().in('id', [missingImportRunId, freshImportRunId]);
+      const [readyCandidateId, watchCandidateId] = candidateIds;
+      if (readyCandidateId) {
+        await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
+      }
+      if (watchCandidateId) {
+        await client.from('candidates').update({ state: 'Watch' }).eq('id', watchCandidateId);
+      }
+    }
+  });
+
   // Break: fixture cleanup deletes another run’s scheduled lock just because the dates overlap.
   it('does not delete scheduled locks owned by another research run', async () => {
     const foreignDate = `${fixtureYear}-12-31`;
