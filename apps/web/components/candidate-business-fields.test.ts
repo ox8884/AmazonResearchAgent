@@ -112,9 +112,44 @@ describe('candidate business form provenance', () => {
       reference: 'Top Products follow-up',
       url: 'https://market.example/top-products',
       basis: 'observed',
-      recordedAt: new Date('2026-09-04T15:30').toISOString()
+      recordedAt: '2026-09-04T15:30:00.000Z'
     });
     expect(result.evidence.selectedQuote).toEqual(evidence.selectedQuote);
     expect(result.evidence.salePrice).toEqual(evidence.salePrice);
+  });
+
+  it('applies a source-only market edit without replacing a stored nonzero-seconds observation time', () => {
+    const saved = ResearchBusinessEvidenceSchema.parse({
+      ...evidence,
+      marketCheck: {
+        ...evidence.marketCheck,
+        source: { ...evidence.marketCheck.source, recordedAt: '2026-09-03T00:00:17.123Z' }
+      }
+    });
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(saved),
+      marketSourceUrl: 'https://market.example/top-products-revised'
+    }, saved);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.marketCheck.source).toEqual({
+      reference: 'Top Products notes',
+      url: 'https://market.example/top-products-revised',
+      basis: 'observed',
+      recordedAt: '2026-09-03T00:00:17.123Z'
+    });
+  });
+
+  it('treats an explicitly edited market timestamp as UTC', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      marketSourceRecordedAt: '2026-09-04T15:30'
+    }, evidence);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.marketCheck.source).toMatchObject({
+      basis: 'observed',
+      recordedAt: '2026-09-04T15:30:00.000Z'
+    });
   });
 });

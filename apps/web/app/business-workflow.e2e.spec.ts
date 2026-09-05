@@ -105,7 +105,7 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('시장 관측 출처 레퍼런스').fill('QA Top Products observation');
   await page.getByLabel('시장 관측 URL').fill('https://market.example/qa-top-products');
   await page.getByLabel('시장 출처 성격').selectOption('observed');
-  await page.getByLabel('시장 관측 기록 시각 (현지 시간)').fill('2026-09-04T09:30');
+  await page.getByLabel('시장 관측 기록 시각 (UTC)').fill('2026-09-04T09:30');
   await page.getByLabel('비교 근거').fill('QA fixture comparison against the saved Top Products notes.');
 }
 
@@ -307,29 +307,30 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   expect(businessPostCount).toBe(0);
 });
 
-test('persists an observed market source separately through reload and GET-only criteria refresh', async ({ page }) => {
+test('persists a source-only observed market edit through reload and GET-only criteria refresh', async ({ page }) => {
   await loginAsAdmin(page);
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
   await openCandidateWithFreshAssessment(page);
   await saveCommercialEvidence(page);
 
   const initialSave = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'POST');
-  await page.getByLabel('비교 근거').fill('Updated QA Top Products comparison after the original observation.');
+  await page.getByLabel('시장 관측 URL').fill('https://market.example/qa-top-products-revised');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   const saved = await initialSave;
   expect(saved.status()).toBe(200);
   const payload = await saved.json() as { evidence: { marketCheck: { source: { reference: string; url: string | null; basis: string; recordedAt: string } | null } } };
   expect(payload.evidence.marketCheck.source).toMatchObject({
     reference: 'QA Top Products observation',
-    url: 'https://market.example/qa-top-products',
-    basis: 'observed'
+    url: 'https://market.example/qa-top-products-revised',
+    basis: 'observed',
+    recordedAt: '2026-09-04T09:30:00.000Z'
   });
 
   await page.reload();
   await expect(page.getByLabel('시장 관측 출처 레퍼런스')).toHaveValue('QA Top Products observation');
-  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products');
+  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products-revised');
   await expect(page.getByLabel('시장 출처 성격')).toHaveValue('observed');
-  await expect(page.getByLabel('시장 관측 기록 시각 (현지 시간)')).toHaveValue('2026-09-04T09:30');
+  await expect(page.getByLabel('시장 관측 기록 시각 (UTC)')).toHaveValue('2026-09-04T09:30');
 
   let businessPostCount = 0;
   page.on('request', (request) => {
@@ -339,7 +340,7 @@ test('persists an observed market source separately through reload and GET-only 
   await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
   await refresh;
   await expect(page.getByLabel('시장 관측 출처 레퍼런스')).toHaveValue('QA Top Products observation');
-  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products');
+  await expect(page.getByLabel('시장 관측 URL')).toHaveValue('https://market.example/qa-top-products-revised');
   await expect(page.getByLabel('시장 출처 성격')).toHaveValue('observed');
   expect(businessPostCount).toBe(0);
 });

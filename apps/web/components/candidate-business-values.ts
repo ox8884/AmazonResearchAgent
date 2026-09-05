@@ -34,10 +34,21 @@ function asSource(values: BusinessFormValues): ResearchBusinessSource | null {
   return { reference, url: url === '' ? null : url, recordedAt: new Date().toISOString(), basis: values.sourceBasis };
 }
 
-function marketSource(values: BusinessFormValues): ResearchBusinessSource | null {
+function utcRecordedAt(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const milliseconds = Date.parse(`${value}Z`);
+  if (Number.isNaN(milliseconds)) return null;
+  const recordedAt = new Date(milliseconds).toISOString();
+  return recordedAt.slice(0, 16) === value ? recordedAt : null;
+}
+
+function marketSource(values: BusinessFormValues, initial: BusinessFormValues, savedSource: ResearchBusinessSource | null): ResearchBusinessSource | null {
   const reference = values.marketSourceReference.trim();
-  const recordedAt = values.marketSourceRecordedAt.trim();
-  if (reference === '' || recordedAt === '' || Number.isNaN(Date.parse(recordedAt))) return null;
+  const inputRecordedAt = values.marketSourceRecordedAt.trim();
+  const recordedAt = savedSource !== null && values.marketSourceRecordedAt === initial.marketSourceRecordedAt
+    ? savedSource.recordedAt
+    : utcRecordedAt(inputRecordedAt);
+  if (reference === '' || recordedAt === null) return null;
   const url = values.marketSourceUrl.trim();
   return { reference, url: url === '' ? null : url, recordedAt: new Date(recordedAt).toISOString(), basis: values.marketSourceBasis };
 }
@@ -110,13 +121,14 @@ function savedMoney(value: string, initial: string, saved: ResearchBusinessEvide
 export function businessEvidenceFrom(values: BusinessFormValues, saved: ResearchBusinessEvidence | null): { readonly kind: 'valid'; readonly evidence: ResearchBusinessEvidence } | { readonly kind: 'invalid'; readonly message: string } {
   const source = asSource(values);
   const initial = initialBusinessFormValues(saved);
-  const sameMarket = saved !== null && values.marketStatus === initial.marketStatus && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo && values.comparisonRationale === initial.comparisonRationale;
   const savedMarketSource = saved?.marketCheck.source ?? null;
+  const marketSourceUnchanged = saved !== null && sameMarketSource(values, initial);
+  const sameMarket = saved !== null && values.marketStatus === initial.marketStatus && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo && values.comparisonRationale === initial.comparisonRationale && marketSourceUnchanged;
   const resolvedMarketSource = values.marketStatus === 'unknown'
     ? null
-    : saved !== null && sameMarketSource(values, initial)
+    : marketSourceUnchanged
       ? savedMarketSource
-      : marketSource(values);
+      : marketSource(values, initial, savedMarketSource);
   const parsed = ResearchBusinessEvidenceSchema.safeParse({
     kind: 'research_business_v1', specification: { reference: values.specificationReference, description: values.specificationDescription }, marketplace: 'US', disposition: values.disposition,
     brandFit: saved !== null && values.brandFitStatus === initial.brandFitStatus ? saved.brandFit : check(values.brandFitStatus, source), salePrice: savedMoney(values.salePrice, initial.salePrice, saved, 'salePrice', source),
