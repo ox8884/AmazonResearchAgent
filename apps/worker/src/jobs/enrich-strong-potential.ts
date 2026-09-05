@@ -442,22 +442,29 @@ export async function runEnrichStrongPotential(
     note: 'Allowable landed cost is not computed without observed sale price and Amazon fees.'
   });
 
-  const { data: reviewEvidence } = await client
+  const { data: reviewEvidence, error: reviewError } = await client
     .from('candidate_evidence')
     .select('id')
     .eq('candidate_id', candidateId)
     .eq('kind', 'review_text')
     .maybeSingle();
+  if (reviewError) {
+    throw new Error(`Could not load review evidence: ${reviewError.message}`);
+  }
+
   const differentiationMode = reviewEvidence ? 'review_text' : 'missing';
   const marginProvisional = businessContext.assessment.stage !== 'purchase_review';
 
-  const { data: snapshot } = await client
+  const { data: snapshot, error: snapshotError } = await client
     .from('market_snapshots')
     .select('metrics')
     .eq('candidate_id', candidateId)
     .order('captured_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (snapshotError) {
+    throw new Error(`Could not load market snapshot: ${snapshotError.message}`);
+  }
   const metrics = snapshotMetricsForScoring({
     metrics: snapshot?.metrics,
     now: new Date()

@@ -6,6 +6,20 @@ import { JungleScoutClientError } from '@ara/jungle-scout';
 import type { ApiCallPurpose, JungleScoutEndpoint } from '@ara/shared';
 import { nextBudgetResetAt } from './budget-reset';
 
+const CHICAGO_TIMEZONE = 'America/Chicago';
+
+export function chicagoBusinessDate(now = new Date()): string {
+  if (Number.isNaN(now.getTime())) {
+    throw new RangeError('Cannot derive a business date from an invalid Date.');
+  }
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CHICAGO_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+}
+
 export type BudgetedCallOutcome =
   | { readonly kind: 'blocked_policy' }
   | { readonly kind: 'deferred_budget'; readonly availableAt: string }
@@ -64,7 +78,7 @@ async function persistUsage(input: {
   readonly success: boolean;
 }): Promise<void> {
   const retryCount = Math.max(0, input.callCount - 1);
-  const budgetDate = new Date().toISOString().slice(0, 10);
+  const budgetDate = chicagoBusinessDate();
   if (input.budget.complete) {
     const { data, error } = await input.client.rpc('record_api_usage_for_claim', {
       request_cache_key: input.cacheKey,
@@ -132,18 +146,24 @@ export async function executeBudgetedApiCall(input: {
         availableAt: new Date(Date.now() + 15_000).toISOString()
       };
     case 'cache_hit': {
-      const { data: cached } = await input.client
+      const { data: cached, error } = await input.client
         .from('api_cache')
         .select('response,captured_at')
         .eq('cache_key', input.cacheKey)
         .maybeSingle();
+      if (error) {
+        throw new Error(`Could not read API cache: ${error.message}`);
+      }
+      if (!cached) {
+        throw new Error(`API cache entry is missing for ${input.cacheKey}.`);
+      }
       return {
         kind: 'completed',
         httpAttempts: 0,
         status: 200,
         fromCache: true,
-        payload: cached?.response ?? null,
-        cacheCapturedAt: cached?.captured_at ?? null
+        payload: cached.response,
+        cacheCapturedAt: cached.captured_at ?? null
       };
     }
     case 'allowed': {

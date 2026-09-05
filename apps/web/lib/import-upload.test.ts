@@ -64,4 +64,17 @@ describe('prepareUploadFiles', () => {
       second.files.map((file) => file.contentSha256)
     );
   });
+
+  it('hashes the uploaded bytes instead of a lossy decoded representation', async () => {
+    const first = await prepareUploadFiles([
+      new File([new Uint8Array([0xc3, 0x28])], 'first.csv', { type: 'text/csv' })
+    ]);
+    const second = await prepareUploadFiles([
+      new File([new Uint8Array([0xef, 0xbf, 0xbd, 0x28])], 'second.csv', {
+        type: 'text/csv'
+      })
+    ]);
+
+    expect(first.files[0]?.contentSha256).not.toBe(second.files[0]?.contentSha256);
+  });
 });

@@ -25,7 +25,7 @@ import {
   type MarketMetrics,
   type ProductFamily
 } from '@ara/research-engine';
-import { executeBudgetedApiCall } from './budgeted-api-call';
+import { chicagoBusinessDate, executeBudgetedApiCall } from './budgeted-api-call';
 import { nextBudgetResetAt } from './budget-reset';
 import {
   assessResearchApiAdmission,
@@ -263,7 +263,8 @@ async function persistDecision(
   candidateId: string,
   fromState: string,
   toState: string,
-  reasons: readonly { code: string; detail: string }[]
+  reasons: readonly { code: string; detail: string }[],
+  locale: Locale
 ): Promise<void> {
   const { error: candidateError } = await client
     .from('candidates')
@@ -287,7 +288,7 @@ async function persistDecision(
     candidateId,
     fromState,
     toState,
-    locale: 'ko'
+    locale
   });
 }
 async function scheduleInFlightResume(input: {
@@ -299,11 +300,14 @@ async function scheduleInFlightResume(input: {
   readonly cacheKey: string;
   readonly enqueueResume?: MarketProbeDependencies['enqueueResume'];
 }): Promise<void> {
-  const { data } = await input.client
+  const { data, error } = await input.client
     .from('api_call_claims')
     .select('claimed_until')
     .eq('cache_key', input.cacheKey)
     .maybeSingle();
+  if (error) {
+    throw new Error(`Could not read API claim: ${error.message}`);
+  }
   const claimedUntilMs = data?.claimed_until ? Date.parse(data.claimed_until) : Number.NaN;
   const reclaimMs = Number.isFinite(claimedUntilMs)
     ? claimedUntilMs + IN_FLIGHT_RECLAIM_MARGIN_MS
@@ -319,11 +323,14 @@ async function scheduleInFlightResume(input: {
     reclaimBucket,
     reclaim: false
   });
-  const { data: existing } = await input.client
+  const { data: existing, error: existingError } = await input.client
     .from('jobs')
     .select('status')
     .eq('idempotency_key', baseKey)
     .maybeSingle();
+  if (existingError) {
+    throw new Error(`Could not read resume job: ${existingError.message}`);
+  }
   const idempotencyKey = inFlightResumeIdempotencyKey({
     candidateId: input.candidateId,
     purpose: input.purpose,
@@ -355,9 +362,14 @@ async function exitUnavailableAuthorization(input: {
   readonly onCheckpoint?: MarketProbeDependencies['onCheckpoint'];
 }): Promise<{ checkpoint: MarketProbeCheckpoint; realCalls: number }> {
   if (input.kind === 'deferred_budget') {
-    await persistDecision(input.client, input.candidateId, input.fromState, 'Waiting for API Budget', [
-      { code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }
-    ]);
+    await persistDecision(
+      input.client,
+      input.candidateId,
+      input.fromState,
+      'Waiting for API Budget',
+      [{ code: 'API_BUDGET_EXHAUSTED', detail: 'Daily Jungle Scout reserve is preserved.' }],
+      input.locale
+    );
     const availableAt = nextBudgetResetAt();
     await input.enqueueResume?.({
       candidateId: input.candidateId,
@@ -411,11 +423,14 @@ export async function runMarketProbe(
   let phrases: string[] = [candidate.keyword];
   let aliases: string[] = [];
   if (candidate.niche_cluster_id) {
-    const { data: cluster } = await dependencies.client
+    const { data: cluster, error: clusterError } = await dependencies.client
       .from('niche_clusters')
       .select('catalog_phrases,canonical_name,aliases')
       .eq('id', candidate.niche_cluster_id)
       .maybeSingle();
+    if (clusterError) {
+      throw new Error(`Could not read niche cluster: ${clusterError.message}`);
+    }
     const catalog = cluster?.catalog_phrases;
     if (Array.isArray(catalog)) {
       phrases = catalog.filter((item): item is string => typeof item === 'string');
@@ -461,14 +476,18 @@ export async function runMarketProbe(
   let page: ProductDatabasePage | undefined;
   let realCalls = 0;
   if (canReuseFetchedPage) {
-    const { data: cached } = await dependencies.client
+    const { data: cached, error: cacheError } = await dependencies.client
       .from('api_cache')
       .select('response')
       .eq('cache_key', evidenceCacheKey)
       .maybeSingle();
-    if (cached?.response) {
-      page = ProductDatabasePageSchema.parse(cached.response);
+    if (cacheError) {
+      throw new Error(`Could not read resumed Product Database cache: ${cacheError.message}`);
     }
+    if (!cached) {
+      throw new Error('Resumed Product Database cache entry is missing.');
+    }
+    page = ProductDatabasePageSchema.parse(cached.response);
   }
 
   if (!page) {
@@ -498,12 +517,18 @@ export async function runMarketProbe(
 
       case 'cache_hit': {
         await dependencies.onCheckpoint?.({ phase: 'budget_authorized', cacheKey });
-        const { data: cached } = await dependencies.client
+        const { data: cached, error: cacheError } = await dependencies.client
           .from('api_cache')
           .select('response')
           .eq('cache_key', cacheKey)
           .maybeSingle();
-        page = ProductDatabasePageSchema.parse(cached?.response ?? { data: [] });
+        if (cacheError) {
+          throw new Error(`Could not read Product Database cache: ${cacheError.message}`);
+        }
+        if (!cached) {
+          throw new Error('Product Database cache entry is missing.');
+        }
+        page = ProductDatabasePageSchema.parse(cached.response);
         break;
       }
       case 'allowed': {
@@ -555,7 +580,7 @@ export async function runMarketProbe(
             success: true,
             candidate_id: candidate.id,
             niche_cluster_id: candidate.niche_cluster_id,
-            budget_date: new Date().toISOString().slice(0, 10)
+            budget_date: chicagoBusinessDate()
           });
           if (usageError) {
             throw new Error(`Could not persist API usage: ${usageError.message}`);
@@ -574,7 +599,7 @@ export async function runMarketProbe(
               success: false,
               candidate_id: candidate.id,
               niche_cluster_id: candidate.niche_cluster_id,
-              budget_date: new Date().toISOString().slice(0, 10)
+              budget_date: chicagoBusinessDate()
             });
             if (usageError) {
               throw new Error(`Could not persist API usage: ${usageError.message}`, {
@@ -790,7 +815,8 @@ export async function runMarketProbe(
       candidate.id,
       candidate.state,
       'Needs Review',
-      [{ code: `MARKET_EVIDENCE_${evidence.kind.toUpperCase()}`, detail: evidence.kind }]
+      [{ code: `MARKET_EVIDENCE_${evidence.kind.toUpperCase()}`, detail: evidence.kind }],
+      input.locale
     );
     await dependencies.onCheckpoint?.({ phase: 'metrics_scored', cacheKey: evidenceCacheKey });
     const checkpoint = { phase: 'completed' as const, cacheKey: evidenceCacheKey };
@@ -833,7 +859,8 @@ export async function runMarketProbe(
     candidate.id,
     candidate.state,
     score.verdict,
-    score.reasons.map((detail) => ({ code: 'MARKET_PROBE', detail }))
+    score.reasons.map((detail) => ({ code: 'MARKET_PROBE', detail })),
+    input.locale
   );
   await dependencies.onCheckpoint?.({ phase: 'metrics_scored', cacheKey: evidenceCacheKey });
   const checkpoint = { phase: 'completed' as const, cacheKey: evidenceCacheKey };

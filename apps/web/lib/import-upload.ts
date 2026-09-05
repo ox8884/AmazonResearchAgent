@@ -74,13 +74,12 @@ export async function prepareUploadFiles(files: File[]): Promise<PreparedUpload>
   for (const file of files) {
     validateFile(file);
     const content = await file.arrayBuffer();
-    const text = new TextDecoder().decode(content);
     prepared.push({
-        sourceFileName: file.name.normalize('NFC'),
-        contentSha256: sha256(text),
-        content,
-        mimeType: file.type || 'text/csv'
-      });
+      sourceFileName: file.name.normalize('NFC'),
+      contentSha256: sha256(content),
+      content,
+      mimeType: file.type || 'text/csv'
+    });
   }
 
   prepared.sort(

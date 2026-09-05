@@ -116,8 +116,10 @@ export function resolveJobHandler(
   return handler;
 }
 
-function contentSha256(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+function contentSha256(content: string | ArrayBuffer): string {
+  return createHash('sha256')
+    .update(typeof content === 'string' ? content : new Uint8Array(content))
+    .digest('hex');
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -143,8 +145,9 @@ async function downloadImportFiles(
         `Failed to download ${file.sourceFileName}: ${error?.message ?? 'empty Storage response'}`
       );
     }
-    const content = await data.text();
-    if (contentSha256(content) !== file.contentSha256) {
+    const bytes = await data.arrayBuffer();
+    const content = new TextDecoder().decode(bytes);
+    if (contentSha256(bytes) !== file.contentSha256) {
       throw new Error(`Content hash mismatch for ${file.sourceFileName}`);
     }
     sources.push({ sourceFileName: file.sourceFileName, content });
