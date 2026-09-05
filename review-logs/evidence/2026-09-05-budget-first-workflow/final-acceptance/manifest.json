@@ -1,0 +1,51 @@
+{
+  "capture": {
+    "date": "2026-09-05",
+    "fixture": "http://127.0.0.1:1312",
+    "buildCommit": "246bbebc8cba3f678f1ccd8a8766a3d2a99ea84a",
+    "fixtureRun": "ara_it_67804_65f0724a",
+    "database": "ara_it_67804_65f0724a_80d4c2946243",
+    "candidateId": "00000000-0000-4000-8000-000000000301",
+    "cspBypass": false,
+    "viewportWidths": [375, 768, 1280],
+    "overflowAssertion": "document.documentElement.scrollWidth <= window.innerWidth passed before every screenshot"
+  },
+  "stateOrigins": {
+    "candidate-saved-db": "actual isolated fixture DB after saved estimate/research evidence",
+    "candidate-waiting-quote-db": "actual isolated fixture DB after persisted awaiting_quote evidence and included coverage",
+    "candidate-overbudget-db": "actual isolated fixture DB after saved default budget",
+    "candidate-get-only-draft-refresh-db": "actual isolated fixture DB; request listener asserted zero business POST while unsaved draft remained",
+    "settings-saved-db": "actual isolated fixture DB",
+    "imports-handoff-db": "actual isolated fixture DB",
+    "candidate-missing-evidence-route-mock": "browser route mock of GET /api/candidates/:id/business only",
+    "settings-save-failure-route-mock": "browser route mock of POST /api/research-settings only"
+  },
+  "images": [
+    ["candidate-get-only-draft-refresh-db-1280.png",1280,5235,"e95ed9aabb30635c04a5de550f52b7c967205bd96abac2bb1bb95104fa638518"],
+    ["candidate-get-only-draft-refresh-db-375.png",375,7830,"eee40a9a884f8d9ee67073649a753f875797476ab1d4b59dad859926e64692ed"],
+    ["candidate-get-only-draft-refresh-db-768.png",768,7052,"aaf7950a419d5785711cd31a150989d09fc0261146e5cab1b1b82c8a5357b725"],
+    ["candidate-missing-evidence-route-mock-1280.png",1280,5165,"6b0072da3cfda100e1d5ceb26fbd887d2d8052af08b651ad99301ca4223911b5"],
+    ["candidate-missing-evidence-route-mock-375.png",375,7759,"3f7a3abcb62e0171f367dc680bcb20eb7dd7e7355d98652a5efe62eb15cb60ef"],
+    ["candidate-missing-evidence-route-mock-768.png",768,6982,"46a854d32da26a3cfcede90a6c288d994291901da133a9dd9a74e69485f0dea8"],
+    ["candidate-overbudget-db-1280.png",1280,5165,"457a65e4934fd05dee3870cc6ddf35c60b32c409852b207c0d3356003e099d49"],
+    ["candidate-overbudget-db-375.png",375,7737,"55a66622eb9511c20066edb9b1f4d18019af622c86f017ec9c0412cd2670193c"],
+    ["candidate-overbudget-db-768.png",768,6982,"d1325a9fe407900ef6c909247dc5dd3242a0ce89daa9e71c616a8d950d8f4d8e"],
+    ["candidate-saved-db-1280.png",1280,5199,"4509537dd896be0a859622827170bd603ce786daf21ea0e6e6779da1b667a5f6"],
+    ["candidate-saved-db-375.png",375,7771,"124e9c5201cb7ff97ed54500ec815341e9254f9eba6db36b2b0d9f4fa8c15b10"],
+    ["candidate-saved-db-768.png",768,7016,"494f735938fdfc166a2a41781ac655357bf1e960c2a9c7dd620ac036709574a9"],
+    ["candidate-waiting-quote-db-1280.png",1280,5199,"57af6eb84dbf234ce6810983e8deff29914ede89a18364866c21022b705d5521"],
+    ["candidate-waiting-quote-db-375.png",375,7771,"a3de8f8b933a9fb0cfa7bd93337d7803eb5e4bff9202ba64816a755abc4d540c"],
+    ["candidate-waiting-quote-db-768.png",768,7016,"d1847ae44ad4356a3140869a6a6c62035882634c6fb32d7b7263f19b3e00ff49"],
+    ["imports-handoff-db-1280.png",1280,1000,"3c812f1d8411988d58cebfa4357c94713a0e162459b0fc9a435749235266fef4"],
+    ["imports-handoff-db-375.png",375,1173,"cea83313bd151c345a57e114c2b39416e67b8a2ec350e7a33197f65aa3be4b0d"],
+    ["imports-handoff-db-768.png",768,1000,"330ec511e6326e4cfe1896ffc371a4f32fc64d38f54e276e9b7fa3a634e423cc"],
+    ["settings-save-failure-route-mock-1280.png",1280,1505,"668ae8944c895e1db0cc8a9a103db81e62e902b22c52d079ca657f223c592440"],
+    ["settings-save-failure-route-mock-375.png",375,2152,"77709b858a714d1bb8dd7cec52197f44a0845288397f0c25bd664dc1fb014ab6"],
+    ["settings-save-failure-route-mock-768.png",768,1887,"f7e2d819c42b5b0977e15ffc209fba81d67c59758769dcc3ddfce82630e3349b"],
+    ["settings-saved-db-1280.png",1280,1505,"100a608822de928763c33d555b06519f09bec5dcf51ca55d09d54770dffe18e9"],
+    ["settings-saved-db-375.png",375,2129,"c8fc84799d4daf9b1f9c3f56dbe198151065079964cef4605077a01b0fe18939"],
+    ["settings-saved-db-768.png",768,1887,"f1cc62b397d506155a28a5fd68a44483d130758d807630674cd692718b8c372d"]
+  ],
+  "pngSignature": "89504E470D0A1A0A",
+  "imageTuple": "[file, width, height, sha256]"
+}

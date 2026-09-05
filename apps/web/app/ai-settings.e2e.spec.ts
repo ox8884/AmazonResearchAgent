@@ -391,9 +391,11 @@ test('subscription products expose only safe status, Test, and Disable', async (
   await expect(page.getByLabel('Model ID')).toHaveCount(0);
   await expect(page.getByLabel('Provider enabled')).toHaveCount(0);
   await expect(page.getByText('subscription_command')).toHaveCount(0);
-  await expect(page.getByText('niche_normalization')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'OpenAI Codex Subscription 수정' }).getByText('니치 정규화', { exact: true })
+  ).toBeVisible();
   await expect(page.getByLabel('Provider priority')).toHaveValue('20');
-  await expect(page.getByText('설정 필요')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'OpenAI Codex Subscription 수정' }).getByText('설정 필요', { exact: true })).toBeVisible();
   await expect(page.getByText('운영 서버에서 승인된 절차로 인증 또는 재인증하세요.')).toBeVisible();
 
   await page.getByRole('button', { name: '연결 테스트' }).click();
@@ -402,10 +404,10 @@ test('subscription products expose only safe status, Test, and Disable', async (
   await expect.poll(() => providerRequests).toEqual([
     { action: 'disable', providerId: provider.id }
   ]);
-  await expect(page.getByText('비활성화됨')).toBeVisible();
-  await expect(page.getByText('설정 필요')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'OpenAI Codex Subscription 수정' }).getByText('비활성화됨', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'OpenAI Codex Subscription 수정' }).getByText('설정 필요', { exact: true })).toHaveCount(0);
 
   await page.goto('/en/settings/ai');
-  await expect(page.getByText('Disabled')).toBeVisible();
-  await expect(page.getByText('Setup Required')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'OpenAI Codex Subscription Edit' }).getByText('Disabled', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'OpenAI Codex Subscription Edit' }).getByText('Setup Required', { exact: true })).toHaveCount(0);
 });

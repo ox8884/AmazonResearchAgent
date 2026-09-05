@@ -24,17 +24,17 @@ the child processes without printing values, and serves the web app at
 ## Production queue worker
 
 The Cloudflare web application writes jobs to the linked remote Supabase
-project. After registering providers in the deployed AI Settings page, run the
-remote queue consumer on the Windows machine:
+project. The production queue consumer runs on the approved Oracle systemd
+host only. Windows launchers are local-development tooling and must not be
+used as a remote queue consumer.
 
-```powershell
-pnpm worker:production:check
-pnpm worker:production
+```sh
+# From the approved Oracle host session
+sudo systemctl status amazon-research-worker
 ```
 
-The first command verifies the remote canonical writer capability without
-claiming a job. The second starts the long-running worker. You can also
-double-click `start-amazon-research-production-worker.cmd`.
+Use the Oracle runbook for approved service checks and changes; do not
+double-click `start-amazon-research-production-worker.cmd` for production.
 
 ## Cloudflare web deployment
 
@@ -54,6 +54,11 @@ pnpm deploy:cloudflare
 
 OpenNext's Windows build is not reliable, so the deployment script creates a
 clean temporary build in Ubuntu WSL and uploads from that same environment.
+The exported source must be the reviewed full SHA with Git blob line endings:
+on Windows use `git -c core.autocrlf=false archive <full-reviewed-sha>`.
+The default Windows archive may rewrite policy artifact bytes and is not a
+canonical release export. Record the same full SHA in the Cloudflare release
+annotation and Oracle deployment record.
 It requires `CLOUDFLARE_API_TOKEN` in the launching PowerShell process and an
 Ubuntu WSL distribution with Node.js and pnpm installed.
 

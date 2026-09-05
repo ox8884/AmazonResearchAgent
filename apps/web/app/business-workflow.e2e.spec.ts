@@ -7,6 +7,7 @@ const beforeEvidenceRoot = path.resolve(
   '../../.superpowers/sdd/2026-09-04-budget-first-research/review-logs/evidence/2026-09-05-budget-first-workflow'
 );
 const finalEvidenceRoot = path.resolve('../../review-logs/evidence/2026-09-05-budget-first-workflow');
+const finalAcceptanceEvidenceRoot = path.join(finalEvidenceRoot, 'final-acceptance');
 const settingLabels = {
   launchBudgetUsd: '출시 예산 (USD)',
   minimumPreAdMarginPct: '광고 전 최소 마진 (%)',
@@ -15,8 +16,6 @@ const settingLabels = {
 } as const;
 
 type Settings = { readonly launchBudgetUsd: string; readonly minimumPreAdMarginPct: string; readonly minimumPostAdMarginPct: string; readonly minimumRoiPct: string };
-
-test.use({ bypassCSP: true });
 
 async function captureAtViewports(page: Page, root: string, name: string): Promise<void> {
   for (const width of [375, 768, 1280] as const) {
@@ -76,6 +75,7 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('제품 사양 설명').fill('Countertop bamboo utensil holder with removable drip tray.');
   await page.getByLabel('금액·견적 출처 레퍼런스').fill('QA supplier quote');
   await page.getByLabel('출처 URL').fill('https://supplier.example/qa-bamboo-utensil-holder');
+  await page.getByLabel('출처 성격').selectOption('estimate');
   await page.getByLabel('사업 단계').selectOption('research');
   await page.getByLabel('공급처 이름').fill('QA Supplier');
   await page.getByLabel('판매가 (USD)').fill('30');
@@ -233,5 +233,107 @@ test('captures a draft-preserving criteria refresh', async ({ page }) => {
   await expect(page.getByLabel('제품 사양 설명')).toHaveValue('Unsaved QA description stays in the form.');
   await expect(page.getByRole('status')).toBeVisible();
   await captureAtViewports(page, path.join(finalEvidenceRoot, 'fix-round-1'), 'candidate-draft-refresh');
+  await page.setViewportSize({ width: 1280, height: 1000 });
+});
+
+test('persists a quote wait and landed-cost coverage through reload and criteria refresh', async ({ page }) => {
+  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] === 'before', 'Baseline capture only needs the original page state.');
+  await loginAsAdmin(page);
+  await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
+  await openCandidateWithFreshAssessment(page);
+  await page.getByLabel('출처 성격').selectOption('quote');
+  await page.getByLabel('사업 단계').selectOption('awaiting_quote');
+  await page.getByLabel('제품 비용 포함 범위').selectOption('included');
+  await page.getByLabel('포장 비용 포함 범위').selectOption('included');
+  await page.getByLabel('운임 포함 범위').selectOption('included');
+  await page.getByLabel('관세 포함 범위').selectOption('included');
+  await page.getByLabel('배송 포함 범위').selectOption('included');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await expect(page.getByLabel('현재 상업 판단').getByText('견적 회신 대기', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('사업 단계')).toHaveValue('awaiting_quote');
+  await expect(page.getByLabel('출처 성격')).toHaveValue('quote');
+  await expect(page.getByLabel('운임 포함 범위')).toHaveValue('included');
+  let businessPostCount = 0;
+  page.on('request', (request) => {
+    if (request.url().includes(`/api/candidates/${candidateId}/business`) && request.method() === 'POST') businessPostCount += 1;
+  });
+  await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
+  await expect(page.getByText('현재 판단은 저장된 근거 기준이며, 저장하지 않은 입력값은 그대로 유지됩니다.')).toBeVisible();
+  await expect(page.getByLabel('사업 단계')).toHaveValue('awaiting_quote');
+  await expect(page.getByLabel('배송 포함 범위')).toHaveValue('included');
+  expect(businessPostCount).toBe(0);
+});
+
+test('captures fresh final acceptance states without overwriting prior evidence', async ({ page }) => {
+  test.skip(process.env['BUSINESS_CAPTURE_PHASE'] !== 'final-acceptance', 'Final acceptance capture is explicit.');
+  await loginAsAdmin(page);
+
+  await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
+  await openCandidateWithFreshAssessment(page);
+  await page.getByLabel('출처 성격').selectOption('estimate');
+  await page.getByLabel('사업 단계').selectOption('research');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await expect(page.getByText('견적 초안 준비')).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-saved-db');
+
+  await page.getByLabel('사업 단계').selectOption('awaiting_quote');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await expect(page.getByLabel('현재 상업 판단').getByText('견적 회신 대기', { exact: true })).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-waiting-quote-db');
+
+  await page.route(`**/api/candidates/${candidateId}/business`, async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        evidence: null,
+        assessment: {
+          stage: 'basic_check', gaps: ['business_evidence'],
+          settings: { launchBudgetUsd: 5000, minimumPreAdMarginPct: 35, minimumPostAdMarginPct: 35, minimumRoiPct: 150 },
+          estimatedLaunchCashUsd: null, estimatedUnitContributionUsd: null, estimatedMarginPct: null, purchaseApproved: false
+        }
+      })
+    });
+  });
+  await openCandidateWithFreshAssessment(page);
+  await expect(page.getByText('상업 근거가 아직 기록되지 않았습니다.')).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-missing-evidence-route-mock');
+  await page.unroute(`**/api/candidates/${candidateId}/business`);
+
+  await saveSettings(page, defaultSettings);
+  await openCandidateWithFreshAssessment(page);
+  await expect(page.getByText('출시 현금이 현재 예산을 초과합니다.')).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-overbudget-db');
+
+  let businessPostCount = 0;
+  page.on('request', (request) => {
+    if (request.url().includes(`/api/candidates/${candidateId}/business`) && request.method() === 'POST') businessPostCount += 1;
+  });
+  await page.getByLabel('제품 사양 설명').fill('Final acceptance unsaved draft remains visible.');
+  const refreshPromise = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'GET');
+  await page.getByRole('button', { name: '현재 기준 다시 확인' }).click();
+  await refreshPromise;
+  await expect(page.getByLabel('제품 사양 설명')).toHaveValue('Final acceptance unsaved draft remains visible.');
+  expect(businessPostCount).toBe(0);
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'candidate-get-only-draft-refresh-db');
+
+  await saveSettings(page, defaultSettings);
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'settings-saved-db');
+  await page.route('**/api/research-settings', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'settings_unavailable' }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.getByLabel('출시 예산 (USD)').fill('4000');
+  await page.getByRole('button', { name: '상업 기준 저장' }).click();
+  await expect(page.getByText('출시 예산·수익성 기준을 저장하지 못했습니다. 기본값으로 대체하지 않습니다.')).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'settings-save-failure-route-mock');
+  await page.unroute('**/api/research-settings');
+
+  await openSharedPage(page, '/ko/imports/new');
+  await expect(page.getByText('웹 리서치 인계')).toBeVisible();
+  await captureAtViewports(page, finalAcceptanceEvidenceRoot, 'imports-handoff-db');
   await page.setViewportSize({ width: 1280, height: 1000 });
 });
