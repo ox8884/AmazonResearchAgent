@@ -17,10 +17,12 @@ export function calculateAllowableLandedCost(
 ): AllowableLandedCost {
   const maxLandedCostForPreAd =
     input.salePrice * (1 - input.targetPreAdMarginPct / 100) - input.amazonFees;
-  const adSpend = input.salePrice * (input.expectedAdPct / 100);
   return {
     maxLandedCostForPreAd,
-    maxLandedCostForPostAd: maxLandedCostForPreAd - adSpend,
+    maxLandedCostForPostAd:
+      input.salePrice *
+        (1 - input.targetPostAdMarginPct / 100 - input.expectedAdPct / 100) -
+      input.amazonFees,
     economicsSource: 'estimated_assumption'
   };
 }
