@@ -1,5 +1,6 @@
 import { getCopy } from '@ara/shared';
 import { ButtonLink } from '../../../components/ui';
+import { ResearchBusinessSettingsForm } from '../../../components/research-business-settings-form';
 import { localizedHref, parseLocale } from '../../../lib/locale';
 import { getResearchSettingsView } from '../../../lib/server/dashboard-data';
 import { requireAdminPage } from '../../../lib/server/admin-page-auth';
@@ -24,7 +25,7 @@ export default async function SettingsPage({
       <header className="page-heading page-heading--split">
         <div>
           <h1>{copy.settingsTitle}</h1>
-          <p>{copy.settingsReadOnly}</p>
+          <p>{locale === 'ko' ? '일반 운영 설정은 읽기 전용입니다. 아래 출시 예산·수익성 기준은 관리자만 저장할 수 있으며, 후보가 자체 목표를 덮어쓰지 않습니다.' : 'General operating settings are read-only. Administrators can save the commercial targets below; candidates cannot override them.'}</p>
         </div>
         <ButtonLink href={localizedHref(locale, '/settings/ai')} variant="secondary">
           {copy.navAiSettings}
@@ -58,8 +59,8 @@ export default async function SettingsPage({
             </dd>
             <p>
               {locale === 'ko'
-                ? '이 값은 API 호출 건수의 하루 한도입니다. 총 상품 출시 예산 $3,000과는 별도이며, 앱에 자동 적용되는지는 아직 확인되지 않았습니다.'
-                : 'This is a daily limit for API request count. It is separate from the $3,000 total product-launch budget, and automatic application in the app has not been confirmed.'}
+                ? '이 값은 API 호출 건수의 하루 한도입니다. 아래 출시 예산·수익성 기준과 별도이며, 후보별 요청 의도를 저장해도 즉시 API를 호출하지 않고 다음 수동·예약 리서치에서 조건을 확인합니다.'
+                : 'This is a daily limit for API request count. It is separate from the commercial launch-budget, margin and ROI targets below; saving a candidate request intent does not call an API immediately, and the next manual or scheduled research checks it.'}
             </p>
           </div>
           <div>
@@ -67,6 +68,10 @@ export default async function SettingsPage({
             <dd>{settings?.manualReserveEnabled ? copy.providerActive : copy.providerDisabled}</dd>
           </div>
         </dl>
+      </section>
+      <section className="panel panel--form" aria-labelledby="business-settings-title">
+        <div className="section-heading"><h2 id="business-settings-title">{locale === 'ko' ? '출시 예산·수익성 기준' : 'Commercial research targets'}</h2></div>
+        <ResearchBusinessSettingsForm />
       </section>
     </div>
   );

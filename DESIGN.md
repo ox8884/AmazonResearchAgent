@@ -138,7 +138,7 @@ Every control has an explicit label, help text where needed, visible signal focu
 Three steps only: paper (recessed), panel (white, 1px hairline, **no shadow**), inset (paper-deep). Radius scale is documented, not mixed: panels 12, controls/buttons/inputs 8, chips/badges 6. Grouping is done with scotch rules, column rules, and spacing rather than stacked boxes.
 
 ## 8. Accepted Debt
-- Settings remains read-only because no settings mutation contract is in scope; the UI says so rather than implying editability.
+- Research settings expose the four persisted commercial targets (launch budget, pre-ad margin, post-ad margin and ROI) through the administrator-only settings contract. The UI must show the saved effective values and never substitute client-side defaults when that contract is unavailable.
 - Existing API/server data contracts and provider authorization flows remain unchanged.
 - Evidence payloads render as bounded, non-secret research summaries; raw provider responses and secrets are never rendered. Recognized research fields may be expanded under technical disclosures, never mixed into the missing-evidence section.
 - The showcase page keeps its exact `동작/상태/지표` heading contract for E2E.

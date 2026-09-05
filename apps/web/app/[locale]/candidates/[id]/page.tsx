@@ -1,6 +1,7 @@
 import { getCopy } from '@ara/shared';
 import { CandidateScoreCard } from '../../../../components/candidate-score-card';
 import { CandidateEvidenceDetail } from '../../../../components/candidate-evidence-detail';
+import { CandidateBusinessForm } from '../../../../components/candidate-business-form';
 import { CandidateStateBadge } from '../../../../components/ui';
 import { localizedHref, parseLocale } from '../../../../lib/locale';
 import { getCandidateDetailView } from '../../../../lib/server/dashboard-data';
@@ -31,6 +32,7 @@ export default async function CandidateDetailPage({
         </div>
       </header>
       <CandidateEvidenceDetail view={candidate.evidence} locale={locale} />
+      <CandidateBusinessForm candidateId={id} />
       <section className="evidence-panel" aria-labelledby="score-provenance-title">
         <div className="section-heading"><h2 id="score-provenance-title">{locale === 'ko' ? '점수 기록 구분' : 'Score provenance'}</h2></div>
         <p>{copy.scoreLabel}: {candidate.preliminaryScore ?? (locale === 'ko' ? '미계산' : 'Not calculated')}</p>
