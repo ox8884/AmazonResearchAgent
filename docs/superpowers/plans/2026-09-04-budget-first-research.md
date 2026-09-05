@@ -37,7 +37,7 @@ type ResearchBusinessStage =
   | 'basic_check' | 'market_validation' | 'quote_ready'
   | 'awaiting_quote' | 'awaiting_sample' | 'purchase_review' | 'hold' | 'reject';
 type ResearchBusinessAssessment = {
-  readonly launchBudgetUsd: number;
+  readonly settings: ResearchBusinessSettings;
   readonly stage: ResearchBusinessStage;
   readonly gaps: readonly string[];
   readonly estimatedLaunchCashUsd: number | null;
@@ -47,12 +47,12 @@ type ResearchBusinessAssessment = {
 };
 ```
 
-`ResearchBusinessEvidenceSchema` is a strict version-1 object, kind `research_business_v1`. Its fields cover: specification text; US marketplace; brand fit; explicit disposition (`research`, `awaiting_quote`, `awaiting_sample`, `rejected`); sourced sale price; sourced Amazon unit costs; one selected quantity/quote pairing with MOQ and landed-cost coverage; fixed launch costs, advertising cash, reserve; per-unit advertising/return assumptions; explicit minimum margin/ROI policy; market, sample and safety/IP checks with source references; requested API purposes. Unknown fields remain nullable, never numeric zero defaults. Each source contains URL/reference, recordedAt and basis (estimate/quote/observed). User-entered claims are not silently promoted to independently verified facts.
+`ResearchBusinessEvidenceSchema` is a strict version-1 object, kind `research_business_v1`. Its fields cover: specification text; US marketplace; brand fit; explicit disposition (`research`, `awaiting_quote`, `awaiting_sample`, `rejected`); sourced sale price; sourced Amazon unit costs; one selected quantity/quote pairing with MOQ and landed-cost coverage; fixed launch costs, advertising cash, reserve; per-unit advertising/return assumptions; market, sample and safety/IP checks with source references; requested API purposes. Budget and profitability targets belong exclusively to trusted global settings, not this evidence. Unknown fields remain nullable, never numeric zero defaults. Each source contains URL/reference, recordedAt and basis (estimate/quote/observed). User-entered claims are not silently promoted to independently verified facts.
 
 Schema requires finite nonnegative money, positive integer quantity/MOQ, rates in [0,100], bounded text and valid timestamps. Reject mismatched quantity/MOQ, expired quote for purchase review, and non-USD monetary computation without an explicit converted USD value/reference. Missing quote yields hold/basic investigation, not rejection. Actual purchase remains manual.
 
 ```ts
-assessResearchBusiness(evidence: ResearchBusinessEvidence | null, now: Date, launchBudgetUsd: number): ResearchBusinessAssessment
+assessResearchBusiness(evidence: ResearchBusinessEvidence | null, now: Date, settings: ResearchBusinessSettings): ResearchBusinessAssessment
 selectLatestResearchBusiness(rows: readonly ResearchBusinessEvidenceRow[]): ResearchBusinessEvidence | null
 ```
 
@@ -70,6 +70,20 @@ Latest malformed/incomplete record must not fall back to older qualifying eviden
 - Reviewed user note: `Hermes/노트/Amazon-FBA/니치-선정-조건-TSS.md` (2026-08-21). Profitability reference is margin >=35%, ROI >=150%; ROI is not bounded to 100%. Existing note criteria must be preserved as sourced policy/market-review checks, not invented from niche score. Differences of provider metric definitions remain unknown rather than fabricated.
 - Supplier flow remains discovery/link + exact-spec quote draft + user-approved contact + quote-response evidence. No autonomous message send, order, payment, cookie export or new sourcing service. Reuse verified supplier conversations; no fabricated supplier identity/contact address.
 
+### User clarification — editable profitability settings (2026-09-05, latest authority)
+
+The user explicitly approved configurable profitability criteria, not permanent 35%/150% floors. This section supersedes earlier per-record profitability-policy and budget-only contracts.
+
+- Trusted current settings contain exactly `launchBudgetUsd`, `minimumPreAdMarginPct`, `minimumPostAdMarginPct`, `minimumRoiPct`. Export strict `ResearchBusinessSettingsSchema`, its inferred `ResearchBusinessSettings` type, and `DEFAULT_RESEARCH_BUSINESS_SETTINGS`. Defaults are 3000/35/35/150. Margins allow 0..100; ROI allows finite nonnegative values including >100. Launch budget is finite positive. No schema fallback silently fills missing settings.
+- Remove `minimumProfitabilityPolicy` from the still-unreleased business evidence schema and fixtures. Candidate HTTP payloads cannot set or override criteria; settings are separate administrator-controlled data. No backwards-compatibility path for this unreleased schema.
+- `assessResearchBusiness(evidence, now, settings: ResearchBusinessSettings)` takes the required trusted settings object as its third argument and validates it. The assessment returns `settings` containing the effective values, instead of a separate top-level `launchBudgetUsd`. All consumers read those effective settings; no duplicate policy authority.
+- Task1 correction uses the current settings alone for pre-ad/post-ad/ROI comparison. Regression: identical source evidence changes eligibility when global budget or margin/ROI is changed; candidate-injected profitability policy is rejected; missing/invalid settings are rejected; unknown economics never become zero or a pass. Pre-ad and post-ad targets remain independently calculated. Purchase approval remains false.
+- Task2 stores four columns in existing `app_settings`: `launch_budget_usd`, `minimum_pre_ad_margin_pct`, `minimum_post_ad_margin_pct`, `minimum_roi_pct`. Use one additive local-only migration with validated defaults and finite/range checks. Ensure the singleton exists using insert-on-conflict-do-nothing in this migration; preserve every existing row/value. GET does not bootstrap or write. Missing row at runtime or read failure fails closed.
+- Replace the unimplemented budget-only endpoint with `/api/research-settings` GET/POST. Authenticated reads and CSRF-protected writes accept exactly the four editable commercial settings, update only those columns plus `updated_at`, and return persisted settings. Keep the existing API quotas, allocations, provider config and locale unchanged. Use one shared DB repository consumed by both web and worker. No budget-only endpoint or duplicate implementation remains.
+- Task3 presents four labeled controls on existing settings page, explains pre/post-ad margin and ROI denominators, and marks initial values as editable defaults, not immutable TSS law. Saving a lower target explicitly by the administrator is authorized; candidate forms do not expose policy overrides. Candidate results show the effective settings. Existing TSS competition guidance remains unchanged.
+- Task4 fetches the same current settings during selection AND execution, so queued jobs cannot use stale higher budget/lower targets. No new scheduler or API quota change.
+- Task5 proves settings persist across refresh, changing budget and each profitability target re-evaluates unchanged candidate source evidence, candidate-policy injection is rejected, and unrelated settings remain identical. No production migration, paid API QA, external contact or deployment.
+
 ### Task 1: Typed commercial evidence and honest economics
 
 **Files:** new shared modules above and `research-business.test.ts`; shared index; existing `packages/research-engine/src/economics.ts`, `economics.test.ts`.
@@ -80,7 +94,7 @@ Latest malformed/incomplete record must not fall back to older qualifying eviden
 
 ```ts
 it('does not authorize a purchase from missing commercial evidence', () => {
-  expect(assessResearchBusiness(null, new Date('2026-09-05T00:00:00Z'), 3000))
+  expect(assessResearchBusiness(null, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_BUSINESS_SETTINGS))
     .toMatchObject({ stage: 'basic_check', estimatedLaunchCashUsd: null, purchaseApproved: false });
 });
 it('uses the post-ad target independently of the pre-ad target', () => {
@@ -97,7 +111,7 @@ it('uses the post-ad target independently of the pre-ad target', () => {
 
 ### Task 2: Authenticated business evidence persistence
 
-**Files:** new `apps/web/lib/server/candidate-business.ts`, corresponding test; new `apps/web/app/api/candidates/[id]/business/route.ts` and test; existing shared types from Task 1; one additive `app_settings.launch_budget_usd` migration and DB types; narrow shared DB budget repository/export/tests; authenticated `/api/research-budget` route/tests.
+**Files:** new `apps/web/lib/server/candidate-business.ts`, corresponding test; new `apps/web/app/api/candidates/[id]/business/route.ts` and test; existing shared types from Task 1; one additive migration for four commercial `app_settings` columns and DB types; narrow shared DB research-settings repository/export/tests; authenticated `/api/research-settings` route/tests.
 
 **Consumes:** strict evidence schema. **Produces:** authenticated GET/POST business record endpoint using append-only `candidate_evidence`, no candidate-state mutation.
 
@@ -110,7 +124,7 @@ it('uses the post-ad target independently of the pre-ad target', () => {
 ```
 
 - [ ] Inspect existing `requireAdminRead`, `requireAdminMutation`, bounded body/rate-limit patterns and candidate_evidence grants/check constraints. If kind restriction exists, use one additive migration and update this plan before applying locally; no production DDL.
-- [ ] Persist current launch budget in existing app_settings, default 3000, finite positive validation. The narrow authenticated budget endpoint reads/saves only this setting, preserving API quotas and other app settings. Both endpoint assessment and later worker use the same current DB setting; no candidate budget override. Budget read errors fail closed; no evidence mutation on budget save. Verify with run-owned local DB, never production.
+- [ ] Persist `launch_budget_usd`, `minimum_pre_ad_margin_pct`, `minimum_post_ad_margin_pct`, `minimum_roi_pct` in existing app_settings, defaults3000/35/35/150, strict finite/range validation. Migration inserts singleton only if missing; preserves existing values. Runtime missing row/read errors fail closed. `/api/research-settings` accepts exactly these four camelCase fields through ResearchBusinessSettingsSchema and saves only these columns plus updated_at, preserving API quotas and other app settings. Candidate assessment and later worker load the same current settings; candidate overrides are rejected. Settings changes do not rewrite evidence. Verify with run-owned local DB, never production.
 - [ ] Red: extend nearest route-test setup with the contracts above, including no DB insertion on validation/auth failure.
 - [ ] Green: use server DB context, schema parse once, latest-record ordering and generic public error messages. Never return arbitrary candidate evidence or credentials. Do not implement GET side-effect writes.
 - [ ] Repeated save is a new audited revision, not a duplicate research job. Verify latest data survives refresh and invalid new record fails closed.
@@ -125,10 +139,10 @@ it('uses the post-ad target independently of the pre-ad target', () => {
 - [ ] Read frontend and visual-QA skills and existing design tokens before UI changes. Reuse existing panel/form controls, ky, adminCsrfHeaders; no full redesign.
 - [ ] Red E2E: authenticated candidate page -> enter explicit sourced quantity/cost/launch plan -> save -> reload -> values and derived stage retained. Editing quantity from affordable to overbudget blocks progression; it does not rewrite research history.
 - [ ] Green: group inputs as product/specification, source references, quantity/quote, launch cash, market/checks. Never render unknown numeric values as 0. Explain estimates vs quotes and purchase-not-approved beside the result.
-- [ ] Add a launch-budget field to existing settings, current default 3000, and save/reload verification. Candidate assessment displays effective configured budget; changing settings re-evaluates unchanged evidence. Explain launch budget separately from Jungle Scout request quota.
+- [ ] Add four editable commercial settings fields (budget, pre-ad margin, post-ad margin, ROI), defaults3000/35/35/150, using `/api/research-settings`; verify save/reload. Candidate assessment displays effective settings; changing each re-evaluates unchanged evidence. Explain launch budget separately from Jungle Scout request quota, pre/post margin denominators and ROI versus margin. No candidate-specific target override.
 - [ ] Add web handoff instructions: Opportunity Finder CSV uses existing upload, Top Products notes are source evidence not fabricated CSV columns, source observation time is not provider period. Preserve raw import and family provenance.
 - [ ] Provide conditional next-action controls (market verification, enter missing costs, quote draft, record response, sample check) without automated messaging/order side effects. A draft may be copied, but must not claim supplier verification or omit missing specifications.
-- [ ] Preserve TSS criteria (margin35%+, ROI150%+ and sourced competition checks) in review guidance and policy entry. Explain unverified criteria instead of auto-passing them. Include supplier-site/source links and exact-spec RFQ handoff so the workflow ends in sourcing/quote response, not just a score. Search links are not verified suppliers; drafts are not sent messages.
+- [ ] Preserve sourced TSS competition guidance. Explain that margin35%/ROI150% are editable starting targets, not immutable gates, and show unverified criteria instead of auto-passing them. Include supplier-site/source links and exact-spec RFQ handoff so the workflow ends in sourcing/quote response, not just a score. Search links are not verified suppliers; drafts are not sent messages.
 - [ ] Visual proof at 375/768/1280 for populated, missing and overbudget states; authenticated E2E with fixture credentials only. Commit and task review.
 
 ### Task 4: Decision-aware API admission and scheduling
@@ -150,7 +164,7 @@ type ResearchApiAdmission = {
 - [ ] Read all callers and existing retries/checkpoints before edits. Select missing/outdated endpoint evidence, not all deep endpoints every run. Check policy again in child job execution so a queued job cannot bypass a newly entered hold.
 - [ ] Red tests: awaiting_quote + due job makes zero external calls; existing no-business candidate is not falsely approved; explicit initial check allows only its named minimal step; fresh cache causes zero wire requests; updated hold blocks stale queued request; stage-change resume does not duplicate completed cost.
 - [ ] Green: preserve job status and existing idempotency/lease APIs, apply shared assessment before budget authorization. Do not silently change provider quota/reserve. Worker runs on Oracle only.
-- [ ] Read current configured launch budget through the shared DB helper during planning and child execution; later lower budget must block a previously queued candidate. Source records do not override it.
+- [ ] Read current commercial settings through the shared DB helper during planning and child execution; a later lower budget or higher margin/ROI target must block a previously queued candidate. Source records do not override settings. Assessment returns the effective settings used.
 - [ ] Remove numerical-presence shortcut in enrichment; derive non-provisional economics from the validated commercial assessment. Neither `Strong` nor a label alone grants purchase review.
 - [ ] Daily planning prioritizes actionable evidence gaps, excludes pure quote/sample waits, and records no-work when none is actionable. Do not introduce a second parallel scheduler or unbounded API-only discovery.
 - [ ] Run existing worker isolated harness plus nearest unit tests. Update relevant test fixtures explicitly to the new authority; never loosen the new gate to retain old fixture behavior. Commit and review.
