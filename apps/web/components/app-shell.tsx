@@ -2,7 +2,7 @@
 
 import { getCopy, type Locale } from '@ara/shared';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { type ReactNode } from 'react';
 import { localizedHref } from '../lib/locale';
 import { LanguageSwitcher } from './language-switcher';
 
@@ -32,25 +32,6 @@ const navPhases = [
 
 type NavCopyKey = (typeof navPhases)[number]['items'][number]['copyKey'];
 
-/**
- * On narrow viewports the nav is a horizontal scroll strip; the active item
- * can sit outside the visible scroll area. Keep the current location
- * discoverable by scrolling the active pill into view on route change.
- */
-function useActiveItemScroll(
-  pathname: string,
-  activeRef: RefObject<HTMLAnchorElement | null>
-): void {
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({
-      behavior: 'instant',
-      inline: 'center',
-      block: 'nearest'
-    });
-  }, [pathname, activeRef]);
-}
-
-
 function isActivePath(pathname: string, path: string): boolean {
   const suffix = pathname.replace(/^\/(ko|en)(?=\/|$)/u, '') || '/';
   if (path === '/dashboard') {
@@ -76,10 +57,6 @@ export function AppShell({
 }) {
   const copy = getCopy(locale);
   const pathname = usePathname();
-  const activeItemRef = useRef<HTMLAnchorElement | null>(null);
-  useActiveItemScroll(pathname, activeItemRef);
-  // Visible current-location affordance for narrow viewports where the
-  // scroll-strip nav can push the active pill out of sight.
   const currentPageLabel = (() => {
     const suffix = pathname.replace(/^\/(ko|en)(?=\/|$)/u, '') || '/';
     for (const phase of navPhases) {
@@ -117,7 +94,6 @@ export function AppShell({
                             href={localizedHref(locale, item.path)}
                             aria-current={active ? 'page' : undefined}
                             className={active ? 'is-active' : undefined}
-                            ref={active ? activeItemRef : undefined}
                           >
                             {copy[item.copyKey as NavCopyKey]}
                           </a>

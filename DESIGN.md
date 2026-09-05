@@ -89,7 +89,7 @@ Primary stack: `Segoe UI Variable`, `Apple SD Gothic Neo`, `Noto Sans KR`, `syst
 Base unit: 4px; the `--space-*` scale is kept. Page gutters `clamp(16px, 4vw, 40px)`. Main content is capped at **82rem** so wide viewports are used well; narrow forms stay near 52rem.
 
 - Desktop (≥64rem): single-column document under the masthead; dashboard splits into queue (fluid) + 21rem aside.
-- Below 64rem: one column; the masthead condenses to two rows — brand + locale on row one, navigation as a **horizontal scroll strip** (no wrap, no hidden items).
+- Below 64rem: one column; brand and locale precede navigation groups that wrap as intact units. All six destinations remain visible without horizontal scrolling.
 - Document owns scrolling. No nested viewport scrollers anywhere, including the provider directory.
 - Panels reflow with grid/flex; at 375px rows stack, controls stay full-width, long values break with `overflow-wrap: anywhere`.
 - Numbers align to the end with tabular numerals; mobile keeps labels beside values.
@@ -97,7 +97,7 @@ Base unit: 4px; the `--space-*` scale is kept. Page gutters `clamp(16px, 4vw, 40
 ## 5. Reusable Primitives
 
 ### App shell and navigation
-`skip-link`, `masthead` (ink command bar): `wordmark`, `primary-nav` (horizontal strip; pills with `aria-current="page"` and an inverse ink-on-paper active pill), `language-switcher`. Below 64rem the nav becomes an edge-faded horizontal scroll strip; the information structure (6 items + group label) never collapses into an accidental wrap. Locale links preserve the current non-locale path.
+`skip-link`, `masthead` (ink command bar): `wordmark`, `primary-nav` (pills with `aria-current="page"` and an inverse ink-on-paper active pill), `language-switcher`. Below 64rem whole workflow groups wrap, keeping all six destinations visible. The current page is also named above the navigation. Locale links preserve the current non-locale path. Read-only settings label/value rows stack below 48rem so long timezone values remain readable.
 
 ### Page header
 `page-heading` holds one compact H1 and purpose copy; at most one primary action sits with it. The dashboard replaces it with the `briefing` primitive (below). No page hides its main action below the fold.
@@ -140,5 +140,25 @@ Three steps only: paper (recessed), panel (white, 1px hairline, **no shadow**), 
 ## 8. Accepted Debt
 - Settings remains read-only because no settings mutation contract is in scope; the UI says so rather than implying editability.
 - Existing API/server data contracts and provider authorization flows remain unchanged.
-- Evidence payloads render as bounded, non-secret summaries; raw provider responses and secrets are never rendered.
+- Evidence payloads render as bounded, non-secret research summaries; raw provider responses and secrets are never rendered. Recognized research fields may be expanded under technical disclosures, never mixed into the missing-evidence section.
 - The showcase page keeps its exact `동작/상태/지표` heading contract for E2E.
+
+## 9. Evidence display contract (2026-09-04 correction)
+
+- Dashboard, candidate list and detail use the same candidate-bound evidence projection. Rule-filter reasons are not collection or completeness evidence.
+- Read failures and capped reads have distinct labels; neither may claim evidence is absent or complete.
+- Detail reading order is review brief, demand/competition, economics, next checks, then source records and score provenance. Imported preliminary scores and later analysis totals remain separate.
+- Existing panel, evidence-list and disclosure primitives are reused for this data-correctness pass. The requested full visual redesign remains a separate representative-design approval step.
+- Technical research JSON uses the existing metadata type and spacing tokens, wrapping long values inside its parent without a second scroll viewport. Never show authentication material or unrecognized arbitrary payload fields.
+
+## 10. Representative redesign: research desk (2026-09-04, awaiting direction approval)
+
+This section supersedes the layout for the dashboard and candidate detail only. Other surfaces and shell expansion await the representative-screen review requested in the UX report. Existing color and type tokens are retained for this prototype; this is a structural comparison, not a completed brand redesign.
+
+- Persona: Korean-speaking solo researcher checking whether a candidate merits more work, often on a narrow screen. First read: candidate → known market signals → missing costs → open evidence. Neither score nor completed scheduling implies GO.
+- Dashboard: compact title/action toolbar, single candidate dossier with paired search/analysis readings, evidence summary, explicit next check. Supporting operations occupy a narrow right column at ≥64rem rather than another equal-width card. The full candidate collection remains available below.
+- Detail: one review band; a main market-evidence column and a cost/next-check aside. Source disclosures remain full-width below. Each source names observed/estimated, confidence and period. Absent economics remain text, not zero-value charts.
+- Primitives: `desk-toolbar` (wrapping title/actions), `desk-columns` (fluid main plus 20rem aside), `desk-readings` (two real metrics with labels and explanatory units), `desk-review` (review text plus score), `desk-sheet` (white dossier surface using panel tokens). All collapse in DOM reading order below 64rem. Document is the only vertical scroll owner.
+- Existing tokens used: surface/paper-deep/line/signal/hold; type-title/section/supporting/instrument-lg; space-2/3/4/5/6/8; radius-control/panel. No new palette, dependency, font download, or decorative illustration. Numeric units and evidence provenance outweigh visual symmetry.
+- Required state checks: unavailable/none/partial/missing-required/reviewable/truncated, keyboard link and disclosure focus, readable KO/EN at 375/768/1280. Evidence capture must not trigger research, test providers, upload files or mutate DB.
+- This prototype does not claim Lighthouse or final visual-review approval. User direction approval precedes extending the new layout to other screens.

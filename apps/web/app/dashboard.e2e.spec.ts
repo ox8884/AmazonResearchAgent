@@ -9,6 +9,7 @@ test('redirects every data-bearing page to login without a session', async ({ pa
     '/ko/imports',
     '/ko/imports/new',
     '/ko/runs',
+    '/ko/runs/test-run',
     '/ko/settings',
     '/ko/settings/ai'
   ]) {

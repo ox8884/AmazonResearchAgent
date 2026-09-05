@@ -52,7 +52,15 @@ export default async function SettingsPage({
           </div>
           <div>
             <dt>{copy.apiBudgetLabel}</dt>
-            <dd>{settings?.dailyApiBudget ?? 0}</dd>
+            <dd>
+              {settings?.dailyApiBudget ?? 0}{' '}
+              {locale === 'ko' ? '호출/일' : 'requests/day'}
+            </dd>
+            <p>
+              {locale === 'ko'
+                ? '이 값은 API 호출 건수의 하루 한도입니다. 총 상품 출시 예산 $3,000과는 별도이며, 앱에 자동 적용되는지는 아직 확인되지 않았습니다.'
+                : 'This is a daily limit for API request count. It is separate from the $3,000 total product-launch budget, and automatic application in the app has not been confirmed.'}
+            </p>
           </div>
           <div>
             <dt>{copy.settingsManualReserve}</dt>

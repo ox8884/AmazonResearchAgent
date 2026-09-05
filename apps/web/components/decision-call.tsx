@@ -1,36 +1,27 @@
-import { getCopy, type Locale, type RuleReason } from '@ara/shared';
+import { getCopy, type Locale } from '@ara/shared';
+import type { ResearchObject } from '../lib/research-objects';
+import { evidencePresentation } from '../lib/evidence-copy';
+import { EvidenceStatusNote } from './evidence-status-note';
 import { localizedHref } from '../lib/locale';
-import { ResearchNowButton } from './research-now-button';
 import { CandidateStateBadge, toneForState } from './ui';
 
 /**
  * The dashboard's single focal decision. Everything rendered here is derived
- * from the lead research object's single lead record (recorded state, score,
- * and rule reasons only): why this deserves attention → what is not yet
- * verified → the next action. The no-evidence state is stated once, in the
- * gap row; the reason row stays silent when there is nothing recorded.
+ * from the lead research object's single lead record. Collection status and
+ * gaps come from evidence, never from rule-filter reasons.
  */
 export function DecisionCall({
   locale,
   object
 }: {
   locale: Locale;
-  object: {
-    readonly keyword: string;
-    readonly leadState: string | null;
-    readonly leadReason: readonly RuleReason[] | null;
-    readonly records: readonly {
-      readonly id: string;
-      readonly keyword: string;
-      readonly preliminaryScore: number | null;
-    }[];
-    /** The one record the state/reason are derived from — action must use it. */
-    readonly leadRecord: { readonly id: string };
-  };
+  object: ResearchObject;
 }) {
   const copy = getCopy(locale);
   const lead = object.leadRecord;
-  const hasEvidence = object.leadReason !== null;
+  const evidence = evidencePresentation(lead.evidence, locale);
+  const summary = lead.evidence.kind === 'ready' ? lead.evidence.summary : null;
+  const ko = locale === 'ko';
   return (
     <section
       className={`panel decision-call decision-call--${toneForState(object.leadState ?? '')}`}
@@ -41,6 +32,10 @@ export function DecisionCall({
         {object.leadState ? <CandidateStateBadge state={object.leadState} locale={locale} /> : null}
       </div>
       <h2 id="decision-call-title">{object.keyword}</h2>
+      <dl className="desk-readings">
+        <div><dt>{ko ? '월 검색량' : 'Monthly searches'}</dt><dd>{summary?.monthlySearchVolume == null ? '—' : new Intl.NumberFormat(locale).format(summary.monthlySearchVolume)}</dd><small>{summary?.searchVolumeIsUpperBound ? (ko ? '제공처 상한값' : 'Source upper bound') : (ko ? '저장된 검색량 자료' : 'Recorded search data')}</small></div>
+        <div><dt>{ko ? '분석 점수' : 'Analysis score'}</dt><dd>{summary?.analysisScore ?? '—'}<small> / 100</small></dd><small>{ko ? '발주 승인·수익률 아님' : 'Not purchase approval or margin'}</small></div>
+      </dl>
       {object.records.length > 1 ? (
         <p className="decision-call__records">
           {copy.recordsInGroup.replace('{count}', String(object.records.length))}
@@ -50,23 +45,13 @@ export function DecisionCall({
         <div className="decision-call__step">
           <dt>{copy.decisionWhy}</dt>
           <dd>
-            {hasEvidence ? (
-              <span className="decision-call__reasons">
-                {object.leadReason!.slice(0, 2).map((reason) => (
-                  <span className="reason-code" key={`${reason.code}:${reason.detail}`}>
-                    {reason.code}: {reason.detail}
-                  </span>
-                ))}
-              </span>
-            ) : (
-              <span className="decision-call__unrecorded">{copy.preVerificationLabel}</span>
-            )}
+            <EvidenceStatusNote view={lead.evidence} locale={locale} />
           </dd>
         </div>
         <div className="decision-call__step">
           <dt>{copy.decisionGap}</dt>
           <dd>
-            {hasEvidence ? copy.decisionGapNone : copy.preVerificationDetail}
+            {evidence.missing}
           </dd>
         </div>
         <div className="decision-call__step decision-call__step--act">
@@ -84,9 +69,6 @@ export function DecisionCall({
           </dd>
         </div>
       </dl>
-      <div className="briefing__actions">
-        <ResearchNowButton locale={locale} />
-      </div>
     </section>
   );
 }

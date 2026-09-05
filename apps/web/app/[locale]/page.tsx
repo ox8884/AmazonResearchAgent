@@ -38,6 +38,7 @@ export default async function DashboardPage({
   const data = dashboard.data;
   const summary = summarizeStateCounts(stateCounts);
   const objects = ready ? buildResearchObjects(data.candidates) : [];
+  const leadObject = objects[0];
 
   // Briefing tiers, deterministic from recorded state counts only:
   // review-needed → budget wait → capacity wait → in progress → decided → empty.
@@ -61,33 +62,37 @@ export default async function DashboardPage({
   ).format(new Date());
 
   return (
-    <div className="content-stack">
-      <header className="briefing">
+    <div className="content-stack research-desk">
+      <header className="desk-toolbar">
+        <div className="briefing">
         <p className="briefing__meta">{copy.briefingBasis} {generatedAt}</p>
-        <h1>{briefingLine}</h1>
-        <p className="briefing__support">{copy.homeDescription}</p>
+        <h1>{locale === 'ko' ? '리서치 데스크' : 'Research desk'}</h1>
+        <p className="briefing__support">{briefingLine}</p>
         {ready ? null : (
           <p className="notice notice--error" role="status">{copy.dataUnavailable}</p>
         )}
+        </div>
+        <div className="briefing__actions">
+          <ResearchNowButton locale={locale} />
+          <a className="briefing__quiet-link" href={localizedHref(locale, '/imports/new')}>{copy.newImport}</a>
+        </div>
       </header>
 
-      {ready && objects.length > 0 ? (
-        <DecisionCall locale={locale} object={objects[0]!} />
+      <div className="desk-columns">
+      {ready && leadObject ? (
+        <DecisionCall locale={locale} object={leadObject} />
       ) : ready ? (
         <section className="panel decision-call decision-call--empty" aria-labelledby="decision-call-title">
           <p className="decision-call__eyebrow">{copy.decisionCallTitle}</p>
           <h2 id="decision-call-title">{copy.decisionEmptyTitle}</h2>
           <p className="decision-call__body">{copy.decisionEmptyBody}</p>
           <div className="briefing__actions">
-            <ResearchNowButton locale={locale} />
             <a className="briefing__quiet-link" href={localizedHref(locale, '/imports/new')}>
               {copy.newImport}
             </a>
           </div>
         </section>
       ) : null}
-
-      <FocusGroups locale={locale} objects={objects} ready={ready} />
 
       <PipelineSignal
         locale={locale}
@@ -97,6 +102,9 @@ export default async function DashboardPage({
         importsTotal={data.totals.imports}
         ready={ready}
       />
+      </div>
+
+      <FocusGroups locale={locale} objects={objects} ready={ready} />
 
       <section
         className="panel panel--inset recent-imports-evidence"

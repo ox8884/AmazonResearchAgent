@@ -66,7 +66,7 @@ export function CandidateScoreCard({
           {SIGNAL_KEYS.map((key) => (
             <h3 key={key}>{labels[key]}</h3>
           ))}
-          <p>{copy.detailNoScore}</p>
+          <p>{locale === 'ko' ? '세부 점수는 저장되지 않았습니다. 분석 총점과는 별도 값입니다.' : 'Component scores were not stored. They are separate from the analysis total.'}</p>
         </div>
       )}
     </section>

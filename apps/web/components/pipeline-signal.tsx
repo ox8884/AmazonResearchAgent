@@ -101,6 +101,7 @@ export function PipelineSignal({
         </p>
       ) : null}
       <div className="pipeline-signal__ops">
+        <span>{locale === 'ko' ? '전체 작업에는 AI 연결 테스트도 포함됩니다.' : 'Queue totals include AI connection tests.'}</span>
         {ready ? (
           jobsTotal === 0 ? (
             <span>{copy.jobsZero}</span>
@@ -128,6 +129,7 @@ export function PipelineSignal({
           )
         ) : null}
       </div>
+      <p>{locale === 'ko' ? 'API 예산: 미국 중부시간 기준 하루 호출 건수. 상품 출시 예산과 별도입니다.' : 'API budget: daily request count in America/Chicago, separate from launch capital.'}</p>
     </section>
   );
 }

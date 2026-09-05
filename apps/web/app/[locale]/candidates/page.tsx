@@ -10,6 +10,8 @@ import {
 } from '../../../lib/research-objects';
 import { formatCount } from '../../../lib/dashboard-metrics';
 import { requireAdminPage } from '../../../lib/server/admin-page-auth';
+import { EvidenceStatusNote } from '../../../components/evidence-status-note';
+import { evidencePresentation } from '../../../lib/evidence-copy';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,16 +70,8 @@ function ResearchObjectRow({
             </span>
           ) : null}
         </div>
-        {object.leadReason ? (
-          <span className="reason-code">
-            {object.leadReason[0]!.code}: {object.leadReason[0]!.detail}
-          </span>
-        ) : (
-          <span className="research-object__preverified">
-            <strong>{copy.preVerificationLabel}</strong>
-            <span>{copy.preVerificationDetail}</span>
-          </span>
-        )}
+        <EvidenceStatusNote view={lead.evidence} locale={locale} />
+        <span className="research-object__score-note">{evidencePresentation(lead.evidence, locale).missing}</span>
         {preliminaryOnly && object.scores.length > 0 ? (
           <span className="research-object__score-note">{copy.scoreNotVerdict}</span>
         ) : null}
