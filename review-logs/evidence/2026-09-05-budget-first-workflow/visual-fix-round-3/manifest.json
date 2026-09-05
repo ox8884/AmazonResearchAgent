@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-05",
+  "captureCommand": "PLAYWRIGHT_BASE_URL=http://127.0.0.1:2048 BUSINESS_CAPTURE_PHASE=visual-fix-round-3 pnpm exec playwright test app/business-workflow.e2e.spec.ts --config ../../.superpowers/sdd/2026-09-04-budget-first-research/qa-production-playwright.config.mjs --project business-workflow",
+  "result": "7 passed, 2 intentional historical-capture skips",
+  "fixture": {
+    "server": "http://127.0.0.1:2048",
+    "run": "ara_it_48480_3d213219",
+    "database": "ara_it_48480_3d213219_80d4c2946243",
+    "candidateId": "00000000-0000-4000-8000-000000000301"
+  },
+  "source": {
+    "renderedBuildCommit": "56a05a19b6e305a8cb85399d6b9d453ccb85e74b",
+    "captureTestCommit": "56a05a19b6e305a8cb85399d6b9d453ccb85e74b",
+    "renderedFileBlobs": {
+      "DESIGN.md": "3608f06ae6d50b63121d3015b9d3f1236468671b",
+      "apps/web/app/globals.css": "674351942c281dc1a54560b5e3fd05d9ec06d684",
+      "apps/web/app/[locale]/settings/page.tsx": "4bb14395a8dbd92dee61db53db1b1c881dce547a",
+      "apps/web/components/candidate-business-form.tsx": "95442e294582e446150bd0f7ae4617bb2ae577df",
+      "apps/web/components/candidate-business-presentation.tsx": "abd147797a901e21fc779012cd05d160ecd992f5",
+      "apps/web/components/research-business-settings-form.tsx": "b9e521f24a582465df2bc6709c94b1a3363d3afe",
+      "apps/web/components/candidate-business-fields.tsx": "2ea41c82b26866d90726490406a8e5e16021754e",
+      "apps/web/components/candidate-business-values.ts": "dcac3e9ea5f702f66e714365c95fa1c4945675d6"
+    },
+    "workingFileSha256AtCapture": {
+      "DESIGN.md": "2f6a2923e3fbd8194eafd0dc836e59d8ea9258c6cf25f86b0466cff3799a542c",
+      "apps/web/app/globals.css": "73f9bb1287c8fea103ca58fd094e6c048422f52e06995bbac26c58e76cd5b389",
+      "apps/web/app/[locale]/settings/page.tsx": "ab3ef984171740e0b3923ea83f466a15d9d0aac917ced312b8b7d0e68c48636d",
+      "apps/web/components/candidate-business-form.tsx": "c7ff7dfc31a27cc6b4347461a698e9e3de2a4073671cb930e37dd4cb46ba99b2",
+      "apps/web/components/candidate-business-presentation.tsx": "0b52160bc187be6a359245d6cd5bafca887f6187aee9b9af1f135d487ee4d946",
+      "apps/web/components/research-business-settings-form.tsx": "f3519725783ab3917c03212314e89736fd51fc83a2e32388f00d626a292de753",
+      "apps/web/components/candidate-business-fields.tsx": "b846e90104b6f2b2611418dd24ccc5861b870391f80d2aaa2a92056de5289aee",
+      "apps/web/components/candidate-business-values.ts": "bb607018dca1c0de272cb62a6070ca3690ddc51c2591844ff436069c18f86107",
+      "apps/web/app/business-workflow.e2e.spec.ts": "a5f5bb38b5b92592c1fec483df54ff65c4196676a834c0d9fd076e0d91819248"
+    },
+    "captureTestBlob": "63161c90c3f4f5087f33a330b469b67bc292ae62"
+  },
+  "captureSafety": {
+    "cspBypass": false,
+    "browserTimezone": {
+      "configured": "America/Chicago",
+      "observedIntl": "America/Chicago"
+    },
+    "viewportWidths": [
+      375,
+      768,
+      1280
+    ],
+    "overflowCheck": "captureAtViewports asserts document.documentElement.scrollWidth <= window.innerWidth before every screenshot; passing capture test covers all 27 images.",
+    "pngSignature": "89504e470d0a1a0a",
+    "pngColorType": 2,
+    "pngColorTypeMeaning": "truecolour; screenshots have no alpha channel to corrupt"
+  },
+  "stateOrigins": {
+    "candidate-saved-db": "actual fixture DB",
+    "candidate-waiting-quote-db": "actual fixture DB",
+    "candidate-rejected-db": "actual fixture DB after persisted rejected disposition",
+    "candidate-missing-evidence-route-mock": "only GET /api/candidates/:id/business is intercepted with contract-valid evidence:null; no DB write",
+    "candidate-overbudget-db": "actual fixture DB after self-contained research save with explicit quantity 600 and landed shipment total USD 3000",
+    "candidate-get-only-draft-refresh-db": "actual fixture DB; GET-only refresh preserves unsaved draft",
+    "settings-saved-db": "actual fixture DB",
+    "settings-save-failure-route-mock": "only POST /api/research-settings is intercepted as HTTP 503; GET falls through to fixture",
+    "imports-handoff-db": "actual fixture DB"
+  },
+  "images": {
+    "candidate-get-only-draft-refresh-db-1280.png": {
+      "dimensions": "1280x5460",
+      "sha256": "edd441eb1c2e98543e89e7d85d5ee29ba7d93b3f3164b90de629dc01c366d5ed"
+    },
+    "candidate-get-only-draft-refresh-db-375.png": {
+      "dimensions": "375x8295",
+      "sha256": "7c339be3f46aeeb368f933c37893dd173d24b90b59c5ce70a2995e3d2e85549e"
+    },
+    "candidate-get-only-draft-refresh-db-768.png": {
+      "dimensions": "768x7497",
+      "sha256": "787a2283702413ef1b95195f3a3f2bdcb9192fc977e1796325749ee8310397c2"
+    },
+    "candidate-missing-evidence-route-mock-1280.png": {
+      "dimensions": "1280x5390",
+      "sha256": "0b55b2ba64254c3b62fa444d2bb6dc02d720f328a132d34a09cf3f64ee8ae081"
+    },
+    "candidate-missing-evidence-route-mock-375.png": {
+      "dimensions": "375x8225",
+      "sha256": "cdcd0ba951924f163378788de31ab09ee34aa811b8901e8bccb4030ee605bf08"
+    },
+    "candidate-missing-evidence-route-mock-768.png": {
+      "dimensions": "768x7427",
+      "sha256": "9f57a17a969cdcc1ae02251e11177c6b27760176c14d2e29ca7726f01b1b836f"
+    },
+    "candidate-overbudget-db-1280.png": {
+      "dimensions": "1280x5390",
+      "sha256": "7a2407713b581388bd07e3cb8ade22cb4149e213438ddd58b1faa026d1a920e7"
+    },
+    "candidate-overbudget-db-375.png": {
+      "dimensions": "375x8203",
+      "sha256": "f057fe986b024f0f5bb508dfea4087ea079cbf368d2dca45b7ffad7cb8c22283"
+    },
+    "candidate-overbudget-db-768.png": {
+      "dimensions": "768x7427",
+      "sha256": "efe65b55cb74eaa61306fb9255fe719a30d90a5188c5322b1e95efe16aca5eea"
+    },
+    "candidate-rejected-db-1280.png": {
+      "dimensions": "1280x5424",
+      "sha256": "8415f94b4379ad1f9bfd15d5934829f92fe063761133be25410a9ed880e58092"
+    },
+    "candidate-rejected-db-375.png": {
+      "dimensions": "375x8237",
+      "sha256": "97fd1bc41a731d4f14822d295b6e862065354388213fc9ecdd4b451f7f2c46b1"
+    },
+    "candidate-rejected-db-768.png": {
+      "dimensions": "768x7461",
+      "sha256": "4ebd391bb3048dc24e0c61bb58b1e3bf3effcf1b0f5853df6528a7959b278749"
+    },
+    "candidate-saved-db-1280.png": {
+      "dimensions": "1280x5424",
+      "sha256": "0a89c5bb6a63ce7ce8f83ffce8a0611c08b81dac1b0c64a47dc4df22a1c92c8f"
+    },
+    "candidate-saved-db-375.png": {
+      "dimensions": "375x8237",
+      "sha256": "233386d2da7f011825d49d8d37160be61d0e8a87cd89fc124a5e02edd98a9278"
+    },
+    "candidate-saved-db-768.png": {
+      "dimensions": "768x7461",
+      "sha256": "080cf1ec894381620e6251ab6113eb9a65fe75482503c01c59f8feda0133ee0a"
+    },
+    "candidate-waiting-quote-db-1280.png": {
+      "dimensions": "1280x5424",
+      "sha256": "89c52246b364884a5a3d856b29aa8c221c619a8c57afa145e521e09c9ef4429c"
+    },
+    "candidate-waiting-quote-db-375.png": {
+      "dimensions": "375x8237",
+      "sha256": "04fbde92a96e128ee2579b4b9beec4c0c912610c332f9b68c56e8db3ea0b2d19"
+    },
+    "candidate-waiting-quote-db-768.png": {
+      "dimensions": "768x7461",
+      "sha256": "09e95eee3b3f6adeee43927e83e616f6eab7cfa0d8cc5fceed50a755a0a93f1c"
+    },
+    "imports-handoff-db-1280.png": {
+      "dimensions": "1280x1000",
+      "sha256": "3c812f1d8411988d58cebfa4357c94713a0e162459b0fc9a435749235266fef4"
+    },
+    "imports-handoff-db-375.png": {
+      "dimensions": "375x1173",
+      "sha256": "cea83313bd151c345a57e114c2b39416e67b8a2ec350e7a33197f65aa3be4b0d"
+    },
+    "imports-handoff-db-768.png": {
+      "dimensions": "768x1000",
+      "sha256": "330ec511e6326e4cfe1896ffc371a4f32fc64d38f54e276e9b7fa3a634e423cc"
+    },
+    "settings-save-failure-route-mock-1280.png": {
+      "dimensions": "1280x1505",
+      "sha256": "2fec5e0be8897a1dd224df17f7de78a17815d8f863796dd687e7af3f8960415e"
+    },
+    "settings-save-failure-route-mock-375.png": {
+      "dimensions": "375x2152",
+      "sha256": "5c6144417dda9773ceb4935c48aa1ddd5ba513cd8f1dc8bac397f707f04bd2b6"
+    },
+    "settings-save-failure-route-mock-768.png": {
+      "dimensions": "768x1887",
+      "sha256": "385c4fca9953672088efba71120f0fdf5bb9e3bcd611f0798d16b09c1c077c8b"
+    },
+    "settings-saved-db-1280.png": {
+      "dimensions": "1280x1505",
+      "sha256": "7f37afe51252ed1043b69e6070a4a469b5c29864bad7c76ce86112966f77c127"
+    },
+    "settings-saved-db-375.png": {
+      "dimensions": "375x2129",
+      "sha256": "aceed1ec3dbd77294f626c10768fe661f294397995248bf22335b04d6f1fbc5e"
+    },
+    "settings-saved-db-768.png": {
+      "dimensions": "768x1887",
+      "sha256": "a6b03e551b5dcc25375f4651e11b17e15cfd1b58f291d5c29a4e0a18f57fe066"
+    }
+  }
+}
