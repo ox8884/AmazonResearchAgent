@@ -4,6 +4,13 @@ Target host: Ubuntu 24.04 ARM64/aarch64, 4 OCPU, 24 GB RAM.
 
 The worker is the only long-running research process. It consumes the durable Supabase queue, Jungle Scout, AI providers, and Telegram. Do not run those jobs on Vercel.
 
+Production web is on Cloudflare Workers; the production queue consumer is on
+Oracle, not the Windows development PC. Do not start the Windows
+`pnpm worker:production` launcher concurrently with Oracle. As verified on
+2026-09-05 UTC, the enabled Oracle service uses release
+`61f19e957563686376bcb883d1408ef4812b8e43`. Operational evidence and limitations:
+[`Oracle production correction`](../../review-logs/2026-09-05-oracle-worker-production-correction.md).
+
 ## Host setup
 
 1. Leave the shared host timezone unchanged (`America/New_York` on hermes-server). Daily 03:00 America/Chicago is expressed on the timer unit, not by changing the host clock.

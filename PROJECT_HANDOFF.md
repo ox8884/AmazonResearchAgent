@@ -1,5 +1,21 @@
 # Amazon Research Agent — project handoff (2026-09-01)
 
+> **Current production authority — 2026-09-05 UTC**
+>
+> Web remains on Cloudflare Workers. The production queue worker runs ONLY on
+> Oracle `hermes-server`, via enabled `amazon-research-worker.service`.
+> `/opt/amazon-research/current` points to release
+> `61f19e957563686376bcb883d1408ef4812b8e43`. The previous Oracle release was
+> already running; launching a Windows production worker was a deployment
+> discovery mistake. That Windows process tree is now stopped.
+> Do not launch `pnpm worker:production` on Windows alongside Oracle.
+> The enabled daily timer runs at 03:00 America/Chicago; host timezone is unchanged.
+> Process-loss automatic recovery was tested, and live DB queue polling resumed.
+> Production migrations are current through `20260905024826` (32 total).
+> Subscription OAuth remains deferred. See
+> [Oracle verification](review-logs/2026-09-05-oracle-worker-production-correction.md).
+> This update supersedes conflicting Windows-worker statements below.
+
 > **Authoritative release update — 2026-09-03**
 >
 > - Current source is the repository root on `main`; the Cloudflare release

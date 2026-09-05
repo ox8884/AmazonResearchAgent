@@ -57,3 +57,10 @@
 - worker는 사용자 Windows PC의 실행 프로세스다. PC 종료/재부팅 후 무중단 자동복구를 이번 작업이 보장하지 않는다. Cloudflare 웹과 worker 실행 수명은 별개다.
 - 최종 만료 작업 2건은 실패 상태로 보존했고 삭제하지 않았다. 과거 후보/평가 자료를 소급 수정하지 않았다.
 - 배포 rollback은 이전 Cloudflare version 사용 가능, 기존 login overload 유지. DB를 reset하거나 additive migration을 역삭제하지 말 것. worker rollback 필요 시 이전 source release와 대기 작업을 먼저 확인할 것.
+
+## 후속 정정: Oracle 운영 실행기
+
+이 보고서의 Windows 실행기 설명은 Oracle 확인이 누락된 당시 상태 기록이다.
+실제로 Oracle에는 이전 release worker와 daily timer가 이미 enabled/active였다.
+후속 작업에서 Windows 중복 실행기를 종료하고 Oracle만 최신 release로 전환했다.
+현재 실행 위치와 재시작 검증은 [Oracle production correction](2026-09-05-oracle-worker-production-correction.md)을 따른다.
