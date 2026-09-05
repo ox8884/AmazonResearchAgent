@@ -31,6 +31,7 @@ const DISTRIBUTED_ADAPTER_COORDINATION = false;
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000] as const;
 
 export interface WorkerQueue {
+  terminalizeExpiredExhaustedJobs(): Promise<number>;
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]>;
   completeJob(lease: Job['leaseIdentity'], checkpoint: unknown): Promise<void>;
   failJob(
@@ -213,6 +214,12 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
   const sleeper = options.sleep ?? sleep;
 
   while (!options.signal.aborted) {
+    const terminalized = await options.queue.terminalizeExpiredExhaustedJobs();
+    if (terminalized > 0) {
+      (options.logger ?? consoleLogger).error(
+        `Terminalized ${terminalized} exhausted expired queue job${terminalized === 1 ? '' : 's'}.`
+      );
+    }
     const jobs = await options.queue.claimJobs(
       options.workerId,
       claimLimit,

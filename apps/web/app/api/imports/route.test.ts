@@ -24,6 +24,7 @@ vi.mock('../../../lib/server/enqueue-import', () => ({
 
 vi.mock('../../../lib/server/login-guard', () => ({
   consumeDurableLoginAttempt: async () => undefined,
+  trustedCloudflareClientIdentityHash: () => undefined,
   withDurableLoginScrypt: async <T>(work: () => Promise<T>) => work()
 }));
 

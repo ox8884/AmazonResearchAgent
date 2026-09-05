@@ -13,6 +13,7 @@ import {
 class InMemoryQueueRepository implements QueueRepository {
   readonly jobs = new Map<string, Job>();
   insertAttempts = 0;
+  terminalizedCount = 0;
 
   async insertJob(input: JobInsert): Promise<string> {
     this.insertAttempts += 1;
@@ -28,7 +29,7 @@ class InMemoryQueueRepository implements QueueRepository {
       payload: input.payload,
       status: 'queued',
       priority: input.priority,
-      availableAt: input.availableAt,
+      availableAt: input.availableAt ?? '2026-08-27T00:00:00.000Z',
       leasedUntil: null,
       leasedBy: null,
       leaseIdentity: { jobId: id, owner: '', epoch: 0 },
@@ -45,6 +46,10 @@ class InMemoryQueueRepository implements QueueRepository {
 
   async findJobIdByIdempotencyKey(key: string): Promise<string | null> {
     return this.jobs.get(key)?.id ?? null;
+  }
+
+  async terminalizeExpiredExhaustedJobs(): Promise<number> {
+    return this.terminalizedCount;
   }
 
   async claimJobs(): Promise<Job[]> {
@@ -116,6 +121,14 @@ describe('job lease epochs', () => {
     );
     expect(heartbeat).toHaveBeenCalledWith(lease, 120);
     expect(checkpoint).toHaveBeenCalledWith(lease, { phase: 'saved' }, 120);
+  });
+
+  it('delegates exhausted expired lease terminalization to the repository', async () => {
+    const repository = new InMemoryQueueRepository();
+    repository.terminalizedCount = 2;
+    const queue = new DurableQueue(repository);
+
+    await expect(queue.terminalizeExpiredExhaustedJobs()).resolves.toBe(2);
   });
 });
 

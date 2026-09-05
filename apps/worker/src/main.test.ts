@@ -39,6 +39,11 @@ class FakeWorkerQueue implements WorkerQueue {
   failed: unknown[][] = [];
   heartbeats: unknown[][] = [];
   checkpoints: unknown[][] = [];
+  terminalizedCount = 0;
+
+  async terminalizeExpiredExhaustedJobs(): Promise<number> {
+    return this.terminalizedCount;
+  }
 
   async claimJobs(): Promise<Job[]> {
     return [];
@@ -198,6 +203,32 @@ describe('worker job execution', () => {
 
     expect(claim).toHaveBeenCalledWith('worker-a', 4, 120);
     expect(sleeper).toHaveBeenCalledOnce();
+  });
+
+  it('terminalizes exhausted expired jobs before polling for more work', async () => {
+    const queue = new FakeWorkerQueue();
+    queue.terminalizedCount = 1;
+    const terminalize = vi.spyOn(queue, 'terminalizeExpiredExhaustedJobs');
+    const claim = vi.spyOn(queue, 'claimJobs');
+    const controller = new AbortController();
+    const errors: string[] = [];
+
+    await runWorkerLoop({
+      queue,
+      handlers: {},
+      workerId: 'worker-a',
+      signal: controller.signal,
+      sleep: async () => controller.abort(),
+      logger: {
+        info() {},
+        error(message) {
+          errors.push(message);
+        }
+      }
+    });
+
+    expect(terminalize).toHaveBeenCalledBefore(claim);
+    expect(errors).toEqual(['Terminalized 1 exhausted expired queue job.']);
   });
 
   // Break: known token formats pass through the worker logger unchanged.

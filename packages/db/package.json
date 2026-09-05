@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "node --test ../../test-harness/harness-boundaries.test.mjs && node ../../test-harness/run-isolated-tests.mjs --shared-db",
+    "test": "node --test ../../test-harness/harness-boundaries.test.mjs && node ../../test-harness/run-isolated-tests.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
   },

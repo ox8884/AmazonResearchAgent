@@ -10,6 +10,7 @@ import { verifyRequestOrigin } from '../../../../lib/server/csrf';
 import { AbuseGuardError } from '../../../../lib/server/abuse-guard';
 import {
   consumeDurableLoginAttempt,
+  trustedCloudflareClientIdentityHash,
   withDurableLoginScrypt
 } from '../../../../lib/server/login-guard';
 import { ServerConfigurationError } from '../../../../lib/server/database';
@@ -33,7 +34,11 @@ function invalidCredentials(): NextResponse {
 export async function POST(request: Request): Promise<NextResponse> {
   try {
     verifyRequestOrigin(request);
-    await consumeDurableLoginAttempt();
+    const clientIdentityHash = trustedCloudflareClientIdentityHash(request);
+    if (clientIdentityHash === undefined && process.env.NODE_ENV === 'production') {
+      throw new AbuseGuardError();
+    }
+    await consumeDurableLoginAttempt(clientIdentityHash);
     const parsed = LoginSchema.safeParse(await request.json());
     if (!parsed.success) {
       return invalidCredentials();

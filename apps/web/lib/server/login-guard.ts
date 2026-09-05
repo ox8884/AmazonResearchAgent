@@ -1,15 +1,49 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
+import { getSessionSigningKey } from './admin-session';
 import { getServerDatabaseContext } from './database';
 import { AbuseGuardError } from './abuse-guard';
 
-const MAX_ATTEMPTS = 8;
+const PER_CLIENT_MAX_ATTEMPTS = 8;
+const GLOBAL_MAX_ATTEMPTS = 80;
 const WINDOW_SECONDS = 5 * 60;
 const SCRYPT_LEASE_SECONDS = 30;
+const CLOUDFLARE_CLIENT_IP_HEADER = 'cf-connecting-ip';
 
-export async function consumeDurableLoginAttempt(): Promise<void> {
+function canonicalClientIp(value: string): string | undefined {
+  const family = isIP(value);
+  if (family === 4) return value;
+  if (family !== 6) return undefined;
+  return new URL(`http://[${value}]/`).hostname.slice(1, -1);
+}
+
+function clientIdentityHash(value: string): string {
+  return createHmac('sha256', getSessionSigningKey())
+    .update(`ara-login-client-v1\u0000${value}`)
+    .digest('hex');
+}
+
+export function trustedCloudflareClientIdentityHash(request: Request): string | undefined {
+  if (process.env.ARA_TRUST_CLOUDFLARE_CLIENT_IP !== 'true') {
+    return undefined;
+  }
+  const clientIp = request.headers.get(CLOUDFLARE_CLIENT_IP_HEADER);
+  if (clientIp === null) return undefined;
+  const canonicalIp = canonicalClientIp(clientIp);
+  return canonicalIp === undefined ? undefined : clientIdentityHash(canonicalIp);
+}
+
+export async function consumeDurableLoginAttempt(
+  trustedClientIdentityHash: string | undefined
+): Promise<void> {
+  if (trustedClientIdentityHash === undefined && process.env.NODE_ENV === 'production') {
+    throw new AbuseGuardError();
+  }
   const { client } = getServerDatabaseContext();
   const { data, error } = await client.rpc('consume_admin_login_attempt', {
-    max_attempts: MAX_ATTEMPTS,
+    client_identity_hash: trustedClientIdentityHash ?? clientIdentityHash('untrusted-local-origin'),
+    per_client_max_attempts: PER_CLIENT_MAX_ATTEMPTS,
+    global_max_attempts: GLOBAL_MAX_ATTEMPTS,
     window_seconds: WINDOW_SECONDS
   });
   if (error || data !== true) {

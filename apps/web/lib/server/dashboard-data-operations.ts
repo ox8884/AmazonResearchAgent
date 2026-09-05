@@ -1,5 +1,6 @@
 import { getServerDatabaseContext } from './database';
 import { DashboardQueryError, safe } from './dashboard-query';
+import { z } from 'zod';
 
 export type JobCounts = {
   readonly queued: number;
@@ -30,16 +31,22 @@ function emptyJobCounts(): JobCounts {
 }
 
 export async function getJobCounts(): Promise<JobCounts> {
+  const counts = await getExactCounts('jobs');
+  return {
+    queued: counts['queued'] ?? 0,
+    running: counts['running'] ?? 0,
+    failed: counts['failed'] ?? 0,
+    completed: counts['completed'] ?? 0
+  };
+}
+
+async function getExactCounts(entity: 'jobs' | 'candidates'): Promise<Record<string, number>> {
   const { client } = getServerDatabaseContext();
-  const { data, error } = await client.from('jobs').select('status');
-  if (error) throw new DashboardQueryError('job counts', error);
-  return (data ?? []).reduce<JobCounts>((counts, job) => {
-    if (job.status === 'queued') return { ...counts, queued: counts.queued + 1 };
-    if (job.status === 'running') return { ...counts, running: counts.running + 1 };
-    if (job.status === 'failed') return { ...counts, failed: counts.failed + 1 };
-    if (job.status === 'completed') return { ...counts, completed: counts.completed + 1 };
-    return counts;
-  }, emptyJobCounts());
+  const { data, error } = await client.rpc('get_dashboard_counts', { entity });
+  if (error) throw new DashboardQueryError(`${entity} counts`, error);
+  const parsed = z.record(z.string(), z.number().int().nonnegative().safe()).safeParse(data);
+  if (!parsed.success) throw new DashboardQueryError(`${entity} counts`, parsed.error);
+  return parsed.data;
 }
 
 export async function getApiBudgetMeter(): Promise<ApiBudgetMeter> {
@@ -65,14 +72,7 @@ export async function getApiBudgetMeter(): Promise<ApiBudgetMeter> {
 }
 
 export async function getCandidateStateCounts(): Promise<CandidateStateCounts> {
-  const { client } = getServerDatabaseContext();
-  const { data, error } = await client.from('candidates').select('state');
-  if (error) throw new DashboardQueryError('candidate state counts', error);
-  return (data ?? []).reduce<CandidateStateCounts>((counts, row) => {
-    const key = row.state ?? 'unknown';
-    counts[key] = (counts[key] ?? 0) + 1;
-    return counts;
-  }, {});
+  return getExactCounts('candidates');
 }
 
 export async function getResearchRuns(): Promise<readonly ResearchRunSummary[]> {

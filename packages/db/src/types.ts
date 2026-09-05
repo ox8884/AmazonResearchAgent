@@ -1869,6 +1869,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_dashboard_counts: {
+        Args: { entity: string }
+        Returns: Json
+      }
       acquire_admin_login_scrypt: {
         Args: { lease_seconds: number; lock_owner: string }
         Returns: boolean
@@ -2213,7 +2217,12 @@ export type Database = {
         Returns: boolean
       }
       consume_admin_login_attempt: {
-        Args: { max_attempts: number; window_seconds: number }
+        Args: {
+          client_identity_hash: string
+          global_max_attempts: number
+          per_client_max_attempts: number
+          window_seconds: number
+        }
         Returns: boolean
       }
       deactivate_subscription_provider: {
@@ -2242,6 +2251,10 @@ export type Database = {
       enqueue_initial_candidate_normalization: {
         Args: { candidate_id: string; locale: string; writer_mode: string }
         Returns: Json
+      }
+      enqueue_manual_research: {
+        Args: { logical_date: string; research_mode: string }
+        Returns: string
       }
       expire_ai_provider_ready_lease: {
         Args: {
@@ -2431,6 +2444,7 @@ export type Database = {
         Args: { claim_owner: string; request_cache_key: string; response: Json }
         Returns: boolean
       }
+      terminalize_expired_exhausted_jobs: { Args: never; Returns: number }
       upsert_niche_cluster: {
         Args: {
           aliases: Json

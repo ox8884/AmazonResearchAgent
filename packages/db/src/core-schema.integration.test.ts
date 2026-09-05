@@ -16,6 +16,39 @@ function requireJobId(row: { id: string } | undefined): string {
 
 
 describe('core research schema', () => {
+  it('aggregates all job rows beyond the REST row limit', async () => {
+    await sql`
+      insert into jobs (type, status, idempotency_key)
+      select 'IMPORT_OPPORTUNITY_CSV', 'queued', 'db-it-count-' || n
+      from generate_series(1, 1205) n
+    `;
+    const [row] = await sql<{ counts: unknown }[]>`
+      select public.get_dashboard_counts('jobs') as counts
+    `;
+    expect(row?.counts).toMatchObject({ queued: 1205 });
+  });
+
+  it('aggregates candidate states and restricts the aggregate RPC to service_role', async () => {
+    const id = randomUUID();
+    await sql`insert into import_runs (id, submission_hash) values (${id}, ${id})`;
+    try {
+      await sql`
+        insert into candidates (import_run_id, keyword, normalized_exact_keyword, state, rule_passed)
+        select ${id}::uuid, 'count-' || n, 'count-' || n, 'Discovered', true
+        from generate_series(1, 1206) n
+      `;
+      const [row] = await sql<{ counts: unknown; anon: boolean; authenticated: boolean; service: boolean }[]>`
+        select public.get_dashboard_counts('candidates') as counts,
+          has_function_privilege('anon', 'public.get_dashboard_counts(text)', 'EXECUTE') as anon,
+          has_function_privilege('authenticated', 'public.get_dashboard_counts(text)', 'EXECUTE') as authenticated,
+          has_function_privilege('service_role', 'public.get_dashboard_counts(text)', 'EXECUTE') as service
+      `;
+      expect(row).toMatchObject({ counts: { Discovered: 1206 }, anon: false, authenticated: false, service: true });
+    } finally {
+      await sql`delete from import_runs where id = ${id}`;
+    }
+  });
+
   beforeEach(async () => {
     await sql`delete from jobs where idempotency_key like 'db-it-%'`;
   });
@@ -476,19 +509,110 @@ describe('AI analysis and cluster hardening RPCs', () => {
   });
 
   it('rate-limits admin login attempts in postgres', async () => {
-    await sql`update admin_login_guard set attempts = 0, scrypt_inflight = false, window_started_at = now() where bucket = 'admin-login'`;
+    const clientHash = 'c'.repeat(64);
+    await sql`
+      delete from admin_login_guard
+      where bucket in ${sql([
+        `admin-login:client:${clientHash}`,
+        'admin-login:global'
+      ])}
+    `;
     const allowed = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(2, 300) as result
+      select consume_admin_login_attempt(${clientHash}, 2, 80, 300) as result
     `;
     const second = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(2, 300) as result
+      select consume_admin_login_attempt(${clientHash}, 2, 80, 300) as result
     `;
     const blocked = await sql<{ result: boolean }[]>`
-      select consume_admin_login_attempt(2, 300) as result
+      select consume_admin_login_attempt(${clientHash}, 2, 80, 300) as result
     `;
     expect(allowed[0]?.result).toBe(true);
     expect(second[0]?.result).toBe(true);
     expect(blocked[0]?.result).toBe(false);
+  });
+
+  it('keeps one Cloudflare client exhaustion from blocking a different client', async () => {
+    const clientA = 'a'.repeat(64);
+    const clientB = 'b'.repeat(64);
+    await sql`
+      delete from admin_login_guard
+      where bucket in ${sql([
+        `admin-login:client:${clientA}`,
+        `admin-login:client:${clientB}`,
+        'admin-login:global'
+      ])}
+    `;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [allowed] = await sql<{ result: boolean }[]>`
+        select consume_admin_login_attempt(${clientA}, 8, 80, 300) as result
+      `;
+      expect(allowed?.result).toBe(true);
+    }
+
+    const [blocked] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${clientA}, 8, 80, 300) as result
+    `;
+    const [otherClientAllowed] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${clientB}, 8, 80, 300) as result
+    `;
+
+    expect(blocked?.result).toBe(false);
+    expect(otherClientAllowed?.result).toBe(true);
+  });
+
+  it('does not create a client bucket after the shared login backstop is exhausted', async () => {
+    const firstClient = 'd'.repeat(64);
+    const laterClient = 'e'.repeat(64);
+    await sql`
+      delete from admin_login_guard
+      where bucket in ${sql([
+        `admin-login:client:${firstClient}`,
+        `admin-login:client:${laterClient}`,
+        'admin-login:global'
+      ])}
+    `;
+
+    const [firstAllowed] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${firstClient}, 1, 1, 300) as result
+    `;
+    const [laterBlocked] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${laterClient}, 1, 1, 300) as result
+    `;
+    const [laterBucket] = await sql<{ count: string }[]>`
+      select count(*)::text as count
+      from admin_login_guard
+      where bucket = ${`admin-login:client:${laterClient}`}
+    `;
+
+    expect(firstAllowed?.result).toBe(true);
+    expect(laterBlocked?.result).toBe(false);
+    expect(laterBucket?.count).toBe('0');
+  });
+
+  it('does not charge the shared login backstop for a rejected client retry', async () => {
+    const clientHash = 'f'.repeat(64);
+    await sql`
+      delete from admin_login_guard
+      where bucket in ${sql([
+        `admin-login:client:${clientHash}`,
+        'admin-login:global'
+      ])}
+    `;
+
+    const [firstAllowed] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${clientHash}, 1, 80, 300) as result
+    `;
+    const [retryBlocked] = await sql<{ result: boolean }[]>`
+      select consume_admin_login_attempt(${clientHash}, 1, 80, 300) as result
+    `;
+    const [globalBucket] = await sql<{ attempts: number }[]>`
+      select attempts from admin_login_guard where bucket = 'admin-login:global'
+    `;
+
+    expect(firstAllowed?.result).toBe(true);
+    expect(retryBlocked?.result).toBe(false);
+    expect(globalBucket?.attempts).toBe(1);
   });
 
   // Break: punctuation, full-width, or extra whitespace create extra clusters.
@@ -840,5 +964,3 @@ describe('AI analysis and cluster hardening RPCs', () => {
     expect(stored?.config.executionProbe).toBeUndefined();
   });
 });
-
-

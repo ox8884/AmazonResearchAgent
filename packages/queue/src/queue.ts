@@ -121,12 +121,13 @@ export interface JobInsert {
   payload: Json;
   idempotencyKey: string;
   priority: number;
-  availableAt: string;
+  availableAt?: string;
 }
 
 export interface QueueRepository {
   insertJob(input: JobInsert): Promise<string>;
   findJobIdByIdempotencyKey(key: string): Promise<string | null>;
+  terminalizeExpiredExhaustedJobs(): Promise<number>;
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]>;
   completeJob(lease: JobLeaseIdentity, checkpoint: Json): Promise<boolean>;
   failJob(
@@ -215,8 +216,10 @@ export class SupabaseQueueRepository implements QueueRepository {
       payload: input.payload,
       status: 'queued',
       priority: input.priority,
-      available_at: input.availableAt,
-      idempotency_key: input.idempotencyKey
+      idempotency_key: input.idempotencyKey,
+      ...(input.availableAt === undefined
+        ? {}
+        : { available_at: input.availableAt })
     };
     const { data, error } = await this.client
       .from('jobs')
@@ -247,6 +250,20 @@ export class SupabaseQueueRepository implements QueueRepository {
       throw new QueueOperationError('find job', error.code, error.message);
     }
     return data?.id ?? null;
+  }
+
+  async terminalizeExpiredExhaustedJobs(): Promise<number> {
+    const { data, error } = await this.client.rpc(
+      'terminalize_expired_exhausted_jobs'
+    );
+    if (error) {
+      throw new QueueOperationError(
+        'terminalize exhausted expired jobs',
+        error.code,
+        error.message
+      );
+    }
+    return data ?? 0;
   }
 
   async claimJobs(
@@ -347,8 +364,8 @@ export class DurableQueue {
     if (!Number.isInteger(priority)) {
       throw new TypeError('priority must be an integer');
     }
-    const availableAt = input.availableAt ?? new Date().toISOString();
-    if (Number.isNaN(Date.parse(availableAt))) {
+    const availableAt = input.availableAt;
+    if (availableAt !== undefined && Number.isNaN(Date.parse(availableAt))) {
       throw new TypeError('availableAt must be an ISO date-time string');
     }
 
@@ -357,7 +374,7 @@ export class DurableQueue {
       payload: asJson(input.payload),
       idempotencyKey: input.idempotencyKey,
       priority,
-      availableAt
+      ...(availableAt === undefined ? {} : { availableAt })
     };
 
     try {
@@ -378,6 +395,10 @@ export class DurableQueue {
       }
       return existing;
     }
+  }
+
+  async terminalizeExpiredExhaustedJobs(): Promise<number> {
+    return this.repository.terminalizeExpiredExhaustedJobs();
   }
 
   claimJobs(workerId: string, limit: number, leaseSeconds: number): Promise<Job[]> {
