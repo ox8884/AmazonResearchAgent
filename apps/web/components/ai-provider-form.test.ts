@@ -4,6 +4,7 @@ import {
   aiProviderProductFields
 } from '../../../packages/shared/src/i18n';
 import { providerFormKey } from './ai-provider-form-key';
+import { clearProviderTestResult, waitForProviderTest } from './ai-provider-form-model';
 
 
 describe('AI provider form identity', () => {
@@ -50,5 +51,62 @@ describe('product-safe AI provider form', () => {
       roleSelection: true,
       activation: true
     });
+  });
+});
+
+describe('provider test polling', () => {
+  it('rejects a response owned by another test job', async () => {
+    expect(await waitForProviderTest('requested-job', {
+      getResult: async () => ({ jobId: 'other-job', status: 'completed',
+        result: { providerTest: { available: true, models: [] } }, errorCategory: null })
+    })).toEqual({ kind: 'inconclusive' });
+  });
+
+  it('keeps a queued subscription probe inconclusive', async () => {
+    expect(await waitForProviderTest('probe-job', {
+      getResult: async () => ({ jobId: 'probe-job', status: 'completed',
+        result: { providerTest: { available: false, models: [], errorCategory: 'provider_probe_requested' } }, errorCategory: null })
+    })).toEqual({ kind: 'inconclusive' });
+  });
+  it('keeps an expired wait distinct from a failed provider connection', async () => {
+    const result = await waitForProviderTest('job-timeout', {
+      maxAttempts: 1,
+      getResult: async () => ({
+        jobId: 'job-timeout',
+        status: 'running',
+        result: null,
+        errorCategory: null
+      }),
+      pause: async () => undefined
+    });
+
+    expect(result).toEqual({ kind: 'timed_out' });
+  });
+
+  it('returns the completed result only for the tested job', async () => {
+    const result = await waitForProviderTest('job-provider-a', {
+      getResult: async (jobId) => ({
+        jobId,
+        status: 'completed',
+        result: { providerTest: { available: true, models: ['model-a'] } },
+        errorCategory: null
+      }),
+      pause: async () => undefined
+    });
+
+    expect(result).toEqual({
+      kind: 'completed',
+      available: true,
+      models: ['model-a'],
+      errorCategory: null
+    });
+  });
+
+  it('removes only the saved provider result when its settings revision changes', () => {
+    const retained = { kind: 'timed_out' } as const;
+    expect(clearProviderTestResult({
+      'provider-a': { kind: 'completed', available: true, models: ['model-a'], errorCategory: null },
+      'provider-b': retained
+    }, 'provider-a')).toEqual({ 'provider-b': retained });
   });
 });
