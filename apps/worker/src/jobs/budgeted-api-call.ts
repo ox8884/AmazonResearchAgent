@@ -16,6 +16,7 @@ export type BudgetedCallOutcome =
       readonly status: number;
       readonly fromCache: boolean;
       readonly payload: unknown;
+      readonly cacheCapturedAt: string | null;
     };
 
 export interface BudgetedProviderResult {
@@ -26,6 +27,14 @@ export interface BudgetedProviderResult {
 
 function asJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
+}
+
+export function withCacheObservation(payload: unknown, cacheCapturedAt: string | null): Json {
+  const observation = { cacheCapturedAt };
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return asJson({ ...payload, observation });
+  }
+  return asJson({ value: payload, observation });
 }
 
 function parseStaged(staged: unknown): BudgetedProviderResult | null {
@@ -125,7 +134,7 @@ export async function executeBudgetedApiCall(input: {
     case 'cache_hit': {
       const { data: cached } = await input.client
         .from('api_cache')
-        .select('response')
+        .select('response,captured_at')
         .eq('cache_key', input.cacheKey)
         .maybeSingle();
       return {
@@ -133,7 +142,8 @@ export async function executeBudgetedApiCall(input: {
         httpAttempts: 0,
         status: 200,
         fromCache: true,
-        payload: cached?.response ?? null
+        payload: cached?.response ?? null,
+        cacheCapturedAt: cached?.captured_at ?? null
       };
     }
     case 'allowed': {
@@ -153,12 +163,13 @@ export async function executeBudgetedApiCall(input: {
             status: fetched.status
           });
         }
+        const cacheCapturedAt = new Date();
         const { error: cacheError } = await input.client.from('api_cache').upsert({
           cache_key: input.cacheKey,
           endpoint: input.endpoint,
           response: asJson(fetched.payload),
-          captured_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + input.ttlMs).toISOString()
+          captured_at: cacheCapturedAt.toISOString(),
+          expires_at: new Date(cacheCapturedAt.getTime() + input.ttlMs).toISOString()
         });
         if (cacheError) {
           throw new Error(`Could not persist API cache: ${cacheError.message}`);
@@ -181,7 +192,8 @@ export async function executeBudgetedApiCall(input: {
           httpAttempts: fetched.httpAttempts,
           status: fetched.status,
           fromCache: skippedHttp,
-          payload: fetched.payload
+          payload: fetched.payload,
+          cacheCapturedAt: cacheCapturedAt.toISOString()
         };
       } catch (error: unknown) {
         if (error instanceof JungleScoutClientError) {

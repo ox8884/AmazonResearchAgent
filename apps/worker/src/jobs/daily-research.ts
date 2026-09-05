@@ -55,6 +55,7 @@ type EndpointEvidenceRow = {
   readonly created_at: string;
   readonly id: string;
   readonly kind: string;
+  readonly payload: unknown;
 };
 
 const endpointResultEvidenceKind = {
@@ -453,8 +454,11 @@ function missingAdmittedEndpoints(input: {
       );
     }
     const evidenceKind = endpointResultEvidenceKind[endpoint];
-    const observedAt = evidenceKind
-      ? input.endpointEvidence?.get(evidenceKind)?.created_at
+    const endpointEvidence = evidenceKind
+      ? input.endpointEvidence?.get(evidenceKind)
+      : undefined;
+    const observedAt = endpointEvidence
+      ? snapshotCacheObservationAt(endpointEvidence.payload, input.nowMilliseconds)
       : undefined;
     return !isFreshForDuration(
       observedAt,
@@ -534,7 +538,7 @@ async function selectResearchPlan(
       : await collectDailyResearchPages((from, to) =>
           client
             .from('candidate_evidence')
-            .select('id,candidate_id,created_at,kind')
+            .select('id,candidate_id,created_at,kind,payload')
             .in('candidate_id', candidateIds)
             .in('kind', endpointResultEvidenceKinds)
             .order('candidate_id', { ascending: true })
@@ -752,7 +756,7 @@ async function loadMissingAdmittedEndpoints(
     readSettings(client),
     client
       .from('candidate_evidence')
-      .select('id,candidate_id,created_at,kind')
+      .select('id,candidate_id,created_at,kind,payload')
       .eq('candidate_id', candidateId)
       .in('kind', endpointResultEvidenceKinds)
       .order('created_at', { ascending: false })

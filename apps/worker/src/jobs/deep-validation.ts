@@ -1,9 +1,8 @@
 import type { QueueDatabaseClient } from '@ara/queue';
-import type { Json } from '@ara/db';
 import { makeApiCacheKey, type ApiCallPurpose, type Locale } from '@ara/shared';
 import { DEFAULT_CACHE_TTL_MS, type ApiBudget } from '@ara/api-budget';
 import type { KeywordMetrics } from '@ara/jungle-scout';
-import { executeBudgetedApiCall } from './budgeted-api-call';
+import { executeBudgetedApiCall, withCacheObservation } from './budgeted-api-call';
 import {
   assessResearchApiAdmission,
   isExplicitInitialCheck,
@@ -34,10 +33,6 @@ export interface DeepValidationResult {
     | 'deferred_budget'
     | 'in_flight'
     | 'completed';
-}
-
-function asJson(value: unknown): Json {
-  return JSON.parse(JSON.stringify(value)) as Json;
 }
 
 export async function runDeepValidation(
@@ -127,7 +122,7 @@ export async function runDeepValidation(
     const { error: evidenceError } = await dependencies.client.from('candidate_evidence').insert({
       candidate_id: candidate.id,
       kind: 'keyword_metrics',
-      payload: asJson(outcome.payload)
+      payload: withCacheObservation(outcome.payload, outcome.cacheCapturedAt)
     });
     if (evidenceError) {
       throw new Error(`Could not persist keyword evidence: ${evidenceError.message}`);

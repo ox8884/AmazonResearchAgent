@@ -16,7 +16,11 @@ import {
   scoreMarketOpportunity
 } from '@ara/research-engine';
 import { z } from 'zod';
-import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
+import {
+  executeBudgetedApiCall,
+  type BudgetedCallOutcome,
+  withCacheObservation
+} from './budgeted-api-call';
 import { notifyCandidateDecision } from './candidate-notifications';
 import {
   assessResearchApiAdmission,
@@ -108,6 +112,20 @@ function relevantAsinsFrom(payload: unknown): string[] {
         .filter((asin) => asin.length > 0)
     )
   ].sort();
+}
+
+function earliestCacheCapturedAt(capturedAtValues: readonly (string | null)[]): string | null {
+  let earliest: string | null = null;
+  for (const capturedAt of capturedAtValues) {
+    const milliseconds = capturedAt ? Date.parse(capturedAt) : Number.NaN;
+    if (!Number.isFinite(milliseconds)) {
+      return null;
+    }
+    if (earliest === null || milliseconds < Date.parse(earliest)) {
+      earliest = capturedAt;
+    }
+  }
+  return earliest;
 }
 
 async function persistEvidence(
@@ -263,7 +281,12 @@ export async function runEnrichStrongPotential(
       return incomplete(outcome);
     }
     historicalPayload = outcome.payload;
-    await persistEvidence(client, candidateId, 'historical_search_volume', historicalPayload);
+    await persistEvidence(
+      client,
+      candidateId,
+      'historical_search_volume',
+      withCacheObservation(historicalPayload, outcome.cacheCapturedAt)
+    );
     completedRequestedEndpoint = true;
   }
 
@@ -275,6 +298,7 @@ export async function runEnrichStrongPotential(
       dailySales?: number[];
       prices?: number[];
     }> = [];
+    const salesCacheCapturedAts: Array<string | null> = [];
     for (const asin of asins) {
       let outcome: BudgetedCallOutcome;
       try {
@@ -310,6 +334,7 @@ export async function runEnrichStrongPotential(
       if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
         return incomplete(outcome);
       }
+      salesCacheCapturedAts.push(outcome.cacheCapturedAt);
       if (outcome.payload && typeof outcome.payload === 'object' && 'estimates' in outcome.payload) {
         estimates.push(
           ...(outcome.payload as {
@@ -323,7 +348,12 @@ export async function runEnrichStrongPotential(
         );
       }
     }
-    await persistEvidence(client, candidateId, 'sales_estimates', { estimates });
+    await persistEvidence(
+      client,
+      candidateId,
+      'sales_estimates',
+      withCacheObservation({ estimates }, earliestCacheCapturedAt(salesCacheCapturedAts))
+    );
     await persistEvidence(
       client,
       candidateId,
@@ -361,7 +391,12 @@ export async function runEnrichStrongPotential(
     if (outcome.kind === 'deferred_budget' || outcome.kind === 'in_flight') {
       return incomplete(outcome);
     }
-    await persistEvidence(client, candidateId, 'share_of_voice', outcome.payload);
+    await persistEvidence(
+      client,
+      candidateId,
+      'share_of_voice',
+      withCacheObservation(outcome.payload, outcome.cacheCapturedAt)
+    );
     const brands =
       outcome.payload && typeof outcome.payload === 'object' && 'brands' in outcome.payload
         ? (outcome.payload as {

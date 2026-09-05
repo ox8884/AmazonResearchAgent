@@ -6,12 +6,15 @@ import {
   type Job,
   type QueueDatabaseClient
 } from '@ara/queue';
-import { ScheduledMarketProbePayloadSchema } from '@ara/shared';
+import { DEFAULT_CACHE_TTL_MS } from '@ara/api-budget';
+import { makeApiCacheKey, ScheduledMarketProbePayloadSchema } from '@ara/shared';
 import {
   enqueueDailyResearch,
   runDailyResearch,
   type DailyResearchQueue
 } from './daily-research';
+import { runDeepValidation } from './deep-validation';
+import { PostgresApiBudget } from './postgres-api-budget';
 import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -517,7 +520,10 @@ integration('daily research orchestration', () => {
       const { error: keywordEvidenceError } = await client.from('candidate_evidence').insert({
         candidate_id: freshCandidateId,
         kind: 'keyword_metrics',
-        payload: { keyword: `${fixturePrefix}-keyword-fresh` },
+        payload: {
+          keyword: `${fixturePrefix}-keyword-fresh`,
+          observation: { cacheCapturedAt: now.toISOString() }
+        },
         created_at: now.toISOString()
       });
       if (keywordEvidenceError) throw keywordEvidenceError;
@@ -545,6 +551,108 @@ integration('daily research orchestration', () => {
         .in('candidate_id', [missingCandidateId, freshCandidateId]);
       await client.from('candidates').delete().in('id', [missingCandidateId, freshCandidateId]);
       await client.from('import_runs').delete().in('id', [missingImportRunId, freshImportRunId]);
+      const [readyCandidateId, watchCandidateId] = candidateIds;
+      if (readyCandidateId) {
+        await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
+      }
+      if (watchCandidateId) {
+        await client.from('candidates').update({ state: 'Watch' }).eq('id', watchCandidateId);
+      }
+    }
+  });
+
+  it('does not extend keyword freshness after a near-expiry shared cache hit', async () => {
+    const date = `${fixtureYear}-01-07`;
+    const importRunId = randomUUID();
+    const candidateId = randomUUID();
+    const keyword = `${fixturePrefix}-near-expiry-cache`;
+    const cacheKey = makeApiCacheKey({
+      endpoint: 'keywords_by_keyword',
+      marketplace: 'us',
+      phrases: [keyword]
+    });
+    const cacheCapturedAt = new Date(
+      Date.now() - DEFAULT_CACHE_TTL_MS.keywords_by_keyword + 60_000
+    );
+    const cacheExpiresAt = new Date(Date.now() + 60_000);
+    const plannerNow = new Date(Date.now() + 120_000);
+    await cleanupDailyFixtures(client, [date]);
+    await client.from('candidates').update({ state: 'Reject' }).in('id', candidateIds);
+    try {
+      const { error: importError } = await client.from('import_runs').insert({
+        id: importRunId,
+        submission_hash: `${fixturePrefix}-near-expiry-${importRunId}`
+      });
+      if (importError) throw importError;
+      const { error: candidateError } = await client.from('candidates').insert({
+        id: candidateId,
+        import_run_id: importRunId,
+        keyword,
+        normalized_exact_keyword: keyword,
+        state: 'Ready for API Validation',
+        rule_passed: true,
+        preliminary_score: 100
+      });
+      if (candidateError) throw candidateError;
+      await appendResearchBusinessEvidence(client, candidateId, {
+        requestedApiPurposes: ['keywords_by_keyword']
+      });
+      const { error: cacheError } = await client.from('api_cache').upsert({
+        cache_key: cacheKey,
+        endpoint: 'keywords_by_keyword',
+        response: { keyword, monthlySearchVolume: 880, isUpperBound: false },
+        captured_at: cacheCapturedAt.toISOString(),
+        expires_at: cacheExpiresAt.toISOString()
+      });
+      if (cacheError) throw cacheError;
+
+      let queryCalls = 0;
+      const restored = await runDeepValidation(candidateId, 'ko', {
+        client,
+        budget: new PostgresApiBudget(
+          client,
+          { dailyLimit: 20, reservedLimit: 5 },
+          `daily-near-expiry-${candidateId}`
+        ),
+        queryKeyword: async () => {
+          queryCalls += 1;
+          return { keyword, monthlySearchVolume: 1, isUpperBound: false };
+        }
+      });
+      expect(restored).toMatchObject({ completed: true, keywordCalls: 0 });
+      expect(queryCalls).toBe(0);
+
+      const scheduled = await enqueueDailyResearch(client, { logicalRunDate: date });
+      await runDailyResearch(
+        makeOrchestratorJob(randomUUID(), scheduled.researchRunId, date),
+        { client, queue: queueFor(client), now: () => plannerNow }
+      );
+      const { data: children, error: childrenError } = await client
+        .from('jobs')
+        .select('type,payload')
+        .like('idempotency_key', `daily-research:${scheduled.researchRunId}:%`);
+      if (childrenError) throw childrenError;
+      expect(children).toHaveLength(1);
+      expect(children?.[0]).toMatchObject({
+        type: 'DEEP_VALIDATION',
+        payload: { candidateId, locale: 'ko' }
+      });
+      const { data: keywordEvidence, error: keywordEvidenceError } = await client
+        .from('candidate_evidence')
+        .select('payload')
+        .eq('candidate_id', candidateId)
+        .eq('kind', 'keyword_metrics')
+        .maybeSingle();
+      if (keywordEvidenceError) throw keywordEvidenceError;
+      expect(keywordEvidence?.payload).toMatchObject({
+        observation: { cacheCapturedAt: expect.any(String) }
+      });
+    } finally {
+      await cleanupDailyFixtures(client, [date]);
+      await client.from('candidate_evidence').delete().eq('candidate_id', candidateId);
+      await client.from('api_cache').delete().eq('cache_key', cacheKey);
+      await client.from('candidates').delete().eq('id', candidateId);
+      await client.from('import_runs').delete().eq('id', importRunId);
       const [readyCandidateId, watchCandidateId] = candidateIds;
       if (readyCandidateId) {
         await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
