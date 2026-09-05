@@ -27,6 +27,11 @@ import {
 } from '@ara/research-engine';
 import { executeBudgetedApiCall } from './budgeted-api-call';
 import { nextBudgetResetAt } from './budget-reset';
+import {
+  assessResearchApiAdmission,
+  isExplicitInitialCheck,
+  loadResearchBusinessAdmissionContext
+} from './research-business-policy';
 
 export { nextBudgetResetAt };
 export function budgetResumeIdempotencyKey(
@@ -425,6 +430,24 @@ export async function runMarketProbe(
     marketplace: 'us',
     phrases
   });
+  const businessContext = await loadResearchBusinessAdmissionContext(
+    dependencies.client,
+    candidate.id
+  );
+  const admission = assessResearchApiAdmission({
+    assessment: businessContext.assessment,
+    evidence: businessContext.evidence,
+    requestedEndpoint: 'product_database',
+    explicitInitialCheck: isExplicitInitialCheck(
+      businessContext.evidence,
+      'product_database'
+    )
+  });
+  if (!admission.allowed) {
+    const checkpoint = { phase: 'blocked_policy' as const, cacheKey };
+    await dependencies.onCheckpoint?.(checkpoint);
+    return { checkpoint, realCalls: 0 };
+  }
   let evidenceCacheKey = resumedMarketProbeCacheKey(cacheKey, dependencies.checkpoint);
   const priorPhase = dependencies.checkpoint?.phase;
   const canReuseFetchedPage =

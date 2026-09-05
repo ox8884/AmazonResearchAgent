@@ -8,6 +8,7 @@ import { MemoryApiBudget } from '@ara/api-budget';
 import { ProductDatabasePageSchema, type ProductDatabasePage } from '@ara/jungle-scout';
 import { runMarketProbe } from './market-probe';
 import { PostgresApiBudget } from './postgres-api-budget';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -113,6 +114,9 @@ integration('Milestone 3 full-pipeline fixtures', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database']
+    });
     return candidateId;
   }
 

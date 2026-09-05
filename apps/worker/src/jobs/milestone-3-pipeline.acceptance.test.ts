@@ -14,6 +14,7 @@ import { createJobHandlers } from '../handlers';
 import { runJob } from '../main';
 import { runImportJob } from './import-opportunity-csv';
 import { runMarketProbe } from './market-probe';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -123,6 +124,9 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database']
+    });
     return candidateId;
   }
 
@@ -161,6 +165,9 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
       .in('id', candidateIds);
     if (screeningError) throw screeningError;
     if (!pancake) throw new Error('pancake candidate missing');
+    await appendResearchBusinessEvidence(client, pancake, {
+      requestedApiPurposes: ['product_database']
+    });
     await runMarketProbe(
       { candidateId: pancake, locale: 'en' },
       {

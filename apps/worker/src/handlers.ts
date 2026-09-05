@@ -39,6 +39,12 @@ import { runNormalizeJob } from './jobs/normalize-opportunities';
 import { runDailyResearch } from './jobs/daily-research';
 import { PostgresApiBudget } from './jobs/postgres-api-budget';
 import {
+  assessResearchApiAdmission,
+  isExplicitInitialCheck,
+  loadResearchBusinessAdmissionContext,
+  researchBusinessAdmissionIdempotencySuffix
+} from './jobs/research-business-policy';
+import {
   createJungleScoutHistoricalSearchVolumeQuery,
   createJungleScoutKeywordQuery,
   createJungleScoutProductDatabaseQuery,
@@ -244,6 +250,41 @@ export function createJobHandlers(
     };
   }
   const queue = createQueue(client);
+  const enqueueExplicitRequestedFollowups = async (
+    candidateId: string,
+    locale: 'ko' | 'en'
+  ): Promise<void> => {
+    const businessContext = await loadResearchBusinessAdmissionContext(client, candidateId);
+    const suffix = researchBusinessAdmissionIdempotencySuffix(businessContext);
+    if (suffix === null) {
+      return;
+    }
+    const admits = (endpoint: 'keywords_by_keyword' | 'historical_search_volume' | 'sales_estimates' | 'share_of_voice') =>
+      assessResearchApiAdmission({
+        assessment: businessContext.assessment,
+        evidence: businessContext.evidence,
+        requestedEndpoint: endpoint,
+        explicitInitialCheck: isExplicitInitialCheck(businessContext.evidence, endpoint)
+      }).allowed;
+    if (admits('keywords_by_keyword')) {
+      await queue.enqueueJob({
+        type: 'DEEP_VALIDATION',
+        payload: { candidateId, locale },
+        idempotencyKey: `deep-validation:${candidateId}:${suffix}`
+      });
+    }
+    if (
+      admits('historical_search_volume') ||
+      admits('sales_estimates') ||
+      admits('share_of_voice')
+    ) {
+      await queue.enqueueJob({
+        type: 'ENRICH_STRONG_POTENTIAL',
+        payload: { candidateId, locale },
+        idempotencyKey: `enrich-strong:${candidateId}:${suffix}`
+      });
+    }
+  };
   handlers.DAILY_RESEARCH = async (job, context) => {
     const result = await runDailyResearch(job, { client, queue });
     context.setCheckpoint(result);
@@ -294,30 +335,7 @@ export function createJobHandlers(
         onCheckpoint: (value) => context.saveCheckpoint(value)
       }
     );
-    if (result.checkpoint.phase === 'completed') {
-      const { data: probed } = await client
-        .from('candidates')
-        .select('state')
-        .eq('id', payload.candidateId)
-        .maybeSingle();
-      const { data: snapshot } = await client
-        .from('market_snapshots')
-        .select('sample_product_family_count')
-        .eq('candidate_id', payload.candidateId)
-        .order('captured_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (
-        (probed?.state === 'Watch' || probed?.state === 'Needs Review') &&
-        (snapshot?.sample_product_family_count ?? 0) > 0
-      ) {
-        await queue.enqueueJob({
-          type: 'DEEP_VALIDATION',
-          payload: { candidateId: payload.candidateId, locale: payload.locale },
-          idempotencyKey: `deep-validation:${payload.candidateId}`
-        });
-      }
-    }
+    await enqueueExplicitRequestedFollowups(payload.candidateId, payload.locale);
 
     return result.checkpoint;
   };
@@ -340,20 +358,8 @@ export function createJobHandlers(
     });
 
 
-    const { data: deep } = await client
-      .from('candidates')
-      .select('state')
-      .eq('id', payload.candidateId)
-      .maybeSingle();
-    if (
-      result.completed &&
-      (deep?.state === 'Watch' || deep?.state === 'Needs Review')
-    ) {
-      await queue.enqueueJob({
-        type: 'ENRICH_STRONG_POTENTIAL',
-        payload: { candidateId: payload.candidateId, locale: payload.locale },
-        idempotencyKey: `enrich-strong:${payload.candidateId}`
-      });
+    if (result.completed) {
+      await enqueueExplicitRequestedFollowups(payload.candidateId, payload.locale);
     }
     return result;
   };

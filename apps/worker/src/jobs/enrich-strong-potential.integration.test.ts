@@ -4,6 +4,7 @@ import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
 import { JungleScoutClientError } from '@ara/jungle-scout';
 import { runEnrichStrongPotential } from './enrich-strong-potential';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -71,6 +72,9 @@ integration('strong potential enrichment', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume', 'sales_estimates', 'share_of_voice']
+    });
 
     const result = await runEnrichStrongPotential(candidateId, client);
     const { data: evidence } = await client
@@ -128,6 +132,9 @@ integration('strong potential enrichment', () => {
       eligible_for_ai_normalization: false
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume', 'sales_estimates', 'share_of_voice']
+    });
     let calls = 0;
     await runEnrichStrongPotential(candidateId, client, {
       queryHistoricalSearchVolume: async () => {
@@ -182,6 +189,9 @@ integration('strong potential enrichment', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume', 'sales_estimates', 'share_of_voice']
+    });
     const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
     let salesCalls = 0;
     await runEnrichStrongPotential(candidateId, client, {
@@ -263,6 +273,9 @@ integration('strong potential enrichment', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume', 'sales_estimates', 'share_of_voice']
+    });
     await client.from('candidate_evidence').insert({
       candidate_id: candidateId,
       kind: 'relevant_asins',
@@ -332,6 +345,9 @@ integration('strong potential enrichment', () => {
       preliminary_score_components: {},
       eligible_for_ai_normalization: true
     });
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume']
+    });
     const resumes: string[] = [];
     let calls = 0;
     const result = await runEnrichStrongPotential(candidateId, client, {
@@ -349,7 +365,7 @@ integration('strong potential enrichment', () => {
     expect(resumes).toHaveLength(1);
   });
 
-  it('persists strong_potential as analysis verdict without Strong candidate state', async () => {
+  it('does not treat a numeric economics marker as validated commercial approval', async () => {
     const importRunId = randomUUID();
     const rawId = randomUUID();
     const candidateId = randomUUID();
@@ -390,6 +406,9 @@ integration('strong potential enrichment', () => {
       preliminary_score_components: {},
       eligible_for_ai_normalization: true
     });
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['historical_search_volume']
+    });
     await client.from('market_snapshots').insert({
       candidate_id: candidateId,
       observed_sample_sales: 2000,
@@ -427,7 +446,12 @@ integration('strong potential enrichment', () => {
       payload: { salePrice: 29.99, amazonFees: 10.33, economicsSource: 'supplier_verified' }
     });
     const result = await runEnrichStrongPotential(candidateId, client, {
-      budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 })
+      budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
+      queryHistoricalSearchVolume: async () => ({
+        data: { keyword: 'faucet mat', points: [] },
+        httpAttempts: 1,
+        status: 200
+      })
     });
     const { data: candidate } = await client
       .from('candidates')
@@ -440,10 +464,10 @@ integration('strong potential enrichment', () => {
       .eq('candidate_id', candidateId)
       .eq('kind', 'analysis_verdict')
       .maybeSingle();
-    expect(result.analysisVerdict).toBe('strong_potential');
+    expect(result.analysisVerdict).toBe('Needs Review');
     expect(result.completed).toBe(true);
-    expect(candidate?.state).toBe('Watch');
-    expect(verdict?.payload).toMatchObject({ verdict: 'strong_potential', candidateState: 'Watch' });
+    expect(candidate?.state).toBe('Needs Review');
+    expect(verdict?.payload).toMatchObject({ verdict: 'Needs Review', candidateState: 'Needs Review' });
   });
 });
 

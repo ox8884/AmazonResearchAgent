@@ -368,6 +368,38 @@ describe('daily research orchestration', () => {
             })
           };
         }
+        if (table === 'app_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: {
+                    launch_budget_usd: 3000,
+                    minimum_pre_ad_margin_pct: 35,
+                    minimum_post_ad_margin_pct: 35,
+                    minimum_roi_pct: 150
+                  },
+                  error: null
+                })
+              })
+            })
+          };
+        }
+        if (table === 'candidate_evidence') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  order: () => ({
+                    order: () => ({
+                      limit: async () => ({ data: [], error: null })
+                    })
+                  })
+                })
+              })
+            })
+          };
+        }
         return {
           insert: async () => ({ data: null, error: null })
         };

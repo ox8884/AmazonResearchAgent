@@ -8,6 +8,8 @@ import {
   DailyResearchCheckpointSchema,
   DailyResearchJobPayloadSchema,
   DailyResearchSelectedCandidateIdsSchema,
+  DeepValidationJobPayloadSchema,
+  EnrichStrongPotentialJobPayloadSchema,
   LocaleSchema,
   LogicalRunDateSchema,
   ResearchSettingsSchema,
@@ -27,6 +29,12 @@ import {
 } from '@ara/research-engine';
 import type { EnqueueJobInput, Job, QueueDatabaseClient } from '@ara/queue';
 import { createQueue, type DurableQueue } from '@ara/queue';
+import {
+  assessResearchApiAdmission,
+  isExplicitInitialCheck,
+  loadResearchBusinessAdmissionContext,
+  researchBusinessAdmissionIdempotencySuffix
+} from './research-business-policy';
 const CHICAGO_TIMEZONE = 'America/Chicago';
 const HOURS_TO_MILLISECONDS = 60 * 60 * 1_000;
 const DAILY_RESEARCH_PAGE_SIZE = 500;
@@ -384,7 +392,27 @@ async function selectResearchPlan(
       .range(from, to)
   );
 
-  const candidateIds = candidates.map((candidate) => candidate.id);
+  const actionableCandidates: Array<(typeof candidates)[number]> = [];
+  for (const candidate of candidates) {
+    const businessContext = await loadResearchBusinessAdmissionContext(client, candidate.id, now);
+    const requestedEndpoints = businessContext.evidence?.requestedApiPurposes ?? [];
+    const hasActionableEndpoint = requestedEndpoints.some((requestedEndpoint) =>
+      assessResearchApiAdmission({
+        assessment: businessContext.assessment,
+        evidence: businessContext.evidence,
+        requestedEndpoint,
+        explicitInitialCheck: isExplicitInitialCheck(
+          businessContext.evidence,
+          requestedEndpoint
+        )
+      }).allowed
+    );
+    if (hasActionableEndpoint) {
+      actionableCandidates.push(candidate);
+    }
+  }
+
+  const candidateIds = actionableCandidates.map((candidate) => candidate.id);
   const evidenceRows =
     candidateIds.length === 0
       ? []
@@ -437,7 +465,7 @@ async function selectResearchPlan(
   }
 
   const nowMilliseconds = now.getTime();
-  const dailyCandidates = candidates.map((candidate) => {
+  const dailyCandidates = actionableCandidates.map((candidate) => {
     const strongEvidence = latestEvidence.get(candidate.id);
     const isStrong = strongEvidence
       ? AnalysisVerdictEvidenceSchema.safeParse(strongEvidence.payload).success
@@ -596,6 +624,64 @@ function childPayload(
   });
 }
 
+async function enqueueDecisionAwareChild(
+  client: QueueDatabaseClient,
+  queue: DailyResearchQueue,
+  item: ResearchPlanItem,
+  locale: DailyResearchJobPayload['locale'],
+  researchRunId: string,
+  mode: string | undefined
+): Promise<void> {
+  const businessContext = await loadResearchBusinessAdmissionContext(client, item.id);
+  const admits = (
+    endpoint:
+      | 'product_database'
+      | 'keywords_by_keyword'
+      | 'historical_search_volume'
+      | 'sales_estimates'
+      | 'share_of_voice'
+  ) =>
+    assessResearchApiAdmission({
+      assessment: businessContext.assessment,
+      evidence: businessContext.evidence,
+      requestedEndpoint: endpoint,
+      explicitInitialCheck: isExplicitInitialCheck(businessContext.evidence, endpoint)
+    }).allowed;
+
+  const idempotencyPrefix = `daily-research:${researchRunId}:${item.bucket}:${item.id}`;
+  if (admits('product_database')) {
+    await queue.enqueueJob({
+      type: 'MARKET_PROBE',
+      payload: childPayload(item, locale, researchRunId, mode),
+      idempotencyKey: idempotencyPrefix
+    });
+    return;
+  }
+
+  const suffix = researchBusinessAdmissionIdempotencySuffix(businessContext);
+  if (suffix === null) {
+    return;
+  }
+  if (admits('keywords_by_keyword')) {
+    await queue.enqueueJob({
+      type: 'DEEP_VALIDATION',
+      payload: DeepValidationJobPayloadSchema.parse({ candidateId: item.id, locale }),
+      idempotencyKey: `${idempotencyPrefix}:deep:${suffix}`
+    });
+  }
+  if (
+    admits('historical_search_volume') ||
+    admits('sales_estimates') ||
+    admits('share_of_voice')
+  ) {
+    await queue.enqueueJob({
+      type: 'ENRICH_STRONG_POTENTIAL',
+      payload: EnrichStrongPotentialJobPayloadSchema.parse({ candidateId: item.id, locale }),
+      idempotencyKey: `${idempotencyPrefix}:enrich:${suffix}`
+    });
+  }
+}
+
 async function enqueueEligibleNormalizationJobs(
   client: QueueDatabaseClient,
   locale: Locale
@@ -735,12 +821,22 @@ export async function runDailyResearch(
     if (enqueuedCandidateIds.has(item.id)) {
       continue;
     }
-    const payloadForChild = childPayload(item, payload.locale, run.id, run.mode);
-    await dependencies.queue.enqueueJob({
-      type: 'MARKET_PROBE',
-      payload: payloadForChild,
-      idempotencyKey: `daily-research:${run.id}:${item.bucket}:${item.id}`
-    });
+    if (dependencies.client) {
+      await enqueueDecisionAwareChild(
+        dependencies.client,
+        dependencies.queue,
+        item,
+        payload.locale,
+        run.id,
+        run.mode
+      );
+    } else {
+      await dependencies.queue.enqueueJob({
+        type: 'MARKET_PROBE',
+        payload: childPayload(item, payload.locale, run.id, run.mode),
+        idempotencyKey: `daily-research:${run.id}:${item.bucket}:${item.id}`
+      });
+    }
     enqueuedCandidateIds.add(item.id);
     checkpoint = {
       phase: 'fanout',

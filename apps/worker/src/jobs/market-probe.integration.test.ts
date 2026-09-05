@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServerDatabaseClient } from '@ara/db';
+import { createResearchSettingsRepository, createServerDatabaseClient } from '@ara/db';
 import { DEFAULT_CACHE_TTL_MS, MemoryApiBudget, type ApiBudget } from '@ara/api-budget';
 import {
   JungleScoutClient,
@@ -19,6 +19,7 @@ import { createJobHandlers } from '../handlers';
 import { runJob } from '../main';
 import { runMarketProbe } from './market-probe';
 import { PostgresApiBudget } from './postgres-api-budget';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 
@@ -131,6 +132,9 @@ integration('market probe job', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database']
+    });
     return { candidateId };
   }
   async function seedExpandableCandidate(): Promise<{
@@ -196,6 +200,9 @@ integration('market probe job', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database']
+    });
     return { candidateId, literalPhrases, expandedPhrases };
   }
   async function resetDailyBudget(): Promise<void> {
@@ -263,6 +270,88 @@ integration('market probe job', () => {
     expect(usage).toHaveLength(1);
     expect(snapshot?.observed_sample_sales).toBeGreaterThan(0);
     expect(snapshot?.estimated_market_sales).toBeNull();
+  });
+
+  it('does not call Product Database while the latest business evidence awaits a quote', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    await appendResearchBusinessEvidence(client, candidateId, {
+      disposition: 'awaiting_quote',
+      requestedApiPurposes: ['product_database']
+    });
+    let calls = 0;
+
+    const result = await runMarketProbe(
+      { candidateId, locale: 'ko' },
+      {
+        client,
+        budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
+        queryProductDatabase: async () => {
+          calls += 1;
+          return { page: fixture, httpAttempts: 1, status: 200 };
+        }
+      }
+    );
+
+    expect(result.checkpoint.phase).toBe('blocked_policy');
+    expect(calls).toBe(0);
+  });
+
+  it('blocks a stricter-settings stale request, then resumes from durable cache without changing evidence', async () => {
+    const { candidateId } = await seedSinkCandidate();
+    const settings = createResearchSettingsRepository(client);
+    const originalSettings = await settings.read();
+    await settings.save({ ...originalSettings, launchBudgetUsd: 4_000 });
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database'],
+      launchCashUsd: 3_500
+    });
+    let calls = 0;
+    const query = async () => {
+      calls += 1;
+      return { page: fixture, httpAttempts: 1, status: 200 };
+    };
+
+    try {
+      const first = await runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget: new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, `settings-open-${candidateId}`),
+          queryProductDatabase: query
+        }
+      );
+      await settings.save({ ...originalSettings, launchBudgetUsd: 3_000 });
+      const blocked = await runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget: new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, `settings-blocked-${candidateId}`),
+          queryProductDatabase: query
+        }
+      );
+      await settings.save({ ...originalSettings, launchBudgetUsd: 4_000 });
+      const resumed = await runMarketProbe(
+        { candidateId, locale: 'ko' },
+        {
+          client,
+          budget: new PostgresApiBudget(client, { dailyLimit: 20, reservedLimit: 5 }, `settings-resume-${candidateId}`),
+          queryProductDatabase: query
+        }
+      );
+      const { data: usage } = await client
+        .from('api_usage')
+        .select('id')
+        .eq('candidate_id', candidateId)
+        .eq('endpoint', 'product_database');
+
+      expect(first.realCalls).toBe(1);
+      expect(blocked.checkpoint.phase).toBe('blocked_policy');
+      expect(resumed.realCalls).toBe(0);
+      expect(calls).toBe(1);
+      expect(usage).toHaveLength(1);
+    } finally {
+      await settings.save(originalSettings);
+    }
   });
 
   it('does not spend unreserved retries when Product Database would recover later', async () => {

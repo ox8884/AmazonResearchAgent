@@ -12,6 +12,7 @@ import {
   runDailyResearch,
   type DailyResearchQueue
 } from './daily-research';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -203,6 +204,9 @@ integration('daily research orchestration', () => {
         rule_passed: true
       });
       if (candidateError) throw candidateError;
+      await appendResearchBusinessEvidence(client, candidateId, {
+        requestedApiPurposes: ['product_database']
+      });
     }
 
     const strongCandidateId = candidateIds[1];
@@ -353,6 +357,115 @@ integration('daily research orchestration', () => {
       .single();
     if (repairedError) throw repairedError;
     fixtureSettings = repaired;
+  });
+
+  it('records a completed no-work run when only a candidate without business endpoint intent remains actionable by state', async () => {
+    const date = `${fixtureYear}-01-04`;
+    const importRunId = randomUUID();
+    const candidateId = randomUUID();
+    await cleanupDailyFixtures(client, [date]);
+    await client.from('candidates').update({ state: 'Reject' }).in('id', candidateIds);
+    try {
+      const { error: importError } = await client.from('import_runs').insert({
+        id: importRunId,
+        submission_hash: `${fixturePrefix}-no-business-${importRunId}`
+      });
+      if (importError) throw importError;
+      const { error: candidateError } = await client.from('candidates').insert({
+        id: candidateId,
+        import_run_id: importRunId,
+        keyword: `${fixturePrefix}-no-business`,
+        normalized_exact_keyword: `${fixturePrefix}-no-business`,
+        state: 'Ready for API Validation',
+        rule_passed: true,
+        preliminary_score: 100
+      });
+      if (candidateError) throw candidateError;
+      const scheduled = await enqueueDailyResearch(client, { logicalRunDate: date });
+      await runDailyResearch(
+        makeOrchestratorJob(randomUUID(), scheduled.researchRunId, date),
+        { client, queue: queueFor(client), now: () => new Date('2099-01-04T12:00:00.000Z') }
+      );
+      const { data: run, error: runError } = await client
+        .from('research_runs')
+        .select('status,selected_candidate_ids')
+        .eq('id', scheduled.researchRunId)
+        .single();
+      if (runError) throw runError;
+      const { data: children, error: childrenError } = await client
+        .from('jobs')
+        .select('id')
+        .like('idempotency_key', `daily-research:${scheduled.researchRunId}:%`);
+      if (childrenError) throw childrenError;
+      expect(run).toMatchObject({ status: 'completed', selected_candidate_ids: [] });
+      expect(children).toHaveLength(0);
+    } finally {
+      await cleanupDailyFixtures(client, [date]);
+      await client.from('candidates').delete().eq('id', candidateId);
+      await client.from('import_runs').delete().eq('id', importRunId);
+      const [readyCandidateId, watchCandidateId] = candidateIds;
+      if (readyCandidateId) {
+        await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
+      }
+      if (watchCandidateId) {
+        await client.from('candidates').update({ state: 'Watch' }).eq('id', watchCandidateId);
+      }
+    }
+  });
+
+  it('routes a keyword-only business request straight to deep validation without Product Database', async () => {
+    const date = `${fixtureYear}-01-05`;
+    const importRunId = randomUUID();
+    const candidateId = randomUUID();
+    await cleanupDailyFixtures(client, [date]);
+    await client.from('candidates').update({ state: 'Reject' }).in('id', candidateIds);
+    try {
+      const { error: importError } = await client.from('import_runs').insert({
+        id: importRunId,
+        submission_hash: `${fixturePrefix}-keyword-only-${importRunId}`
+      });
+      if (importError) throw importError;
+      const { error: candidateError } = await client.from('candidates').insert({
+        id: candidateId,
+        import_run_id: importRunId,
+        keyword: `${fixturePrefix}-keyword-only`,
+        normalized_exact_keyword: `${fixturePrefix}-keyword-only`,
+        state: 'Ready for API Validation',
+        rule_passed: true,
+        preliminary_score: 100
+      });
+      if (candidateError) throw candidateError;
+      await appendResearchBusinessEvidence(client, candidateId, {
+        requestedApiPurposes: ['keywords_by_keyword']
+      });
+      const scheduled = await enqueueDailyResearch(client, { logicalRunDate: date });
+      await runDailyResearch(
+        makeOrchestratorJob(randomUUID(), scheduled.researchRunId, date),
+        { client, queue: queueFor(client), now: () => new Date('2099-01-05T12:00:00.000Z') }
+      );
+      const { data: children, error: childrenError } = await client
+        .from('jobs')
+        .select('type,payload')
+        .like('idempotency_key', `daily-research:${scheduled.researchRunId}:%`);
+      if (childrenError) throw childrenError;
+      expect(children).toHaveLength(1);
+      expect(children?.[0]).toMatchObject({
+        type: 'DEEP_VALIDATION',
+        payload: { candidateId, locale: 'ko' }
+      });
+    } finally {
+      await cleanupDailyFixtures(client, [date]);
+      await client.from('candidate_evidence').delete().eq('candidate_id', candidateId);
+      await client.from('candidates').delete().eq('id', candidateId);
+      await client.from('import_runs').delete().eq('id', importRunId);
+      const [readyCandidateId, watchCandidateId] = candidateIds;
+      if (readyCandidateId) {
+        await client.from('candidates').update({ state: 'Ready for API Validation' }).eq('id', readyCandidateId);
+      }
+      if (watchCandidateId) {
+        await client.from('candidates').update({ state: 'Watch' }).eq('id', watchCandidateId);
+      }
+    }
   });
 
   // Break: fixture cleanup deletes another run’s scheduled lock just because the dates overlap.

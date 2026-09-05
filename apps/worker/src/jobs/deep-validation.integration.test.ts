@@ -3,12 +3,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
 import { JungleScoutClientError } from '@ara/jungle-scout';
-import { makeApiCacheKey } from '@ara/shared';
+import { makeApiCacheKey, type JungleScoutEndpoint } from '@ara/shared';
 import type { Job } from '@ara/queue';
 import { createQueue } from '@ara/queue';
 import { createJobHandlers } from '../handlers';
 import { runDeepValidation } from './deep-validation';
 import { PostgresApiBudget } from './postgres-api-budget';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,7 +32,10 @@ integration('deep validation job', () => {
     }
   });
 
-  async function seedCandidate(state: 'Reject' | 'Watch'): Promise<{
+  async function seedCandidate(
+    state: 'Reject' | 'Watch',
+    requestedApiPurposes: readonly JungleScoutEndpoint[] = ['keywords_by_keyword']
+  ): Promise<{
     readonly candidateId: string;
     readonly keyword: string;
   }> {
@@ -79,6 +83,9 @@ integration('deep validation job', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes
+    });
     return { candidateId, keyword };
   }
 
@@ -95,7 +102,10 @@ integration('deep validation job', () => {
   });
 
   it('enqueues exactly one ENRICH_STRONG_POTENTIAL for Watch', async () => {
-    const { candidateId } = await seedCandidate('Watch');
+    const { candidateId } = await seedCandidate('Watch', [
+      'keywords_by_keyword',
+      'historical_search_volume'
+    ]);
     const handlers = createJobHandlers(client, {
       apiBudget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
       queryKeyword: async () => ({
@@ -139,7 +149,7 @@ integration('deep validation job', () => {
     const { data: jobs } = await client
       .from('jobs')
       .select('id,type')
-      .eq('idempotency_key', `enrich-strong:${candidateId}`);
+      .like('idempotency_key', `enrich-strong:${candidateId}:%`);
     expect(jobs).toHaveLength(1);
     expect(jobs?.[0]?.type).toBe('ENRICH_STRONG_POTENTIAL');
     await client.from('jobs').delete().eq('id', jobs?.[0]?.id ?? '');

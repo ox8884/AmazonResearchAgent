@@ -4,6 +4,11 @@ import { makeApiCacheKey, type ApiCallPurpose, type Locale } from '@ara/shared';
 import { DEFAULT_CACHE_TTL_MS, type ApiBudget } from '@ara/api-budget';
 import type { KeywordMetrics } from '@ara/jungle-scout';
 import { executeBudgetedApiCall } from './budgeted-api-call';
+import {
+  assessResearchApiAdmission,
+  isExplicitInitialCheck,
+  loadResearchBusinessAdmissionContext
+} from './research-business-policy';
 
 export interface DeepValidationDependencies {
   readonly client: QueueDatabaseClient;
@@ -51,12 +56,30 @@ export async function runDeepValidation(
   if (
     candidate.state === 'Reject' ||
     candidate.state === 'Waiting for API Budget' ||
-    (candidate.state !== 'Watch' && candidate.state !== 'Needs Review')
+    (candidate.state !== 'Ready for API Validation' &&
+      candidate.state !== 'Watch' &&
+      candidate.state !== 'Needs Review')
   ) {
     return { keywordCalls: 0, completed: false, outcome: 'skipped' };
   }
   if (!dependencies.budget || !dependencies.queryKeyword) {
     return { keywordCalls: 0, completed: false, outcome: 'skipped' };
+  }
+  const businessContext = await loadResearchBusinessAdmissionContext(
+    dependencies.client,
+    candidate.id
+  );
+  const admission = assessResearchApiAdmission({
+    assessment: businessContext.assessment,
+    evidence: businessContext.evidence,
+    requestedEndpoint: 'keywords_by_keyword',
+    explicitInitialCheck: isExplicitInitialCheck(
+      businessContext.evidence,
+      'keywords_by_keyword'
+    )
+  });
+  if (!admission.allowed) {
+    return { keywordCalls: 0, completed: false, outcome: 'blocked_policy' };
   }
 
   const cacheKey = makeApiCacheKey({

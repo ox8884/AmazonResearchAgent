@@ -9,6 +9,7 @@ import { ProductDatabasePageSchema } from '@ara/jungle-scout';
 import type { Job } from '@ara/queue';
 import { createJobHandlers, resolveJobHandler } from '../handlers';
 import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
+import { appendResearchBusinessEvidence } from './research-business-test-support';
 
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -172,6 +173,9 @@ integration('production MARKET_PROBE wiring', () => {
       eligible_for_ai_normalization: true
     });
     if (candidateError) throw candidateError;
+    await appendResearchBusinessEvidence(client, candidateId, {
+      requestedApiPurposes: ['product_database']
+    });
     return { candidateId };
   }
 
@@ -203,22 +207,11 @@ integration('production MARKET_PROBE wiring', () => {
     expect(mock.hits()).toBe(1);
     expect(checkpoint).toMatchObject({ phase: 'completed' });
     expect(families?.length ?? 0).toBeGreaterThan(0);
-    const { data: probed } = await client
-      .from('candidates')
-      .select('state')
-      .eq('id', candidateId)
-      .single();
     const { data: deepJobs } = await client
       .from('jobs')
       .select('id,type')
-      .eq('idempotency_key', `deep-validation:${candidateId}`);
-    if (probed?.state === 'Watch' || probed?.state === 'Needs Review') {
-      expect(deepJobs).toHaveLength(1);
-      expect(deepJobs?.[0]?.type).toBe('DEEP_VALIDATION');
-    } else {
-      expect(deepJobs ?? []).toHaveLength(0);
-    }
-    await client.from('jobs').delete().eq('idempotency_key', `deep-validation:${candidateId}`);
+      .like('idempotency_key', `deep-validation:${candidateId}:%`);
+    expect(deepJobs ?? []).toHaveLength(0);
   });
 
   // Break: missing Jungle Scout env crashes the worker or leaks a secret.

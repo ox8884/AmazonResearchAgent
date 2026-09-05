@@ -18,6 +18,11 @@ import {
 import { z } from 'zod';
 import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
 import { notifyCandidateDecision } from './candidate-notifications';
+import {
+  assessResearchApiAdmission,
+  isExplicitInitialCheck,
+  loadResearchBusinessAdmissionContext
+} from './research-business-policy';
 
 // allow: SIZE_OK — this module is one sequential, resumable enrichment state machine.
 
@@ -159,7 +164,11 @@ export async function runEnrichStrongPotential(
   if (error || !candidate) {
     throw new Error('Enrichment candidate was not found.');
   }
-  if (candidate.state !== 'Watch' && candidate.state !== 'Needs Review') {
+  if (
+    candidate.state !== 'Ready for API Validation' &&
+    candidate.state !== 'Watch' &&
+    candidate.state !== 'Needs Review'
+  ) {
     return {
       differentiationMode: 'missing',
       completed: false,
@@ -179,6 +188,14 @@ export async function runEnrichStrongPotential(
       salesAsins: []
     };
   }
+  const businessContext = await loadResearchBusinessAdmissionContext(client, candidate.id);
+  const admissionFor = (endpoint: 'historical_search_volume' | 'sales_estimates' | 'share_of_voice') =>
+    assessResearchApiAdmission({
+      assessment: businessContext.assessment,
+      evidence: businessContext.evidence,
+      requestedEndpoint: endpoint,
+      explicitInitialCheck: isExplicitInitialCheck(businessContext.evidence, endpoint)
+    });
 
   let asins = options.asins ? [...options.asins] : [];
   if (asins.length === 0) {
@@ -216,7 +233,8 @@ export async function runEnrichStrongPotential(
   };
 
   let historicalPayload: unknown;
-  if (options.queryHistoricalSearchVolume) {
+  let completedRequestedEndpoint = false;
+  if (options.queryHistoricalSearchVolume && admissionFor('historical_search_volume').allowed) {
     const queryHistorical = options.queryHistoricalSearchVolume;
     const outcome = await runEndpoint({
       client,
@@ -246,9 +264,10 @@ export async function runEnrichStrongPotential(
     }
     historicalPayload = outcome.payload;
     await persistEvidence(client, candidateId, 'historical_search_volume', historicalPayload);
+    completedRequestedEndpoint = true;
   }
 
-  if (options.querySalesEstimates && asins.length > 0) {
+  if (options.querySalesEstimates && asins.length > 0 && admissionFor('sales_estimates').allowed) {
     const querySales = options.querySalesEstimates;
     const estimates: Array<{
       asin: string;
@@ -311,9 +330,10 @@ export async function runEnrichStrongPotential(
       'sales_estimates_analysis',
       analyzeSalesEstimates({ estimates })
     );
+    completedRequestedEndpoint = true;
   }
 
-  if (options.queryShareOfVoice) {
+  if (options.queryShareOfVoice && admissionFor('share_of_voice').allowed) {
     const queryShare = options.queryShareOfVoice;
     const outcome = await runEndpoint({
       client,
@@ -354,6 +374,16 @@ export async function runEnrichStrongPotential(
       'share_of_voice_analysis',
       analyzeShareOfVoice({ brands })
     );
+    completedRequestedEndpoint = true;
+  }
+
+  if (!completedRequestedEndpoint) {
+    return {
+      differentiationMode: 'missing',
+      completed: false,
+      analysisVerdict: null,
+      salesAsins: asins
+    };
   }
 
   if (historicalPayload && typeof historicalPayload === 'object' && 'points' in historicalPayload) {
@@ -383,23 +413,8 @@ export async function runEnrichStrongPotential(
     .eq('candidate_id', candidateId)
     .eq('kind', 'review_text')
     .maybeSingle();
-  const { data: verifiedEconomics } = await client
-    .from('candidate_evidence')
-    .select('payload')
-    .eq('candidate_id', candidateId)
-    .eq('kind', 'economics_verified')
-    .maybeSingle();
   const differentiationMode = reviewEvidence ? 'review_text' : 'missing';
-  const verified =
-    verifiedEconomics?.payload &&
-    typeof verifiedEconomics.payload === 'object' &&
-    'salePrice' in verifiedEconomics.payload &&
-    'amazonFees' in verifiedEconomics.payload
-      ? (verifiedEconomics.payload as { salePrice: unknown; amazonFees: unknown })
-      : null;
-  const marginProvisional = !(
-    typeof verified?.salePrice === 'number' && typeof verified.amazonFees === 'number'
-  );
+  const marginProvisional = businessContext.assessment.stage !== 'purchase_review';
 
   const { data: snapshot } = await client
     .from('market_snapshots')
