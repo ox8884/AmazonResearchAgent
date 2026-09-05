@@ -2,6 +2,12 @@ export { createServerDatabaseClient } from './client';
 export type { ServerDatabaseConfig } from './client';
 
 export {
+  createResearchSettingsRepository,
+  ResearchSettingsRepositoryError
+} from './research-settings-repository';
+export type { ResearchSettingsRepository } from './research-settings-repository';
+
+export {
   createProviderRepository,
   ProviderRepositoryError
 } from './provider-repository';

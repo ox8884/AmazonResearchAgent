@@ -738,9 +738,13 @@ export type Database = {
           created_at: string
           daily_api_budget: number
           id: boolean
+          launch_budget_usd: number
           locale: string
           manual_api_reserve: number
           manual_reserve_enabled: boolean
+          minimum_post_ad_margin_pct: number
+          minimum_pre_ad_margin_pct: number
+          minimum_roi_pct: number
           new_freshness_hours: number
           new_percent: number
           notification_locale: string | null
@@ -757,9 +761,13 @@ export type Database = {
           created_at?: string
           daily_api_budget?: number
           id?: boolean
+          launch_budget_usd?: number
           locale?: string
           manual_api_reserve?: number
           manual_reserve_enabled?: boolean
+          minimum_post_ad_margin_pct?: number
+          minimum_pre_ad_margin_pct?: number
+          minimum_roi_pct?: number
           new_freshness_hours?: number
           new_percent?: number
           notification_locale?: string | null
@@ -776,9 +784,13 @@ export type Database = {
           created_at?: string
           daily_api_budget?: number
           id?: boolean
+          launch_budget_usd?: number
           locale?: string
           manual_api_reserve?: number
           manual_reserve_enabled?: boolean
+          minimum_post_ad_margin_pct?: number
+          minimum_pre_ad_margin_pct?: number
+          minimum_roi_pct?: number
           new_freshness_hours?: number
           new_percent?: number
           notification_locale?: string | null
