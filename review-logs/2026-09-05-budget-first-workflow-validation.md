@@ -13,7 +13,8 @@
 - Production browser `business-workflow` final-capture run: 4 passed, 2 intentional historical-capture skips. It saved/reloaded quote wait and coverage, asserted GET-only criteria refresh with zero business POST, and captured 24 final PNGs without CSP bypass.
 - Production browser `ai-settings`: 7 passed after scoping localized subscription statuses to their product card; existing secret/write-only, malformed-response, test, and disable checks remain present.
 - The immediately preceding all-project browser batch passed 16 tests with 3 intentional capture skips; its one stale duplicate-text assertion was fixed above and targeted re-run passed. It includes auth redirects, imports, dashboard locale, and Research Now checks.
-- Parent’s local release evidence records Linux worker unit `23 files / 181 tests` pass with LF-pinned archive. Windows isolated DB worker acceptance remains the local integration boundary.
+- `SUPABASE_SERVICE_ROLE_KEY=local-public-fixture-bootstrap pnpm test` in `apps/worker`: 34 files / 252 tests passed / 5 skipped in run-owned REST DBs. The extended milestone acceptance uses the real `page-1.csv` parser through `runImportJob`, appends business evidence, calls a loopback Jungle Scout HTTP wire exactly once, persists its relevant-ASIN result and `api_usage`, appends `awaiting_quote`, then proves zero repeat wire/API usage.
+- That full worker suite also exercises the existing stale/malformed admission, budget/atomicity/cache, and provider/model-attribution regressions. The only two failures are the documented Windows CRLF subscription policy digests; no digest source or expectation was weakened. Parent’s LF-pinned Linux worker unit evidence is 23 files / 181 tests passed.
 
 ## Evidence
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,6 +8,8 @@ import { createServerDatabaseClient } from '@ara/db';
 import { MemoryApiBudget } from '@ara/api-budget';
 import {
   ProductDatabasePageSchema,
+  JungleScoutClient,
+  queryProductDatabase,
   type ProductDatabasePage
 } from '@ara/jungle-scout';
 import { createQueue } from '@ara/queue';
@@ -15,6 +18,7 @@ import { runJob } from '../main';
 import { runImportJob } from './import-opportunity-csv';
 import { runMarketProbe } from './market-probe';
 import { appendResearchBusinessEvidence } from './research-business-test-support';
+import { listenOnFetchSafeLoopback } from '../../../../test-harness/safe-loopback-server.mjs';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -130,7 +134,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     return candidateId;
   }
 
-  it('imports Opportunity Finder page-1.csv then probes the batter-dispenser cluster', async () => {
+  it('imports CSV through runImportJob, persists one wire result, then quote-wait blocks a repeat', async () => {
     const { data: run, error: runError } = await client
       .from('import_runs')
       .insert({
@@ -168,14 +172,49 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     await appendResearchBusinessEvidence(client, pancake, {
       requestedApiPurposes: ['product_database']
     });
-    await runMarketProbe(
-      { candidateId: pancake, locale: 'en' },
-      {
-        client,
-        budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
-        queryProductDatabase: async () => ({ page: batter, httpAttempts: 1, status: 200 })
-      }
-    );
+    let wireHits = 0;
+    const server = createServer((_request, response) => {
+      wireHits += 1;
+      response.setHeader('content-type', 'application/vnd.api+json');
+      response.end(JSON.stringify(batter));
+    });
+    const address = await listenOnFetchSafeLoopback(server);
+    const wireClient = new JungleScoutClient({ keyName: 'AI', apiKey: 'local-wire-only', baseUrl: address.url });
+    const queryProductDatabaseWire = (phrases: readonly string[]) =>
+      queryProductDatabase(wireClient, { marketplace: 'us', phrases: [...phrases] });
+    try {
+      const first = await runMarketProbe(
+        { candidateId: pancake, locale: 'en' },
+        {
+          client,
+          budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
+          queryProductDatabase: queryProductDatabaseWire
+        }
+      );
+      expect(first).toMatchObject({ checkpoint: { phase: 'completed' }, realCalls: 1 });
+      await appendResearchBusinessEvidence(client, pancake, {
+        disposition: 'awaiting_quote',
+        requestedApiPurposes: ['product_database']
+      });
+      const second = await runMarketProbe(
+        { candidateId: pancake, locale: 'en' },
+        {
+          client,
+          budget: new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 }),
+          queryProductDatabase: queryProductDatabaseWire
+        }
+      );
+      expect(second).toMatchObject({ checkpoint: { phase: 'blocked_policy' }, realCalls: 0 });
+      expect(wireHits).toBe(1);
+      const { data: usage } = await client
+        .from('api_usage')
+        .select('id')
+        .eq('candidate_id', pancake)
+        .eq('endpoint', 'product_database');
+      expect(usage).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
     const { data: relevant } = await client
       .from('candidate_evidence')
       .select('payload')

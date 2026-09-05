@@ -10,6 +10,10 @@
 
 **Spec:** `RESEARCH_WORKFLOW.md` (approved by user).
 
+## Latest execution authorization — 2026-09-05
+
+The user explicitly asked to finish the work, deploy, and repeat whole-code review after deployment while they sleep. After local acceptance and independent pre-release review, the controller may integrate/commit/push the scoped release, apply the approved additive settings migration, and deploy the validated version to the existing Cloudflare web and Oracle worker. Preserve dirty user work, current data, existing security/identity configuration and the prior release. Verify the actually deployed SHA and perform the requested post-deployment whole-code review against it. Blocking findings stop release or require a verified correction/rollback. This supersedes the earlier local-only release pause below, not the prohibition on paid QA, supplier messages, OAuth expansion, unapproved schema expansion, or production activity by implementation/test agents.
+
 ## Global Constraints
 
 - 현재 첫 출시 현금 설정은 $3,000. 사용자가 2026-09-05에 명시했듯 영구 hardcode가 아니며 관리자 설정에서 변경 가능해야 한다. 모든 후보는 현재 전역 설정으로 평가한다.
@@ -173,11 +177,10 @@ type ResearchApiAdmission = {
 
 **Files:** existing E2E suite, `review-logs/2026-09-05-budget-first-workflow-validation.md`, isolated evidence directory, this plan checklist; no deployment configs unless required by proven implementation needs.
 
-- [ ] Run import -> candidate business record -> allowed API wire fixture -> preserved result -> quote wait -> zero repeated external-call E2E against isolated DB. Include auth/CSRF denial, stale/malformed evidence, budget exhaustion and model/provider attribution regressions.
-- [ ] Run full relevant typecheck/lint/tests and diff checks, record exact source SHA. Whole-branch independent review binds to that SHA, followed by fixes/re-review if required.
-- [ ] Re-read spec and mark each implemented requirement or explicit remaining live-account gate. Do not describe a schema/helper-only change as a complete workflow.
-- [ ] Inspect real JS account CSV/API access and remaining quota read-only in logged-in in-app browser when available; never infer entitlement from documentation. If unavailable, report that boundary and do not send paid test requests.
-- [ ] Prepare Cloudflare/Oracle release steps using the existing deployment docs; do not start a Windows production worker. Ask for live paid verification boundary before consuming API quota for QA. Preserve user dirty work and old release.
+- [x] Run import -> candidate business record -> allowed API wire fixture -> preserved result -> quote wait -> zero repeated external-call E2E against isolated DB. `runImportJob` parsed the existing CSV into a run-owned REST DB; actual loopback HTTP wire count and persisted usage were 1 before `awaiting_quote` blocked the repeat at 0.
+- [x] Run full relevant typecheck/lint/tests and diff checks, record exact source SHA. Task5 browser/static evidence binds rendered source `246bbebc8cba3f678f1ccd8a8766a3d2a99ea84a`; worker harness is 34 files/252 pass/5 skip with two documented Windows CRLF digest baseline failures.
+- [x] Re-read spec and mark each implemented requirement or explicit remaining live-account gate. No paid provider/CSV download entitlement was inferred or consumed; existing read-only account boundary remains in QA preparation.
+- [x] Prepare Cloudflare/Oracle release steps using the existing deployment docs; production worker is Oracle only and release archive is LF-pinned. Independent review and controller deployment decision remain pending; preserve user dirty work and old release.
 
 ## Plan self-review / current execution ledger
 
