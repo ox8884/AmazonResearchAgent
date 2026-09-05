@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_RESEARCH_LAUNCH_BUDGET_USD,
+  DEFAULT_RESEARCH_BUSINESS_SETTINGS,
   ResearchBusinessEvidenceSchema,
-  ResearchLaunchBudgetSchema,
+  ResearchBusinessSettingsSchema,
   selectLatestResearchBusiness
 } from './research-business';
 import { assessResearchBusiness } from './research-business-assessment';
@@ -32,6 +32,8 @@ const unknownMoney = () => ({
   source: null,
   usdConversionSource: null
 });
+
+const settingsFixture = () => ({ ...DEFAULT_RESEARCH_BUSINESS_SETTINGS });
 
 function evidenceFixture() {
   return {
@@ -74,12 +76,6 @@ function evidenceFixture() {
     launchReserveCash: quotedUsd(1400, 'launch-reserve-plan', 'estimate'),
     perUnitAdCost: quotedUsd(2, 'per-unit-ad-plan', 'estimate'),
     perUnitReturnCost: quotedUsd(1, 'per-unit-return-plan', 'estimate'),
-    minimumProfitabilityPolicy: {
-      minimumPreAdMarginPct: 35,
-      minimumPostAdMarginPct: 35,
-      minimumRoiPct: 150,
-      source: source('forge-kitchen-policy', 'observed')
-    },
     marketCheck: {
       status: 'pass',
       source: source('market-validation', 'estimate'),
@@ -100,7 +96,7 @@ describe('research business evidence', () => {
     const evidence = null;
 
     // When: the business assessment is requested.
-    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: the product remains at basic investigation with no invented cash total.
     expect(result).toMatchObject({
@@ -126,44 +122,55 @@ describe('research business evidence', () => {
     });
 
     // When: its business stage is derived.
-    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: bounded market validation remains possible without inventing a quote.
     expect(result).toMatchObject({ stage: 'market_validation', purchaseApproved: false });
     expect(result.gaps).toContain('selected_quote');
   });
 
-  it('applies the current configured launch budget independently of evidence', () => {
+  it('uses only the current administrator settings to re-evaluate commercial eligibility', () => {
     // Given: one $4000 plan whose non-budget commercial checks pass.
     const evidence = ResearchBusinessEvidenceSchema.parse({
       ...evidenceFixture(),
       launchReserveCash: quotedUsd(2400, 'launch-reserve-plan', 'estimate')
     });
 
-    // When: the same plan is assessed at a default, raised, and lowered setting.
-    const defaultBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), 3000);
-    const raisedBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), 5000);
-    const loweredBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), 3500);
+    // When: the same evidence is assessed under changed budget and profitability settings.
+    const defaultBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
+    const raisedBudgetSettings = { ...settingsFixture(), launchBudgetUsd: 5000 };
+    const raisedBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), raisedBudgetSettings);
+    const loweredBudget = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), { ...settingsFixture(), launchBudgetUsd: 3500 });
+    const stricterPreAdMargin = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), { ...raisedBudgetSettings, minimumPreAdMarginPct: 48 });
+    const stricterPostAdMargin = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), { ...raisedBudgetSettings, minimumPostAdMarginPct: 43 });
+    const stricterRoi = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), { ...raisedBudgetSettings, minimumRoiPct: 171 });
 
-    // Then: configured launch cash alone controls the over-budget decision.
-    expect(defaultBudget).toMatchObject({ stage: 'hold', launchBudgetUsd: 3000 });
-    expect(raisedBudget).toMatchObject({ stage: 'purchase_review', launchBudgetUsd: 5000 });
-    expect(loweredBudget).toMatchObject({ stage: 'hold', launchBudgetUsd: 3500 });
+    // Then: only trusted current settings change the same evidence's eligibility.
+    expect(defaultBudget).toMatchObject({ stage: 'hold', settings: settingsFixture() });
+    expect(raisedBudget).toMatchObject({ stage: 'purchase_review', settings: raisedBudgetSettings });
+    expect(loweredBudget).toMatchObject({ stage: 'hold', settings: { ...settingsFixture(), launchBudgetUsd: 3500 } });
+    expect(stricterPreAdMargin.stage).toBe('hold');
+    expect(stricterPostAdMargin.stage).toBe('hold');
+    expect(stricterRoi.stage).toBe('hold');
   });
 
-  it('rejects missing or invalid configured launch budgets', () => {
-    // Given: missing, negative, and non-finite values from a settings boundary.
-    const missing = ResearchLaunchBudgetSchema.safeParse(undefined);
-    const negative = ResearchLaunchBudgetSchema.safeParse(-1);
-    const nonFinite = ResearchLaunchBudgetSchema.safeParse(Number.NaN);
+  it('fails closed for missing or invalid administrator settings', () => {
+    // Given: missing, incomplete, negative, and non-finite settings values.
+    const missing = ResearchBusinessSettingsSchema.safeParse(undefined);
+    const incomplete = ResearchBusinessSettingsSchema.safeParse({ launchBudgetUsd: 3000, minimumPreAdMarginPct: 35, minimumPostAdMarginPct: 35 });
+    const injected = ResearchBusinessSettingsSchema.safeParse({ ...settingsFixture(), candidateMinimumRoiPct: 0 });
+    const negative = ResearchBusinessSettingsSchema.safeParse({ ...settingsFixture(), launchBudgetUsd: -1 });
+    const nonFinite = ResearchBusinessSettingsSchema.safeParse({ ...settingsFixture(), minimumRoiPct: Number.NaN });
     const noEvidence = null;
 
-    // When: the budget values are parsed.
-    const negativeAssessment = () => assessResearchBusiness(noEvidence, new Date('2026-09-05T00:00:00Z'), -1);
-    const nonFiniteAssessment = () => assessResearchBusiness(noEvidence, new Date('2026-09-05T00:00:00Z'), Number.NaN);
+    // When: invalid settings reach the assessment boundary.
+    const negativeAssessment = () => assessResearchBusiness(noEvidence, new Date('2026-09-05T00:00:00Z'), { ...settingsFixture(), launchBudgetUsd: -1 });
+    const nonFiniteAssessment = () => assessResearchBusiness(noEvidence, new Date('2026-09-05T00:00:00Z'), { ...settingsFixture(), minimumRoiPct: Number.NaN });
 
-    // Then: only finite positive money can drive a commercial assessment.
+    // Then: complete finite administrator settings are required for every assessment.
     expect(missing.success).toBe(false);
+    expect(incomplete.success).toBe(false);
+    expect(injected.success).toBe(false);
     expect(negative.success).toBe(false);
     expect(nonFinite.success).toBe(false);
     expect(negativeAssessment).toThrow();
@@ -187,6 +194,24 @@ describe('research business evidence', () => {
     const result = ResearchBusinessEvidenceSchema.safeParse(evidence);
 
     // Then: only safe browser-link protocols are accepted.
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a candidate-injected profitability policy', () => {
+    // Given: an otherwise valid candidate payload includes its own approval thresholds.
+    const evidence = {
+      ...evidenceFixture(),
+      minimumProfitabilityPolicy: {
+        minimumPreAdMarginPct: 0,
+        minimumPostAdMarginPct: 0,
+        minimumRoiPct: 0
+      }
+    };
+
+    // When: the payload crosses the shared evidence boundary.
+    const result = ResearchBusinessEvidenceSchema.safeParse(evidence);
+
+    // Then: only separate administrator settings can determine profitability criteria.
     expect(result.success).toBe(false);
   });
 
@@ -215,7 +240,7 @@ describe('research business evidence', () => {
     const evidence = ResearchBusinessEvidenceSchema.parse(evidenceFixture());
 
     // When: the launch cash is assessed.
-    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: only 100 times the $10 unit cost is counted as inventory cash.
     expect(result.estimatedLaunchCashUsd).toBe(3000);
@@ -230,8 +255,8 @@ describe('research business evidence', () => {
     });
 
     // When: both plans are assessed at the same time.
-    const withinBudgetResult = assessResearchBusiness(withinBudget, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
-    const aboveBudgetResult = assessResearchBusiness(aboveBudget, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const withinBudgetResult = assessResearchBusiness(withinBudget, new Date('2026-09-05T00:00:00Z'), settingsFixture());
+    const aboveBudgetResult = assessResearchBusiness(aboveBudget, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: cash and purchase-review eligibility remain separate at the exact boundary.
     expect(withinBudgetResult).toMatchObject({
@@ -258,8 +283,8 @@ describe('research business evidence', () => {
     });
 
     // When: their launch cash is assessed.
-    const unknownResult = assessResearchBusiness(unknownCost, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
-    const quotedZeroResult = assessResearchBusiness(quotedZeroCost, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const unknownResult = assessResearchBusiness(unknownCost, new Date('2026-09-05T00:00:00Z'), settingsFixture());
+    const quotedZeroResult = assessResearchBusiness(quotedZeroCost, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: unknown stays unknown while sourced zero remains a real $0 input.
     expect(unknownResult).toMatchObject({ estimatedLaunchCashUsd: null, stage: 'hold' });
@@ -354,7 +379,7 @@ describe('research business evidence', () => {
     });
 
     // When: it is assessed after expiry.
-    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: current commercial evidence is required before a purchase review.
     expect(result).toMatchObject({ stage: 'hold', purchaseApproved: false });
@@ -382,7 +407,7 @@ describe('research business evidence', () => {
     });
 
     // When: it is assessed for a purchase review.
-    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), DEFAULT_RESEARCH_LAUNCH_BUDGET_USD);
+    const result = assessResearchBusiness(evidence, new Date('2026-09-05T00:00:00Z'), settingsFixture());
 
     // Then: incomplete delivery terms hold the commercial decision.
     expect(result).toMatchObject({ stage: 'hold', purchaseApproved: false });

@@ -11,8 +11,20 @@ const HttpUrlSchema = z.string().url().refine((value) => {
   return protocol === 'http:' || protocol === 'https:';
 }, 'URL must use http or https.');
 
-export const DEFAULT_RESEARCH_LAUNCH_BUDGET_USD = 3000;
-export const ResearchLaunchBudgetSchema = z.number().finite().positive();
+export const ResearchBusinessSettingsSchema = z.object({
+  launchBudgetUsd: z.number().finite().positive(),
+  minimumPreAdMarginPct: PercentageSchema,
+  minimumPostAdMarginPct: PercentageSchema,
+  minimumRoiPct: NonNegativeMoneySchema
+}).strict();
+export type ResearchBusinessSettings = z.infer<typeof ResearchBusinessSettingsSchema>;
+
+export const DEFAULT_RESEARCH_BUSINESS_SETTINGS = Object.freeze({
+  launchBudgetUsd: 3000,
+  minimumPreAdMarginPct: 35,
+  minimumPostAdMarginPct: 35,
+  minimumRoiPct: 150
+});
 
 export const ResearchBusinessSourceSchema = z.object({
   reference: ReferenceSchema,
@@ -162,29 +174,11 @@ export const ResearchBusinessEvidenceSchema = z.object({
   launchReserveCash: ResearchBusinessMoneySchema,
   perUnitAdCost: ResearchBusinessMoneySchema,
   perUnitReturnCost: ResearchBusinessMoneySchema,
-  minimumProfitabilityPolicy: z.object({
-    minimumPreAdMarginPct: PercentageSchema.nullable(),
-    minimumPostAdMarginPct: PercentageSchema.nullable(),
-    minimumRoiPct: NonNegativeMoneySchema.nullable(),
-    source: ResearchBusinessSourceSchema.nullable()
-  }).strict(),
   marketCheck: MarketCheckSchema,
   sampleCheck: ResearchBusinessCheckSchema,
   safetyIpCheck: ResearchBusinessCheckSchema,
   requestedApiPurposes: z.array(JungleScoutEndpointSchema).max(10)
 }).strict().superRefine((evidence, context) => {
-  const policyValues = [
-    evidence.minimumProfitabilityPolicy.minimumPreAdMarginPct,
-    evidence.minimumProfitabilityPolicy.minimumPostAdMarginPct,
-    evidence.minimumProfitabilityPolicy.minimumRoiPct
-  ];
-  const hasPolicyValue = policyValues.some((value) => value !== null);
-  if (hasPolicyValue && (policyValues.some((value) => value === null) || evidence.minimumProfitabilityPolicy.source === null)) {
-    context.addIssue({ code: 'custom', path: ['minimumProfitabilityPolicy'], message: 'A profitability policy requires all thresholds and a source.' });
-  }
-  if (!hasPolicyValue && evidence.minimumProfitabilityPolicy.source !== null) {
-    context.addIssue({ code: 'custom', path: ['minimumProfitabilityPolicy', 'source'], message: 'Unknown profitability policy cannot claim a source.' });
-  }
   if (evidence.selectedQuote?.specificationReference !== undefined && evidence.selectedQuote.specificationReference !== evidence.specification.reference) {
     context.addIssue({ code: 'custom', path: ['selectedQuote', 'specificationReference'], message: 'Selected quote must reference the current specification.' });
   }

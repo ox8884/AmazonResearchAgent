@@ -75,3 +75,47 @@ function assessResearchBusiness(
 ## Scope and limits
 
 Only shared schema/assessment/index plus the existing research-engine economics helper/tests changed. No database schema, production environment, worker/web route, paid provider call, supplier contact, purchase, or deployment was performed.
+
+## Fix round 1 — trusted editable profitability settings (2026-09-05)
+
+This section supersedes the earlier budget-only and per-record-policy interface above. Fix base full SHA: `13aa7ce6d5634f273ac6504a04652c81c14e1d96`.
+
+### Current exported interface
+
+```ts
+const DEFAULT_RESEARCH_BUSINESS_SETTINGS: Readonly<ResearchBusinessSettings>;
+const ResearchBusinessSettingsSchema: z.ZodType<ResearchBusinessSettings>;
+type ResearchBusinessSettings = {
+  launchBudgetUsd: number;
+  minimumPreAdMarginPct: number;
+  minimumPostAdMarginPct: number;
+  minimumRoiPct: number;
+};
+type ResearchBusinessAssessment = {
+  readonly stage: ResearchBusinessStage;
+  readonly gaps: readonly string[];
+  readonly settings: ResearchBusinessSettings;
+  readonly estimatedLaunchCashUsd: number | null;
+  readonly estimatedUnitContributionUsd: number | null;
+  readonly estimatedMarginPct: number | null;
+  readonly purchaseApproved: false;
+};
+function assessResearchBusiness(
+  evidence: ResearchBusinessEvidence | null,
+  now: Date,
+  settings: ResearchBusinessSettings
+): ResearchBusinessAssessment;
+```
+
+`ResearchBusinessSettingsSchema` is strict and contains exactly the four listed values. Launch budget is finite positive money; both margin targets are finite 0–100 percentages; ROI is finite nonnegative and can exceed 100. The defaults seed the current 3000/35/35/150 strategy but are administrator-editable settings, not permanent floors.
+
+`minimumProfitabilityPolicy` was removed from unreleased `ResearchBusinessEvidenceSchema`; its presence causes strict evidence parsing to fail. Assessment parses the required settings object before every derivation, returns those effective settings for audit/display, and compares only those settings to computed pre-ad margin, post-ad margin, ROI, and launch cash. A candidate cannot lower criteria, and there is no compatibility branch.
+
+Unknown costs still produce unknown economics and cannot pass the financial target gate. Estimate provenance remains `estimate`; changing settings does not promote estimate-backed market or quote evidence to observed evidence. `purchaseApproved` remains permanently `false`.
+
+### Fix RED/GREEN evidence
+
+- RED: `pnpm --filter @ara/shared exec vitest run src/research-business.test.ts` → 19 tests, 11 failed as expected before implementation: settings objects were rejected by the number-only budget boundary, settings exports were absent, and evidence still required `minimumProfitabilityPolicy`.
+- GREEN focused: `pnpm --filter @ara/shared exec vitest run src/research-business.test.ts` → 19/19 passed.
+- GREEN affected full: `pnpm --filter @ara/shared test` → 7 files/45 tests passed; `pnpm --filter @ara/shared typecheck` passed; `pnpm --filter @ara/shared lint` passed; `git diff --check` passed.
+- `@ara/research-engine` was not rerun because this correction changes no economics helper or test.

@@ -120,11 +120,11 @@ export {
 export type { DailyResearchCheckpoint } from './automation';
 
 export {
+  DEFAULT_RESEARCH_BUSINESS_SETTINGS,
   ResearchBusinessEvidenceSchema,
   ResearchBusinessMoneySchema,
-  ResearchLaunchBudgetSchema,
+  ResearchBusinessSettingsSchema,
   ResearchBusinessSourceSchema,
-  DEFAULT_RESEARCH_LAUNCH_BUDGET_USD,
   selectLatestResearchBusiness
 } from './research-business';
 export type {
@@ -132,6 +132,7 @@ export type {
   ResearchBusinessEvidenceInput,
   ResearchBusinessEvidenceRow,
   ResearchBusinessMoney,
+  ResearchBusinessSettings,
   ResearchBusinessSource
 } from './research-business';
 export {

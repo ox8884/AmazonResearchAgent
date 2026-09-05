@@ -1,7 +1,8 @@
 import {
-  ResearchLaunchBudgetSchema,
   type ResearchBusinessEvidence,
-  type ResearchBusinessMoney
+  type ResearchBusinessMoney,
+  type ResearchBusinessSettings,
+  ResearchBusinessSettingsSchema
 } from './research-business';
 
 export type ResearchBusinessStage =
@@ -17,7 +18,7 @@ export type ResearchBusinessStage =
 export type ResearchBusinessAssessment = {
   readonly stage: ResearchBusinessStage;
   readonly gaps: readonly string[];
-  readonly launchBudgetUsd: number;
+  readonly settings: ResearchBusinessSettings;
   readonly estimatedLaunchCashUsd: number | null;
   readonly estimatedUnitContributionUsd: number | null;
   readonly estimatedMarginPct: number | null;
@@ -40,21 +41,21 @@ function sumKnown(amounts: readonly (number | null)[]): number | null {
 function result(
   stage: ResearchBusinessStage,
   gaps: readonly string[],
-  launchBudgetUsd: number,
+  settings: ResearchBusinessSettings,
   estimatedLaunchCashUsd: number | null,
   estimatedUnitContributionUsd: number | null,
   estimatedMarginPct: number | null
 ): ResearchBusinessAssessment {
-  return { stage, gaps, launchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct, purchaseApproved: false };
+  return { stage, gaps, settings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct, purchaseApproved: false };
 }
 
 export function assessResearchBusiness(
   evidence: ResearchBusinessEvidence | null,
   now: Date,
-  launchBudgetUsd: number
+  settings: ResearchBusinessSettings
 ): ResearchBusinessAssessment {
-  const parsedLaunchBudgetUsd = ResearchLaunchBudgetSchema.parse(launchBudgetUsd);
-  if (evidence === null) return result('basic_check', ['business_evidence'], parsedLaunchBudgetUsd, null, null, null);
+  const parsedSettings = ResearchBusinessSettingsSchema.parse(settings);
+  if (evidence === null) return result('basic_check', ['business_evidence'], parsedSettings, null, null, null);
 
   const gaps: string[] = [];
   const quote = evidence.selectedQuote;
@@ -93,16 +94,12 @@ export function assessResearchBusiness(
   const roiPct = landedUnitCost !== null && landedUnitCost > 0 && estimatedUnitContributionUsd !== null
     ? estimatedUnitContributionUsd / landedUnitCost * 100
     : null;
-  const policy = evidence.minimumProfitabilityPolicy;
-  const minimumPreAdMarginPct = policy.minimumPreAdMarginPct;
-  const minimumPostAdMarginPct = policy.minimumPostAdMarginPct;
-  const minimumRoiPct = policy.minimumRoiPct;
-  const policyKnown = minimumPreAdMarginPct !== null && minimumPostAdMarginPct !== null && minimumRoiPct !== null && policy.source !== null;
-  const financialPolicyPasses = minimumPreAdMarginPct !== null && minimumPostAdMarginPct !== null && minimumRoiPct !== null &&
-    estimatedMarginPct !== null && preAdMarginPct !== null && roiPct !== null &&
-    preAdMarginPct >= minimumPreAdMarginPct && estimatedMarginPct >= minimumPostAdMarginPct && roiPct >= minimumRoiPct;
+  const profitabilityTargetsPass = estimatedMarginPct !== null && preAdMarginPct !== null && roiPct !== null &&
+    preAdMarginPct >= parsedSettings.minimumPreAdMarginPct &&
+    estimatedMarginPct >= parsedSettings.minimumPostAdMarginPct &&
+    roiPct >= parsedSettings.minimumRoiPct;
 
-  if (evidence.disposition === 'rejected') return result('reject', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+  if (evidence.disposition === 'rejected') return result('reject', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   if (evidence.brandFit.status !== 'pass') gaps.push('brand_fit');
   if (salePrice === null) gaps.push('sale_price');
   if (sumKnown(amazonFees) === null) gaps.push('amazon_unit_costs');
@@ -110,25 +107,24 @@ export function assessResearchBusiness(
   if (quote === null) gaps.push('selected_quote');
   if (landedUnitCost === null) gaps.push('landed_unit_cost');
   if (estimatedLaunchCashUsd === null) gaps.push('launch_cash');
-  if (estimatedLaunchCashUsd !== null && estimatedLaunchCashUsd > parsedLaunchBudgetUsd) gaps.push('launch_cash_exceeds_budget');
+  if (estimatedLaunchCashUsd !== null && estimatedLaunchCashUsd > parsedSettings.launchBudgetUsd) gaps.push('launch_cash_exceeds_budget');
   if (estimatedUnitContributionUsd === null) gaps.push('unit_contribution');
-  if (!policyKnown) gaps.push('profitability_policy');
-  if (policyKnown && !financialPolicyPasses) gaps.push('profitability_policy_not_met');
+  if (!profitabilityTargetsPass) gaps.push('profitability_targets_not_met');
 
   if (evidence.brandFit.status !== 'pass' || salePrice === null) {
-    return result('basic_check', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('basic_check', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
   if (evidence.marketCheck.status !== 'pass') {
-    return result('market_validation', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('market_validation', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
-  if (quote === null || landedUnitCost === null || estimatedLaunchCashUsd === null || estimatedLaunchCashUsd > parsedLaunchBudgetUsd || !financialPolicyPasses) {
-    return result('hold', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+  if (quote === null || landedUnitCost === null || estimatedLaunchCashUsd === null || estimatedLaunchCashUsd > parsedSettings.launchBudgetUsd || !profitabilityTargetsPass) {
+    return result('hold', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
   if (evidence.disposition === 'awaiting_quote') {
-    return result('awaiting_quote', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('awaiting_quote', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
   if (quote.source.basis === 'estimate') {
-    return result('quote_ready', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('quote_ready', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
   if (quote.incoterm === null) gaps.push('quote_incoterm');
   if (quote.destination === null) gaps.push('quote_destination');
@@ -142,10 +138,10 @@ export function assessResearchBusiness(
   if (evidence.sampleCheck.status !== 'pass') gaps.push('sample_check');
   if (evidence.safetyIpCheck.status !== 'pass') gaps.push('safety_ip_check');
   if (quote.incoterm === null || quote.destination === null || quote.leadTimeDays === null || landedShipmentTotal === null || !hasCompleteLandedCostCoverage || expiry === null || expiry <= now.getTime() || evidence.safetyIpCheck.status !== 'pass') {
-    return result('hold', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('hold', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
   if (evidence.sampleCheck.status !== 'pass' || evidence.disposition === 'awaiting_sample') {
-    return result('awaiting_sample', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+    return result('awaiting_sample', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
   }
-  return result('purchase_review', gaps, parsedLaunchBudgetUsd, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
+  return result('purchase_review', gaps, parsedSettings, estimatedLaunchCashUsd, estimatedUnitContributionUsd, estimatedMarginPct);
 }
