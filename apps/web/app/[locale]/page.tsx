@@ -58,7 +58,7 @@ export default async function DashboardPage({
 
   const generatedAt = new Intl.DateTimeFormat(
     locale === 'ko' ? 'ko-KR' : 'en-US',
-    { dateStyle: 'medium', timeStyle: 'short' }
+    { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }
   ).format(new Date());
 
   return (
