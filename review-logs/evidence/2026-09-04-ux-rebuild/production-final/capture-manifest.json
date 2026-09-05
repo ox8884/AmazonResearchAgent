@@ -1,0 +1,1032 @@
+{
+  "commit": "e27358cbebe9a0975fc0eccfbff2efbd1a61bf0d",
+  "cloudflareVersion": "c5684b6c-37db-43f6-9e30-6266ae611bdb",
+  "captures": [
+    {
+      "activeNav": [
+        "대시보드"
+      ],
+      "height": 2240,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "리서치 데스크",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 375,
+      "file": "dashboard-ko-375.png",
+      "bytes": 114802,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2240,
+      "sha256": "9d815482748c26eb73dc7d52d5867d7a510a22bef477515dd3e9fd2439433885",
+      "capturedAt": "2026-09-05T01:41:17.327Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 907,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "후보 목록",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates",
+      "width": 375,
+      "file": "candidates-ko-375.png",
+      "bytes": 53542,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 907,
+      "sha256": "243c84808b976ace887b6fe5e034fc7329be368b971e13105cfdf02b38299845",
+      "capturedAt": "2026-09-05T01:41:18.842Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 3000,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 375,
+      "file": "candidate-ko-375.png",
+      "bytes": 155032,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 3000,
+      "sha256": "4c10def0f66b55286f4d714dd2882e332bb20d1a0e842597dfd36fd4778887fc",
+      "capturedAt": "2026-09-05T01:41:20.343Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 2934,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs",
+      "width": 375,
+      "file": "runs-ko-375.png",
+      "bytes": 143550,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2934,
+      "sha256": "667bec788a99bb81c4f4e642d8eb8f9653bd82167426f359edde5726a0a85274",
+      "capturedAt": "2026-09-05T01:41:21.864Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 1862,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "2026-09-04 리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 375,
+      "file": "run-detail-ko-375.png",
+      "bytes": 94161,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 1862,
+      "sha256": "8cdd4a94ebc88006fdbaa4c8363e5ced2ad7ef13c805c6d70490d9f5a4695c46",
+      "capturedAt": "2026-09-05T01:41:23.410Z"
+    },
+    {
+      "activeNav": [
+        "설정"
+      ],
+      "height": 1256,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "리서치 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings",
+      "width": 375,
+      "file": "settings-ko-375.png",
+      "bytes": 59839,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 1256,
+      "sha256": "11b2136e2b09d91408576669a3df64e3932b853aecf40dedf61a045960da629d",
+      "capturedAt": "2026-09-05T01:41:24.827Z"
+    },
+    {
+      "activeNav": [
+        "AI 설정"
+      ],
+      "height": 3206,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 360,
+      "title": "AI Provider 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings/ai",
+      "width": 375,
+      "file": "ai-settings-ko-375.png",
+      "bytes": 178902,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 3206,
+      "sha256": "667deba0ed18b4586f19b357246a7663b80687220490b4dafe97af1c7ad4c17e",
+      "capturedAt": "2026-09-05T01:41:26.572Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 375,
+      "title": "Opportunity Finder 가져오기",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports",
+      "width": 375,
+      "file": "imports-ko-375.png",
+      "bytes": 41776,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 900,
+      "sha256": "5415553231ad8cf31e845efd880fd1501a23bf56e8891690803f1d9cb52d447b",
+      "capturedAt": "2026-09-05T01:41:26.972Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 375,
+      "title": "CSV 파일 업로드",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports/new",
+      "width": 375,
+      "file": "import-new-ko-375.png",
+      "bytes": 48845,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 900,
+      "sha256": "590b300c8550d7808c1134db0d5c15e191b4cf928be45cc3b6b205ca108c3b92",
+      "capturedAt": "2026-09-05T01:41:27.381Z"
+    },
+    {
+      "activeNav": [
+        "대시보드"
+      ],
+      "height": 1309,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "리서치 데스크",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 1280,
+      "file": "dashboard-ko-1280.png",
+      "bytes": 120619,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1309,
+      "sha256": "fbcba5bfeeb1c163851afb5f1d8c3ae2ad09d314be1dcbbc1e70e535f308d065",
+      "capturedAt": "2026-09-05T01:41:37.466Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "후보 목록",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates",
+      "width": 1280,
+      "file": "candidates-ko-1280.png",
+      "bytes": 57466,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "3b2c50886711d513296b809b1d1b5b0193d5103c4216cd7cb6a9a9de767d08b3",
+      "capturedAt": "2026-09-05T01:41:37.901Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 1955,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 1280,
+      "file": "candidate-ko-1280.png",
+      "bytes": 163768,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1955,
+      "sha256": "6dbe2f93811fabd9919c6782e810ba6913e31819d64854c8d0120aed740010c5",
+      "capturedAt": "2026-09-05T01:41:39.379Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 1871,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs",
+      "width": 1280,
+      "file": "runs-ko-1280.png",
+      "bytes": 151010,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1871,
+      "sha256": "7062cba5a7ad7e5ef84a165051498abd3f84e1696236c15f31bc03a128131bdb",
+      "capturedAt": "2026-09-05T01:41:40.929Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 1625,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "2026-09-04 리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 1280,
+      "file": "run-detail-ko-1280.png",
+      "bytes": 99793,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1625,
+      "sha256": "c87ff1e2bc08e457a479d807dccf32255d8ce18a2ef6c311d24766f3b325545b",
+      "capturedAt": "2026-09-05T01:41:42.397Z"
+    },
+    {
+      "activeNav": [
+        "설정"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "리서치 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings",
+      "width": 1280,
+      "file": "settings-ko-1280.png",
+      "bytes": 62591,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "f2f1f0aa1cbc02a89a73cc6e393b0944dfcf8fc16d97f6a22b4f1e7e6f046c7e",
+      "capturedAt": "2026-09-05T01:41:42.777Z"
+    },
+    {
+      "activeNav": [
+        "AI 설정"
+      ],
+      "height": 2279,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 1265,
+      "title": "AI Provider 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings/ai",
+      "width": 1280,
+      "file": "ai-settings-ko-1280.png",
+      "bytes": 187471,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 2279,
+      "sha256": "a32d1cac2c347a101f31a029d85cc1604764d749600d0bddda443691480ae7e4",
+      "capturedAt": "2026-09-05T01:41:44.340Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "Opportunity Finder 가져오기",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports",
+      "width": 1280,
+      "file": "imports-ko-1280.png",
+      "bytes": 45442,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "53e31fc1a039001d71d4edc48f4412cc3e58aa9209a47ef23532aaeccdb1f7e8",
+      "capturedAt": "2026-09-05T01:41:44.750Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "CSV 파일 업로드",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports/new",
+      "width": 1280,
+      "file": "import-new-ko-1280.png",
+      "bytes": 51748,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "38c390a720c4481ba5d8e1f3b3c6eadf4c50a08a5957d4c2c8d0246507c4de07",
+      "capturedAt": "2026-09-05T01:41:45.077Z"
+    },
+    {
+      "activeNav": [
+        "Dashboard"
+      ],
+      "height": 2349,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "Research desk",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 375,
+      "file": "dashboard-en-375.png",
+      "bytes": 138612,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2349,
+      "sha256": "cb8819f20fa14fe4c5fff6f2bfa4e5f0b3cc2bd2c2d16e9988bf97b5162cb686",
+      "capturedAt": "2026-09-05T01:41:46.648Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 1029,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "Candidates",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates",
+      "width": 375,
+      "file": "candidates-en-375.png",
+      "bytes": 68261,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 1029,
+      "sha256": "ab2ab8518401bea0e16c6a13ce3fa0cedcba9d39f73be60d6adf5705474d2926",
+      "capturedAt": "2026-09-05T01:41:48.059Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 3120,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 375,
+      "file": "candidate-en-375.png",
+      "bytes": 186882,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 3120,
+      "sha256": "25b6d56f40d91990558e487eaa054e1c6c205e38659b18e272d9afa4bf4830ee",
+      "capturedAt": "2026-09-05T01:41:49.577Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 2934,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "Research runs",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs",
+      "width": 375,
+      "file": "runs-en-375.png",
+      "bytes": 168481,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2934,
+      "sha256": "5e1a4437cf833d03cf7505b6b9ed8d74a229061f3aaa132bee9c2fabba50fba7",
+      "capturedAt": "2026-09-05T01:41:51.053Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 1883,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "2026-09-04 Research run",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 375,
+      "file": "run-detail-en-375.png",
+      "bytes": 106216,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 1883,
+      "sha256": "5f01a1deb0f3bec2da19a641e2c877777ccfde9a101bc1676600c73a3d394dbf",
+      "capturedAt": "2026-09-05T01:41:52.517Z"
+    },
+    {
+      "activeNav": [
+        "Settings"
+      ],
+      "height": 1307,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 360,
+      "title": "Research settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings",
+      "width": 375,
+      "file": "settings-en-375.png",
+      "bytes": 72443,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 1307,
+      "sha256": "569d78937bc962cf3d2ab0c44d6531bcbbec263faa35f04d9c7195e4aa8255c0",
+      "capturedAt": "2026-09-05T01:41:53.922Z"
+    },
+    {
+      "activeNav": [
+        "AI settings"
+      ],
+      "height": 3309,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 360,
+      "title": "AI provider settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings/ai",
+      "width": 375,
+      "file": "ai-settings-en-375.png",
+      "bytes": 195820,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 3309,
+      "sha256": "3a3115e643ddadf0c4cd888def5a8accfea594f4b20339b41cc4799812b3ab01",
+      "capturedAt": "2026-09-05T01:41:55.609Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 375,
+      "title": "Opportunity Finder Imports",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports",
+      "width": 375,
+      "file": "imports-en-375.png",
+      "bytes": 50256,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 900,
+      "sha256": "2a7fd91bf335f66aa2fc9641c5ad7dc44b1b70c0cecdfb983cb6bae5482accad",
+      "capturedAt": "2026-09-05T01:41:56.094Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 375,
+      "title": "Upload CSV files",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports/new",
+      "width": 375,
+      "file": "import-new-en-375.png",
+      "bytes": 50738,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 900,
+      "sha256": "c9882e9227d7d5a1b2860cfc2087ead985e08e47df8643a39ad7117606684a3e",
+      "capturedAt": "2026-09-05T01:41:56.580Z"
+    },
+    {
+      "activeNav": [
+        "대시보드"
+      ],
+      "height": 2028,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "리서치 데스크",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 768,
+      "file": "dashboard-ko-768.png",
+      "bytes": 120259,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2028,
+      "sha256": "c666cc868681b31f5830e1133ec115c64677b64015d3c132ed60f248430a1031",
+      "capturedAt": "2026-09-05T01:42:41.271Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "후보 목록",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates",
+      "width": 768,
+      "file": "candidates-ko-768.png",
+      "bytes": 55625,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "25ff48de9b434feb036a523f68a8d14ea17363d95325dbc465408420fa737635",
+      "capturedAt": "2026-09-05T01:42:41.707Z"
+    },
+    {
+      "activeNav": [
+        "후보"
+      ],
+      "height": 2736,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 768,
+      "file": "candidate-ko-768.png",
+      "bytes": 160892,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2736,
+      "sha256": "f2ea8d7acd203b6f366c1bf0629b18ebab696b4d8b63badebdb1bef090d716a0",
+      "capturedAt": "2026-09-05T01:42:43.271Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 2768,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs",
+      "width": 768,
+      "file": "runs-ko-768.png",
+      "bytes": 151161,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2768,
+      "sha256": "09d6058a5ef2667d4b50a8f60862997754b81be0d9401fcc6fe3894ae30d6109",
+      "capturedAt": "2026-09-05T01:42:44.751Z"
+    },
+    {
+      "activeNav": [
+        "실행"
+      ],
+      "height": 1683,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "2026-09-04 리서치 실행",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 768,
+      "file": "run-detail-ko-768.png",
+      "bytes": 97583,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 1683,
+      "sha256": "81adf885a12052872aff729f28c55b69dd1d46e6dc6ff55e0acf65538fa6d080",
+      "capturedAt": "2026-09-05T01:42:46.240Z"
+    },
+    {
+      "activeNav": [
+        "설정"
+      ],
+      "height": 1101,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "리서치 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings",
+      "width": 768,
+      "file": "settings-ko-768.png",
+      "bytes": 62783,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 1101,
+      "sha256": "777998f5e1f6b0e5633882874efe80c06ed4faedf46020ce07d7aa65671e0bff",
+      "capturedAt": "2026-09-05T01:42:47.679Z"
+    },
+    {
+      "activeNav": [
+        "AI 설정"
+      ],
+      "height": 2821,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 753,
+      "title": "AI Provider 설정",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/settings/ai",
+      "width": 768,
+      "file": "ai-settings-ko-768.png",
+      "bytes": 183378,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2821,
+      "sha256": "512f7d919f04f48c9026b6e8e589a6484be8617681371567226e2443cff99391",
+      "capturedAt": "2026-09-05T01:42:49.517Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "Opportunity Finder 가져오기",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports",
+      "width": 768,
+      "file": "imports-ko-768.png",
+      "bytes": 44414,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "883358a520c4e3534e43c8d03ed099484a64119bcb2fa98e7e43daa69fe61a0f",
+      "capturedAt": "2026-09-05T01:42:49.892Z"
+    },
+    {
+      "activeNav": [
+        "가져오기"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "CSV 파일 업로드",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/imports/new",
+      "width": 768,
+      "file": "import-new-ko-768.png",
+      "bytes": 52002,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "49b1cdf27abc6c9d98ce5e5e84eef2ae8a2f5b8ec4dd62bff5bd5312d0d797e6",
+      "capturedAt": "2026-09-05T01:42:50.356Z"
+    },
+    {
+      "activeNav": [
+        "Dashboard"
+      ],
+      "height": 2091,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "Research desk",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 768,
+      "file": "dashboard-en-768.png",
+      "bytes": 145610,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2091,
+      "sha256": "1e01eed0c396a1513990503a4b170c83b4fa9afdfd58464a47a771fc7002e7e0",
+      "capturedAt": "2026-09-05T01:42:51.949Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "Candidates",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates",
+      "width": 768,
+      "file": "candidates-en-768.png",
+      "bytes": 61049,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "352964ab8c0ba84c7f3281c0dfefadc17840707fc23697c2dabdc4437bf5c18f",
+      "capturedAt": "2026-09-05T01:42:52.398Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 2757,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 768,
+      "file": "candidate-en-768.png",
+      "bytes": 196941,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2757,
+      "sha256": "d0421b8591c8184d217e7c64cdaf2330f04de3d7ab25e0ae6aeef1cd74cbdb81",
+      "capturedAt": "2026-09-05T01:42:53.946Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 2768,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "Research runs",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs",
+      "width": 768,
+      "file": "runs-en-768.png",
+      "bytes": 172964,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2768,
+      "sha256": "9eb03e82161bb31698e6d3205acc37eb044b65b3d795e0176cf16aa928b54819",
+      "capturedAt": "2026-09-05T01:42:55.493Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 1709,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "2026-09-04 Research run",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 768,
+      "file": "run-detail-en-768.png",
+      "bytes": 109226,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 1709,
+      "sha256": "feb482c8d6e477075fcdbda8b2b59580dcecbda1fecdaf8e1f4fea2786f55025",
+      "capturedAt": "2026-09-05T01:42:56.944Z"
+    },
+    {
+      "activeNav": [
+        "Settings"
+      ],
+      "height": 1101,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 753,
+      "title": "Research settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings",
+      "width": 768,
+      "file": "settings-en-768.png",
+      "bytes": 73654,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 1101,
+      "sha256": "43eef44f343d4d776ab13e08a0f3b8f28006406f6dd6be761a114ad0600ac55e",
+      "capturedAt": "2026-09-05T01:42:58.355Z"
+    },
+    {
+      "activeNav": [
+        "AI settings"
+      ],
+      "height": 2861,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 753,
+      "title": "AI provider settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings/ai",
+      "width": 768,
+      "file": "ai-settings-en-768.png",
+      "bytes": 199288,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2861,
+      "sha256": "1fc73dddd49023693940993e9f54c00c3ba40ce3d749f472d9c5dae43601c354",
+      "capturedAt": "2026-09-05T01:42:59.905Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "Opportunity Finder Imports",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports",
+      "width": 768,
+      "file": "imports-en-768.png",
+      "bytes": 50279,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "fb4fd5e85514fab49fdb69047481266dac6bfe090547d8eaae8c7dc2e7c388bb",
+      "capturedAt": "2026-09-05T01:43:00.247Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 768,
+      "title": "Upload CSV files",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports/new",
+      "width": 768,
+      "file": "import-new-en-768.png",
+      "bytes": 52160,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 900,
+      "sha256": "8db95e1871cd4f2749f0891e06589bb8c7e805f76630a0a1273db7465f697084",
+      "capturedAt": "2026-09-05T01:43:00.573Z"
+    },
+    {
+      "activeNav": [
+        "Dashboard"
+      ],
+      "height": 1347,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "Research desk",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 1280,
+      "file": "dashboard-en-1280.png",
+      "bytes": 147537,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1347,
+      "sha256": "754c47a16fe47b12a47c28d2a7aed48badc7415ce9398cf359c0fa81e3e906c2",
+      "capturedAt": "2026-09-05T01:43:02.084Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "Candidates",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates",
+      "width": 1280,
+      "file": "candidates-en-1280.png",
+      "bytes": 73127,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "a24e05355182960b1581849dffaaf263ec73fec1714c4eafd7bab613abd78798",
+      "capturedAt": "2026-09-05T01:43:02.558Z"
+    },
+    {
+      "activeNav": [
+        "Candidates"
+      ],
+      "height": 1971,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "pancake dispenser bottle",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/candidates/cccdb1c3-20eb-52ae-bd4f-5c8c0fd63454",
+      "width": 1280,
+      "file": "candidate-en-1280.png",
+      "bytes": 197742,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1971,
+      "sha256": "6773d3f2b1afd162ae25f5ea62ff9841178d2e12e6c38ce75a129018b52c3e69",
+      "capturedAt": "2026-09-05T01:43:04.070Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 1871,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "Research runs",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs",
+      "width": 1280,
+      "file": "runs-en-1280.png",
+      "bytes": 174384,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1871,
+      "sha256": "2e2b7e3bc6e8dc8e9dee323b39b4e2043145dcd1d59d9f5decf760e2a688737b",
+      "capturedAt": "2026-09-05T01:43:05.538Z"
+    },
+    {
+      "activeNav": [
+        "Runs"
+      ],
+      "height": 1625,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "2026-09-04 Research run",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/runs/86a1fd11-c514-4d95-9ed0-a2b2d7c22552",
+      "width": 1280,
+      "file": "run-detail-en-1280.png",
+      "bytes": 111735,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1625,
+      "sha256": "f04365a5e5a99d73efaab058719fbf70d363adcbaf455287fc3dee1081584f7b",
+      "capturedAt": "2026-09-05T01:43:07.017Z"
+    },
+    {
+      "activeNav": [
+        "Settings"
+      ],
+      "height": 925,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1265,
+      "title": "Research settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings",
+      "width": 1280,
+      "file": "settings-en-1280.png",
+      "bytes": 77409,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 925,
+      "sha256": "a9ebf5f5b8de98cd4d9c713acae535f9acf8bd5f5976973d489fa569ab8bf423",
+      "capturedAt": "2026-09-05T01:43:08.378Z"
+    },
+    {
+      "activeNav": [
+        "AI settings"
+      ],
+      "height": 2279,
+      "navVisible": true,
+      "providerCount": 3,
+      "scrollWidth": 1265,
+      "title": "AI provider settings",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/settings/ai",
+      "width": 1280,
+      "file": "ai-settings-en-1280.png",
+      "bytes": 201865,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 2279,
+      "sha256": "baa0b5f345394f05ac75de25bc98e7dcff1fa5338b8223d2c6bff788e056ab01",
+      "capturedAt": "2026-09-05T01:43:09.908Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "Opportunity Finder Imports",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports",
+      "width": 1280,
+      "file": "imports-en-1280.png",
+      "bytes": 50978,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "b547f411c130aeef9488c574d364af1fdb1893683156982de5681c09495bb05f",
+      "capturedAt": "2026-09-05T01:43:10.333Z"
+    },
+    {
+      "activeNav": [
+        "Imports"
+      ],
+      "height": 900,
+      "navVisible": true,
+      "providerCount": 0,
+      "scrollWidth": 1280,
+      "title": "Upload CSV files",
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/imports/new",
+      "width": 1280,
+      "file": "import-new-en-1280.png",
+      "bytes": 52770,
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 900,
+      "sha256": "10789a21f4a7cc971fb6a59583bec79166ed231db9303318af674dec0e49dd94",
+      "capturedAt": "2026-09-05T01:43:10.725Z"
+    }
+  ]
+}

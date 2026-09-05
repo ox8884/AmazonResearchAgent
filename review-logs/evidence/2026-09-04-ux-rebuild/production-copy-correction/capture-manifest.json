@@ -1,0 +1,90 @@
+{
+  "commit": "d31e2eaf2241835934331828ec5eae7dcab78ede",
+  "cloudflareVersion": "b5a13309-2dfd-482b-84d5-151ab9c47007",
+  "captures": [
+    {
+      "briefing": "검토가 필요한 후보가 1개 있습니다.",
+      "height": 2240,
+      "meta": "화면 조회 시각 (UTC) 2026. 9. 5. 오전 1:52",
+      "scrollWidth": 360,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 375,
+      "file": "dashboard-ko-375.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2240,
+      "sha256": "ea5ae1bae076b2b38cfae421b08bd2f9567da371d0d138091bdedd46b8ccf531",
+      "capturedAt": "2026-09-05T01:52:47.420Z"
+    },
+    {
+      "briefing": "검토가 필요한 후보가 1개 있습니다.",
+      "height": 2028,
+      "meta": "화면 조회 시각 (UTC) 2026. 9. 5. 오전 1:52",
+      "scrollWidth": 753,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 768,
+      "file": "dashboard-ko-768.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2028,
+      "sha256": "f238b7bf67376118c1fb0df0148fd38ce7031e365a36ad461a4145e2e3d11aa5",
+      "capturedAt": "2026-09-05T01:52:49.031Z"
+    },
+    {
+      "briefing": "검토가 필요한 후보가 1개 있습니다.",
+      "height": 1309,
+      "meta": "화면 조회 시각 (UTC) 2026. 9. 5. 오전 1:52",
+      "scrollWidth": 1265,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/ko/dashboard",
+      "width": 1280,
+      "file": "dashboard-ko-1280.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1309,
+      "sha256": "852c5a4fce39958ff7727cb6fab700eb2dda18244a1c2d8a89735cf0980b909d",
+      "capturedAt": "2026-09-05T01:52:50.538Z"
+    },
+    {
+      "briefing": "Candidates needing review: 1.",
+      "height": 2349,
+      "meta": "Page retrieved at (UTC) Sep 5, 2026, 1:52 AM",
+      "scrollWidth": 360,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 375,
+      "file": "dashboard-en-375.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 375,
+      "pixelHeight": 2349,
+      "sha256": "b918204888110e55a1e86986672160a38952a8aedaeff75a8e9787373af187e8",
+      "capturedAt": "2026-09-05T01:52:52.027Z"
+    },
+    {
+      "briefing": "Candidates needing review: 1.",
+      "height": 2091,
+      "meta": "Page retrieved at (UTC) Sep 5, 2026, 1:52 AM",
+      "scrollWidth": 753,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 768,
+      "file": "dashboard-en-768.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 768,
+      "pixelHeight": 2091,
+      "sha256": "a1f6246a8eaf0e6bd3a30bb8b21f20bdf31480425cd459966caf1f182e0e4204",
+      "capturedAt": "2026-09-05T01:52:53.549Z"
+    },
+    {
+      "briefing": "Candidates needing review: 1.",
+      "height": 1347,
+      "meta": "Page retrieved at (UTC) Sep 5, 2026, 1:52 AM",
+      "scrollWidth": 1265,
+      "url": "https://amazon-research-agent.hyj5317.workers.dev/en/dashboard",
+      "width": 1280,
+      "file": "dashboard-en-1280.png",
+      "signature": "89504e470d0a1a0a",
+      "pixelWidth": 1280,
+      "pixelHeight": 1347,
+      "sha256": "b03d8a20c1392c052bd54ccef15da655c4a1e601b1d34b29d9151cbe0a41c2b2",
+      "capturedAt": "2026-09-05T01:52:55.070Z"
+    }
+  ]
+}
