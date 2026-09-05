@@ -49,8 +49,11 @@ The Worker needs these encrypted secrets:
 
 Optional web secrets:
 
-- `ARA_ADMIN_ALLOWED_IPS` — comma-separated IPv4/IPv6 allowlist. When set,
-  production logins and admin routes require a matching `CF-Connecting-IP`.
+- `ARA_ADMIN_ALLOWED_IPS` — comma-separated IPv4/IPv6 addresses or CIDRs.
+  When set, production logins and admin routes require a matching
+  `CF-Connecting-IP`.
+- `ARA_ADMIN_ALLOWED_ORIGINS` — comma-separated extra HTTPS origins, used
+  when the admin UI is reached through Tailscale Serve.
 - `ADMIN_TOTP_SECRET_BASE32` — authenticator secret. When set, login also
   requires a current 6-digit TOTP code.
 

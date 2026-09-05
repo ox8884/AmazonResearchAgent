@@ -45,6 +45,88 @@ export function trustedCloudflareClientIdentityHash(request: Request): string | 
   return canonicalIp === undefined ? undefined : clientIdentityHash(canonicalIp);
 }
 
+function ipv4ToInt(value: string): number | undefined {
+  if (isIP(value) !== 4) {
+    return undefined;
+  }
+  const parts = value.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return undefined;
+  }
+  return ((parts[0] ?? 0) << 24 >>> 0) + ((parts[1] ?? 0) << 16) + ((parts[2] ?? 0) << 8) + (parts[3] ?? 0);
+}
+
+function ipv6ToBytes(value: string): Uint8Array | undefined {
+  const canonical = canonicalClientIp(value);
+  if (canonical === undefined || isIP(canonical) !== 6) {
+    return undefined;
+  }
+  const halves = canonical.split('::');
+  if (halves.length > 2) {
+    return undefined;
+  }
+  const parsePart = (part: string | undefined): number[] => {
+    if (part === undefined || part.length === 0) {
+      return [];
+    }
+    return part.split(':').map((group) => Number.parseInt(group, 16));
+  };
+  const head = parsePart(halves[0]);
+  const tail = halves.length === 2 ? parsePart(halves[1]) : [];
+  if (head.some((group) => !Number.isInteger(group)) || tail.some((group) => !Number.isInteger(group))) {
+    return undefined;
+  }
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) {
+    return undefined;
+  }
+  const groups = halves.length === 2 ? [...head, ...Array.from({ length: missing }, () => 0), ...tail] : head;
+  const bytes = new Uint8Array(16);
+  groups.forEach((group, index) => {
+    bytes[index * 2] = group >> 8;
+    bytes[index * 2 + 1] = group & 0xff;
+  });
+  return bytes;
+}
+
+function cidrContains(cidr: string, ip: string): boolean {
+  const slash = cidr.lastIndexOf('/');
+  if (slash < 1) {
+    return false;
+  }
+  const base = cidr.slice(0, slash);
+  const prefix = Number(cidr.slice(slash + 1));
+  if (!Number.isInteger(prefix)) {
+    return false;
+  }
+  const ip4 = ipv4ToInt(ip);
+  const base4 = ipv4ToInt(base);
+  if (ip4 !== undefined && base4 !== undefined) {
+    if (prefix < 0 || prefix > 32) {
+      return false;
+    }
+    const mask = prefix === 0 ? 0 : (0xffff_ffff << (32 - prefix)) >>> 0;
+    return (ip4 & mask) === (base4 & mask);
+  }
+  const ip6 = ipv6ToBytes(ip);
+  const base6 = ipv6ToBytes(base);
+  if (ip6 === undefined || base6 === undefined || prefix < 0 || prefix > 128) {
+    return false;
+  }
+  const fullBytes = Math.floor(prefix / 8);
+  const rem = prefix % 8;
+  for (let index = 0; index < fullBytes; index += 1) {
+    if (ip6[index] !== base6[index]) {
+      return false;
+    }
+  }
+  if (rem === 0) {
+    return true;
+  }
+  const mask = (0xff << (8 - rem)) & 0xff;
+  return ((ip6[fullBytes] ?? 0) & mask) === ((base6[fullBytes] ?? 0) & mask);
+}
+
 export function parseAdminAllowedIps(
   value: string | undefined
 ): readonly string[] {
@@ -52,13 +134,27 @@ export function parseAdminAllowedIps(
     return [];
   }
   const allowed: string[] = [];
-  for (const entry of value.split(',')) {
-    const canonical = canonicalClientIp(entry.trim());
+  for (const raw of value.split(',')) {
+    const entry = raw.trim();
+    if (entry.includes('/')) {
+      const slash = entry.lastIndexOf('/');
+      const base = entry.slice(0, slash);
+      const prefix = Number(entry.slice(slash + 1));
+      if (canonicalClientIp(base) !== undefined && Number.isInteger(prefix)) {
+        allowed.push(entry);
+      }
+      continue;
+    }
+    const canonical = canonicalClientIp(entry);
     if (canonical) {
       allowed.push(canonical);
     }
   }
   return allowed;
+}
+
+export function ipIsAllowed(ip: string, allowed: readonly string[]): boolean {
+  return allowed.some((entry) => entry.includes('/') ? cidrContains(entry, ip) : entry === ip);
 }
 
 export function assertAdminClientAllowed(request: Request): void {
@@ -73,7 +169,7 @@ export function assertAdminClientAllowed(request: Request): void {
     }
     return;
   }
-  if (!allowed.includes(clientIp)) {
+  if (!ipIsAllowed(clientIp, allowed)) {
     throw new AdminAuthError('Admin session is required.', 401);
   }
 }

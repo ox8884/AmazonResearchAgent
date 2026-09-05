@@ -21,6 +21,30 @@ function secretsEqual(left: string, right: string): boolean {
   return timingSafeEqual(actual, expected);
 }
 
+export function parseAdminAllowedOrigins(
+  value: string | undefined
+): readonly string[] {
+  if (value === undefined) {
+    return [];
+  }
+  const allowed: string[] = [];
+  for (const raw of value.split(',')) {
+    const entry = raw.trim();
+    if (entry.length === 0) {
+      continue;
+    }
+    try {
+      const url = new URL(entry);
+      if (url.protocol === 'https:' && url.username === '' && url.password === '' && !url.search && !url.hash) {
+        allowed.push(url.origin);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return allowed;
+}
+
 export function verifyRequestOrigin(request: Request): void {
   const originHeader = request.headers.get('origin');
   const host = requestHost(request);
@@ -33,7 +57,12 @@ export function verifyRequestOrigin(request: Request): void {
   } catch {
     throw new AdminAuthError('Request origin is invalid.', 403);
   }
-  if (origin.host !== host || origin.protocol !== new URL(request.url).protocol) {
+  const sameHost =
+    origin.host === host && origin.protocol === new URL(request.url).protocol;
+  const extraOrigin = parseAdminAllowedOrigins(
+    process.env.ARA_ADMIN_ALLOWED_ORIGINS
+  ).includes(origin.origin);
+  if (!sameHost && !extraOrigin) {
     throw new AdminAuthError('Request origin is not allowed.', 403);
   }
 }

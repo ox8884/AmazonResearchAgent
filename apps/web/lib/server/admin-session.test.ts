@@ -67,6 +67,28 @@ describe('single-admin session', () => {
     ).toThrow(/origin is not allowed/u);
   });
 
+  it('allows a configured HTTPS Tailscale origin while Host stays on the worker hostname', () => {
+    vi.stubEnv(
+      'ARA_ADMIN_ALLOWED_ORIGINS',
+      'https://hermes-vnic.tail6820dc.ts.net'
+    );
+    const key = Buffer.alloc(32, 4);
+    const issued = createAdminSession(key, new Date('2026-08-27T00:00:00.000Z'), 3_600);
+    const request = new Request('https://app.example.test/api/ai-providers', {
+      method: 'POST',
+      headers: {
+        origin: 'https://hermes-vnic.tail6820dc.ts.net',
+        host: 'app.example.test',
+        cookie: `ara_admin_session=${issued.token}; ara_csrf=${issued.csrfToken}`,
+        'x-csrf-token': issued.csrfToken
+      }
+    });
+    expect(
+      verifyCsrfRequest(request, key, new Date('2026-08-27T00:10:00.000Z'))
+    ).toMatchObject({ csrfToken: issued.csrfToken });
+    vi.unstubAllEnvs();
+  });
+
   it('marks HTTPS requests as Secure even when NODE_ENV is not production', () => {
     vi.stubEnv('NODE_ENV', 'development');
     expect(
