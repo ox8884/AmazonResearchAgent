@@ -23,7 +23,7 @@ const emptyValues: BusinessFormValues = {
   brandFitStatus: 'unknown', marketStatus: 'unknown', marketPeriodFrom: '', marketPeriodTo: '', comparisonRationale: '', sampleStatus: 'unknown', safetyIpStatus: 'unknown', requestedApiPurposes: []
 };
 
-function inputDateTime(value: string | null): string { return value === null || Number.isNaN(Date.parse(value)) ? '' : new Date(value).toISOString().slice(0, 16); }
+function utcInputDateTime(value: string | null): string { return value === null || Number.isNaN(Date.parse(value)) ? '' : new Date(value).toISOString().slice(0, 16); }
 function amount(value: string): number | null { const parsed = Number(value); return value.trim() === '' || !Number.isFinite(parsed) ? null : parsed; }
 function integer(value: string): number | null { const parsed = amount(value); return parsed !== null && Number.isInteger(parsed) ? parsed : null; }
 
@@ -34,12 +34,20 @@ function asSource(values: BusinessFormValues): ResearchBusinessSource | null {
   return { reference, url: url === '' ? null : url, recordedAt: new Date().toISOString(), basis: values.sourceBasis };
 }
 
-function utcRecordedAt(value: string): string | null {
+function utcDateTime(value: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
   const milliseconds = Date.parse(`${value}Z`);
   if (Number.isNaN(milliseconds)) return null;
-  const recordedAt = new Date(milliseconds).toISOString();
-  return recordedAt.slice(0, 16) === value ? recordedAt : null;
+  const dateTime = new Date(milliseconds).toISOString();
+  return dateTime.slice(0, 16) === value ? dateTime : null;
+}
+
+function preservedUtcDateTime(value: string, initial: string, saved: string | null): string | null {
+  return saved !== null && value === initial ? saved : value === '' ? null : utcDateTime(value);
+}
+
+function hasInvalidDateTime(values: BusinessFormValues): boolean {
+  return [values.quoteExpiresAt, values.marketPeriodFrom, values.marketPeriodTo, values.marketSourceRecordedAt].some((value) => value !== '' && utcDateTime(value) === null);
 }
 
 function marketSource(values: BusinessFormValues, initial: BusinessFormValues, savedSource: ResearchBusinessSource | null): ResearchBusinessSource | null {
@@ -47,10 +55,10 @@ function marketSource(values: BusinessFormValues, initial: BusinessFormValues, s
   const inputRecordedAt = values.marketSourceRecordedAt.trim();
   const recordedAt = savedSource !== null && values.marketSourceRecordedAt === initial.marketSourceRecordedAt
     ? savedSource.recordedAt
-    : utcRecordedAt(inputRecordedAt);
+    : utcDateTime(inputRecordedAt);
   if (reference === '' || recordedAt === null) return null;
   const url = values.marketSourceUrl.trim();
-  return { reference, url: url === '' ? null : url, recordedAt: new Date(recordedAt).toISOString(), basis: values.marketSourceBasis };
+  return { reference, url: url === '' ? null : url, recordedAt, basis: values.marketSourceBasis };
 }
 
 function money(value: string, source: ResearchBusinessSource | null) {
@@ -93,7 +101,7 @@ function selectedQuote(values: BusinessFormValues, source: ResearchBusinessSourc
   }
   return {
     source, supplierName: values.supplierName, specificationReference: values.specificationReference, orderQuantity: integer(values.orderQuantity), minimumOrderQuantity: integer(values.minimumOrderQuantity),
-    landedUnitCost: money(values.landedUnitCost, source), landedShipmentTotal: money(values.landedShipmentTotal, source), expiresAt: values.quoteExpiresAt === '' ? null : new Date(values.quoteExpiresAt).toISOString(),
+    landedUnitCost: money(values.landedUnitCost, source), landedShipmentTotal: money(values.landedShipmentTotal, source), expiresAt: preservedUtcDateTime(values.quoteExpiresAt, initial.quoteExpiresAt, savedQuote?.expiresAt ?? null),
     incoterm: values.incoterm.trim() === '' ? null : values.incoterm, destination: values.destination.trim() === '' ? null : values.destination, leadTimeDays: integer(values.leadTimeDays),
     landedCostCoverage: coverage(values)
   };
@@ -105,12 +113,12 @@ export function initialBusinessFormValues(evidence: ResearchBusinessEvidence | n
   const quote = evidence.selectedQuote;
   const savedMarketSource = evidence.marketCheck.source;
   return {
-    specificationReference: evidence.specification.reference, specificationDescription: evidence.specification.description, sourceReference: source?.reference ?? '', sourceUrl: source?.url ?? '', sourceBasis: source?.basis === 'quote' ? 'quote' : 'estimate', marketSourceReference: savedMarketSource?.reference ?? '', marketSourceUrl: savedMarketSource?.url ?? '', marketSourceBasis: savedMarketSource?.basis ?? 'observed', marketSourceRecordedAt: inputDateTime(savedMarketSource?.recordedAt ?? null), disposition: evidence.disposition,
+    specificationReference: evidence.specification.reference, specificationDescription: evidence.specification.description, sourceReference: source?.reference ?? '', sourceUrl: source?.url ?? '', sourceBasis: source?.basis === 'quote' ? 'quote' : 'estimate', marketSourceReference: savedMarketSource?.reference ?? '', marketSourceUrl: savedMarketSource?.url ?? '', marketSourceBasis: savedMarketSource?.basis ?? 'observed', marketSourceRecordedAt: utcInputDateTime(savedMarketSource?.recordedAt ?? null), disposition: evidence.disposition,
     salePrice: String(evidence.salePrice.amountUsd ?? ''), referralFee: String(evidence.amazonUnitCosts.referralFee.amountUsd ?? ''), fulfillmentFee: String(evidence.amazonUnitCosts.fulfillmentFee.amountUsd ?? ''), otherVariableCost: String(evidence.amazonUnitCosts.otherVariableCost.amountUsd ?? ''),
     perUnitAdCost: String(evidence.perUnitAdCost.amountUsd ?? ''), perUnitReturnCost: String(evidence.perUnitReturnCost.amountUsd ?? ''), supplierName: quote?.supplierName ?? '', orderQuantity: String(quote?.orderQuantity ?? ''), minimumOrderQuantity: String(quote?.minimumOrderQuantity ?? ''),
     landedUnitCost: String(quote?.landedUnitCost.amountUsd ?? ''), landedShipmentTotal: String(quote?.landedShipmentTotal.amountUsd ?? ''), upfrontLaunchCost: String(evidence.upfrontLaunchCost.amountUsd ?? ''), launchAdvertisingCash: String(evidence.launchAdvertisingCash.amountUsd ?? ''), launchReserveCash: String(evidence.launchReserveCash.amountUsd ?? ''),
-    incoterm: quote?.incoterm ?? '', destination: quote?.destination ?? '', leadTimeDays: String(quote?.leadTimeDays ?? ''), quoteExpiresAt: inputDateTime(quote?.expiresAt ?? null), productCoverage: quote?.landedCostCoverage.product ?? 'unknown', packagingCoverage: quote?.landedCostCoverage.packaging ?? 'unknown', freightCoverage: quote?.landedCostCoverage.freight ?? 'unknown', dutiesCoverage: quote?.landedCostCoverage.duties ?? 'unknown', deliveryCoverage: quote?.landedCostCoverage.delivery ?? 'unknown', brandFitStatus: evidence.brandFit.status, marketStatus: evidence.marketCheck.status,
-    marketPeriodFrom: inputDateTime(evidence.marketCheck.sourcePeriod?.from ?? null), marketPeriodTo: inputDateTime(evidence.marketCheck.sourcePeriod?.to ?? null), comparisonRationale: evidence.marketCheck.comparisonRationale ?? '', sampleStatus: evidence.sampleCheck.status, safetyIpStatus: evidence.safetyIpCheck.status, requestedApiPurposes: evidence.requestedApiPurposes
+    incoterm: quote?.incoterm ?? '', destination: quote?.destination ?? '', leadTimeDays: String(quote?.leadTimeDays ?? ''), quoteExpiresAt: utcInputDateTime(quote?.expiresAt ?? null), productCoverage: quote?.landedCostCoverage.product ?? 'unknown', packagingCoverage: quote?.landedCostCoverage.packaging ?? 'unknown', freightCoverage: quote?.landedCostCoverage.freight ?? 'unknown', dutiesCoverage: quote?.landedCostCoverage.duties ?? 'unknown', deliveryCoverage: quote?.landedCostCoverage.delivery ?? 'unknown', brandFitStatus: evidence.brandFit.status, marketStatus: evidence.marketCheck.status,
+    marketPeriodFrom: utcInputDateTime(evidence.marketCheck.sourcePeriod?.from ?? null), marketPeriodTo: utcInputDateTime(evidence.marketCheck.sourcePeriod?.to ?? null), comparisonRationale: evidence.marketCheck.comparisonRationale ?? '', sampleStatus: evidence.sampleCheck.status, safetyIpStatus: evidence.safetyIpCheck.status, requestedApiPurposes: evidence.requestedApiPurposes
   };
 }
 
@@ -121,13 +129,16 @@ function savedMoney(value: string, initial: string, saved: ResearchBusinessEvide
 export function businessEvidenceFrom(values: BusinessFormValues, saved: ResearchBusinessEvidence | null): { readonly kind: 'valid'; readonly evidence: ResearchBusinessEvidence } | { readonly kind: 'invalid'; readonly message: string } {
   const source = asSource(values);
   const initial = initialBusinessFormValues(saved);
+  if (hasInvalidDateTime(values)) return { kind: 'invalid', message: '필수 사양·출처·수량을 확인하세요. 알려진 금액과 통과한 검증에는 출처가 필요합니다.' };
   const savedMarketSource = saved?.marketCheck.source ?? null;
   const marketSourceUnchanged = saved !== null && sameMarketSource(values, initial);
-  const marketPeriod = saved !== null && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo
-    ? saved.marketCheck.sourcePeriod
-    : values.marketPeriodFrom === '' || values.marketPeriodTo === ''
-      ? null
-      : { from: new Date(values.marketPeriodFrom).toISOString(), to: new Date(values.marketPeriodTo).toISOString() };
+  const savedMarketPeriod = saved?.marketCheck.sourcePeriod ?? null;
+  const marketPeriod = values.marketPeriodFrom === '' || values.marketPeriodTo === ''
+    ? null
+    : {
+      from: preservedUtcDateTime(values.marketPeriodFrom, initial.marketPeriodFrom, savedMarketPeriod?.from ?? null),
+      to: preservedUtcDateTime(values.marketPeriodTo, initial.marketPeriodTo, savedMarketPeriod?.to ?? null)
+    };
   const sameMarket = saved !== null && values.marketStatus === initial.marketStatus && values.marketPeriodFrom === initial.marketPeriodFrom && values.marketPeriodTo === initial.marketPeriodTo && values.comparisonRationale === initial.comparisonRationale && marketSourceUnchanged;
   const resolvedMarketSource = values.marketStatus === 'unknown'
     ? null

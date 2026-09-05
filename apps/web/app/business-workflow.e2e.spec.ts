@@ -100,8 +100,8 @@ async function fillCommercialEvidence(page: Page): Promise<void> {
   await page.getByLabel('배송 포함 범위').selectOption('included');
   await page.getByLabel('브랜드 적합성').selectOption('pass');
   await page.getByLabel('시장 검증').selectOption('pass');
-  await page.getByLabel('관측 시작').fill('2026-08-01T00:00');
-  await page.getByLabel('관측 종료').fill('2026-08-31T23:59');
+  await page.getByLabel('관측 시작 (UTC)').fill('2026-08-01T00:00');
+  await page.getByLabel('관측 종료 (UTC)').fill('2026-08-31T23:59');
   await page.getByLabel('시장 관측 출처 레퍼런스').fill('QA Top Products observation');
   await page.getByLabel('시장 관측 URL').fill('https://market.example/qa-top-products');
   await page.getByLabel('시장 출처 성격').selectOption('observed');
@@ -278,6 +278,7 @@ test('persists a quote wait and landed-cost coverage through reload and criteria
   await loginAsAdmin(page);
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
   await openCandidateWithFreshAssessment(page);
+  await saveCommercialEvidence(page);
   await page.setViewportSize({ width: 375, height: 1000 });
   const refreshButton = page.getByRole('button', { name: '현재 기준 다시 확인' });
   await expect(refreshButton).toHaveCSS('white-space', 'nowrap');
@@ -345,15 +346,41 @@ test('persists a source-only observed market edit through reload and GET-only cr
   expect(businessPostCount).toBe(0);
 });
 
+test('saves business datetime edits in UTC without shifting untouched evidence', async ({ page }) => {
+  await loginAsAdmin(page);
+  await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
+  await openCandidateWithFreshAssessment(page);
+  await fillCommercialEvidence(page);
+  await page.getByLabel('견적 만료 (UTC)').fill('2026-12-01T06:00');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await expect(page.getByText('상업 근거를 저장했습니다.')).toBeVisible();
+
+  const periodSave = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'POST');
+  await page.getByLabel('관측 종료 (UTC)').fill('2026-09-01T00:01');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  const periodPayload = await (await periodSave).json() as { evidence: { marketCheck: { sourcePeriod: { from: string; to: string } | null } } };
+  expect(periodPayload.evidence.marketCheck.sourcePeriod).toEqual({ from: '2026-08-01T00:00:00.000Z', to: '2026-09-01T00:01:00.000Z' });
+
+  const quoteSave = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'POST');
+  await page.getByLabel('공급처 이름').fill('QA Supplier revised');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  const quotePayload = await (await quoteSave).json() as { evidence: { selectedQuote: { expiresAt: string | null } | null } };
+  expect(quotePayload.evidence.selectedQuote?.expiresAt).toBe('2026-12-01T06:00:00.000Z');
+
+  const editedQuoteSave = page.waitForResponse((response) => response.url().includes(`/api/candidates/${candidateId}/business`) && response.request().method() === 'POST');
+  await page.getByLabel('견적 만료 (UTC)').fill('2026-12-02T09:31');
+  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  const editedQuotePayload = await (await editedQuoteSave).json() as { evidence: { selectedQuote: { expiresAt: string | null } | null } };
+  expect(editedQuotePayload.evidence.selectedQuote?.expiresAt).toBe('2026-12-02T09:31:00.000Z');
+});
+
 test('captures fresh visual-fix states without overwriting final acceptance evidence', async ({ page }) => {
   test.skip(!isVisualFixCapturePhase, 'Visual-fix capture is explicit.');
   await loginAsAdmin(page);
 
   await saveSettings(page, { ...defaultSettings, launchBudgetUsd: '5000' });
   await openCandidateWithFreshAssessment(page);
-  await page.getByLabel('출처 성격', { exact: true }).selectOption('estimate');
-  await page.getByLabel('사업 단계').selectOption('research');
-  await page.getByRole('button', { name: '상업 근거 저장' }).click();
+  await saveCommercialEvidence(page);
   await expect(page.getByText('견적 초안 준비')).toBeVisible();
   await captureAtViewports(page, visualFixEvidenceRoot, 'candidate-saved-db');
 
@@ -387,7 +414,9 @@ test('captures fresh visual-fix states without overwriting final acceptance evid
   await page.unroute(`**/api/candidates/${candidateId}/business`);
 
   await openCandidateWithFreshAssessment(page);
-  await page.getByLabel('사업 단계').selectOption('research');
+  await fillCommercialEvidence(page);
+  await page.getByLabel('수량').fill('600');
+  await page.getByLabel('도착 총액 (USD)').fill('3000');
   await page.getByRole('button', { name: '상업 근거 저장' }).click();
   await expect(page.getByText('견적 초안 준비')).toBeVisible();
   await saveSettings(page, defaultSettings);

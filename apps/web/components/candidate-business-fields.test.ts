@@ -154,4 +154,57 @@ describe('candidate business form provenance', () => {
       recordedAt: '2026-09-04T15:30:00.000Z'
     });
   });
+
+  it('preserves an untouched market period endpoint when the other endpoint changes', () => {
+    const saved = ResearchBusinessEvidenceSchema.parse({
+      ...evidence,
+      marketCheck: {
+        ...evidence.marketCheck,
+        sourcePeriod: { from: '2026-08-01T00:00:17.123Z', to: '2026-08-31T23:59:42.456Z' }
+      }
+    });
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(saved),
+      marketPeriodTo: '2026-09-01T00:01'
+    }, saved);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.marketCheck.sourcePeriod).toEqual({
+      from: '2026-08-01T00:00:17.123Z',
+      to: '2026-09-01T00:01:00.000Z'
+    });
+  });
+
+  it('preserves an untouched quote expiry when quote metadata changes', () => {
+    const saved = ResearchBusinessEvidenceSchema.parse({
+      ...evidence,
+      selectedQuote: { ...evidence.selectedQuote, expiresAt: '2026-12-01T06:00:42.456Z' }
+    });
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(saved),
+      supplierName: 'Updated supplier name'
+    }, saved);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.selectedQuote?.expiresAt).toBe('2026-12-01T06:00:42.456Z');
+  });
+
+  it('treats an explicitly edited quote expiry as UTC', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      quoteExpiresAt: '2026-12-02T09:31'
+    }, evidence);
+
+    if (result.kind !== 'valid') throw new Error('Expected valid business evidence');
+    expect(result.evidence.selectedQuote?.expiresAt).toBe('2026-12-02T09:31:00.000Z');
+  });
+
+  it('rejects an invalid nonblank datetime instead of clearing its evidence', () => {
+    const result = businessEvidenceFrom({
+      ...initialBusinessFormValues(evidence),
+      marketPeriodTo: 'not-a-datetime'
+    }, evidence);
+
+    expect(result).toMatchObject({ kind: 'invalid' });
+  });
 });
