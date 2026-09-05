@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { buildResearchObjects, scoreIsPreliminaryOnly } from './research-objects';
 import type { CandidateSummary } from './server/dashboard-data';
+import { summarizeCandidateEvidence } from './candidate-evidence';
 
 function candidate(overrides: Partial<CandidateSummary> & { id: string }): CandidateSummary {
   return {
     keyword: 'batter dispenser',
     preliminary_score: null,
-    rule_passed: null,
+    rule_passed: false,
     rule_reasons: null,
-    state: null,
+    state: 'Discovered',
+    evidence: { kind: 'unavailable' },
     ...overrides
-  } as CandidateSummary;
+  };
 }
 
 const SCHEMA_VALID_REASONS = [
@@ -19,6 +21,16 @@ const SCHEMA_VALID_REASONS = [
 ] as const;
 
 describe('buildResearchObjects — lead record consistency', () => {
+  it('keeps collected evidence bound to the lead instead of the first record', () => {
+    const evidence = { kind: 'ready', completeness: 'complete', records: [], summary: summarizeCandidateEvidence([
+      { kind: 'keyword_metrics', payload: { monthlySearchVolume: 311 } }
+    ]) } as const;
+    const objects = buildResearchObjects([
+      candidate({ id: 'first', state: 'Discovered' }),
+      candidate({ id: 'lead', state: 'Needs Review', evidence })
+    ]);
+    expect(objects[0]?.leadRecord.evidence).toEqual(evidence);
+  });
   it('derives lead state and lead reason from the SAME lead record in mixed-state groups', () => {
     // records[0] is Ready (later tier) with a schema-valid reason;
     // records[1] is Waiting (earlier tier) with a different schema-valid reason.

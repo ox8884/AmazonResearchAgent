@@ -1,5 +1,6 @@
 import { RuleReasonSchema, type RuleReason } from '@ara/shared';
 import type { CandidateSummary } from './server/dashboard-data';
+import type { CandidateEvidenceView } from './candidate-evidence';
 
 /**
  * Display-only grouping of candidate records into "research objects".
@@ -21,6 +22,7 @@ export interface CandidateRecordRef {
   readonly preliminaryScore: number | null;
   readonly rulePassed: boolean | null;
   readonly ruleReasons: unknown;
+  readonly evidence: CandidateEvidenceView;
 }
 
 export interface StateBreakdownEntry {
@@ -94,7 +96,8 @@ export function buildResearchObjects(
       state: candidate.state ?? null,
       preliminaryScore: candidate.preliminary_score ?? null,
       rulePassed: candidate.rule_passed ?? null,
-      ruleReasons: candidate.rule_reasons
+      ruleReasons: candidate.rule_reasons,
+      evidence: candidate.evidence
     };
     const existing = byKey.get(key);
     if (existing) {
