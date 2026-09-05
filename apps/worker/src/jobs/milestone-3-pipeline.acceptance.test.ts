@@ -21,6 +21,7 @@ const integration = supabaseUrl && serviceRoleKey ? describe : describe.skip;
 const root = dirname(fileURLToPath(import.meta.url));
 const jsFixtures = join(root, '../../../../tests/fixtures/jungle-scout');
 const ofCsv = join(root, '../../../../tests/fixtures/opportunity-finder/page-1.csv');
+const IMMEDIATELY_CLAIMABLE_AT = '2000-01-01T00:00:00.000Z';
 
 
 function loadPage(name: string): ProductDatabasePage {
@@ -348,7 +349,7 @@ integration('Milestone 3 Task 12 pipeline gate', () => {
     expect(calls).toBe(0);
     const { data: eligible, error: eligibleError } = await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', jobs?.[0]?.id ?? '')
       .select('id,status,available_at,priority')
       .single();

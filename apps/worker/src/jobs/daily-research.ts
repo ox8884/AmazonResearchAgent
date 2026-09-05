@@ -348,6 +348,28 @@ function isFresh(
   );
 }
 
+export function snapshotCacheObservationAt(
+  metrics: unknown,
+  nowMilliseconds: number
+): string | undefined {
+  if (!metrics || typeof metrics !== 'object' || !('observation' in metrics)) {
+    return undefined;
+  }
+  const observation = metrics.observation;
+  if (
+    !observation ||
+    typeof observation !== 'object' ||
+    !('cacheCapturedAt' in observation) ||
+    typeof observation.cacheCapturedAt !== 'string'
+  ) {
+    return undefined;
+  }
+  const capturedAtMilliseconds = Date.parse(observation.cacheCapturedAt);
+  return Number.isFinite(capturedAtMilliseconds) && capturedAtMilliseconds <= nowMilliseconds
+    ? observation.cacheCapturedAt
+    : undefined;
+}
+
 async function selectResearchPlan(
   client: QueueDatabaseClient,
   settings: ResearchSettings,
@@ -385,7 +407,7 @@ async function selectResearchPlan(
       : await collectDailyResearchPages((from, to) =>
           client
             .from('market_snapshots')
-            .select('id,candidate_id,captured_at')
+            .select('id,candidate_id,captured_at,metrics')
             .in('candidate_id', candidateIds)
             .order('candidate_id', { ascending: true })
             .order('captured_at', { ascending: false })
@@ -394,7 +416,7 @@ async function selectResearchPlan(
         );
   const latestSnapshots = new Map<
     string,
-    { readonly capturedAt: string; readonly id: string }
+    { readonly cacheCapturedAt: string | undefined; readonly capturedAt: string; readonly id: string }
   >();
   for (const snapshot of snapshotRows) {
     if (!snapshot.candidate_id) {
@@ -407,6 +429,7 @@ async function selectResearchPlan(
       (snapshot.captured_at === previous.capturedAt && snapshot.id > previous.id)
     ) {
       latestSnapshots.set(snapshot.candidate_id, {
+        cacheCapturedAt: snapshotCacheObservationAt(snapshot.metrics, now.getTime()),
         capturedAt: snapshot.captured_at,
         id: snapshot.id
       });
@@ -431,7 +454,7 @@ async function selectResearchPlan(
           ? settings.watchFreshnessHours
           : settings.strongFreshnessHours;
     const snapshot = latestSnapshots.get(candidate.id);
-    const capturedAt = snapshot?.capturedAt;
+    const capturedAt = snapshot?.cacheCapturedAt;
     return {
       id: candidate.id,
       bucket,

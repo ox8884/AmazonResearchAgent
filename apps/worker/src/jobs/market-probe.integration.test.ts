@@ -40,6 +40,7 @@ const fixture = ProductDatabasePageSchema.parse(
   )
 );
 const emptyPage = ProductDatabasePageSchema.parse({ data: [] });
+const IMMEDIATELY_CLAIMABLE_AT = '2000-01-01T00:00:00.000Z';
 
 
 function database() {
@@ -264,7 +265,7 @@ integration('market probe job', () => {
     expect(snapshot?.estimated_market_sales).toBeNull();
   });
 
-  it('persists three HTTP attempts when Product Database recovers after two 500s', async () => {
+  it('does not spend unreserved retries when Product Database would recover later', async () => {
     const { candidateId } = await seedSinkCandidate();
     let hits = 0;
     const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
@@ -285,19 +286,20 @@ integration('market probe job', () => {
     });
     const budget = new MemoryApiBudget({ dailyLimit: 20, used: 0, reserve: 5 });
     try {
-      await runMarketProbe(
-        { candidateId, locale: 'ko' },
-        {
-          client,
-          budget,
-          queryProductDatabase: (phrases) =>
-            queryProductDatabase(jsClient, {
-              marketplace: 'us',
-              phrases: [...phrases]
-            })
-        }
-      );
-
+      await expect(
+        runMarketProbe(
+          { candidateId, locale: 'ko' },
+          {
+            client,
+            budget,
+            queryProductDatabase: (phrases) =>
+              queryProductDatabase(jsClient, {
+                marketplace: 'us',
+                phrases: [...phrases]
+              })
+          }
+        )
+      ).rejects.toBeInstanceOf(JungleScoutClientError);
     } finally {
       http.close();
     }
@@ -307,12 +309,12 @@ integration('market probe job', () => {
       .eq('candidate_id', candidateId)
       .eq('endpoint', 'product_database')
       .maybeSingle();
-    expect(hits).toBe(3);
+    expect(hits).toBe(1);
     expect(usage).toMatchObject({
-      call_count: 3,
-      retry_count: 2,
-      http_status: 200,
-      success: true
+      call_count: 1,
+      retry_count: 0,
+      http_status: 500,
+      success: false
     });
   });
 
@@ -355,11 +357,11 @@ integration('market probe job', () => {
       .select('call_count,retry_count,http_status,success')
       .eq('candidate_id', candidateId)
       .eq('endpoint', 'product_database');
-    expect(hits).toBe(3);
+    expect(hits).toBe(1);
     expect(usage).toHaveLength(1);
     expect(usage?.[0]).toMatchObject({
-      call_count: 3,
-      retry_count: 2,
+      call_count: 1,
+      retry_count: 0,
       http_status: 500,
       success: false
     });
@@ -982,7 +984,7 @@ integration('market probe job', () => {
     expect(expandedHits).toBe(1);
     await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', firstJob.id);
     const retryClaimed = await queue.claimJobs(workerId, 1, 60);
     const retryJob = retryClaimed.find((job) => job.id === firstJob.id);
@@ -1034,7 +1036,7 @@ integration('market probe job', () => {
     }
     await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', nextId);
     const reclaimClaimed = await queue.claimJobs(`${workerId}-reclaim`, 1, 60);
     const reclaimJob = reclaimClaimed.find((job) => job.id === nextId);
@@ -1118,7 +1120,7 @@ integration('market probe job', () => {
     expect(expandedHits).toBe(1);
     await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', firstJob.id);
     const retryClaimed = await queue.claimJobs(workerId, 1, 60);
     const retryJob = retryClaimed.find((job) => job.id === firstJob.id);
@@ -1159,7 +1161,7 @@ integration('market probe job', () => {
     expect(firstContinuation.payload).toMatchObject({ candidateId, locale: 'ko' });
     await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', firstContinuation.id);
     const preExpiryClaimed = await queue.claimJobs(`${workerId}-early`, 1, 60);
     const preExpiryJob = preExpiryClaimed.find((job) => job.id === firstContinuation.id);
@@ -1213,7 +1215,7 @@ integration('market probe job', () => {
       .eq('cache_key', expandedKey);
     await client
       .from('jobs')
-      .update({ available_at: new Date().toISOString(), priority: 1 })
+      .update({ available_at: IMMEDIATELY_CLAIMABLE_AT, priority: 1 })
       .eq('id', future?.id ?? '');
     const postExpiryClaimed = await queue.claimJobs(`${workerId}-reclaim`, 1, 60);
     const postExpiryJob = postExpiryClaimed.find((job) => job.id === future?.id);
@@ -1344,6 +1346,5 @@ integration('market probe job', () => {
 
 
 });
-
 
 

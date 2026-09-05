@@ -136,7 +136,7 @@ describe('Jungle Scout Product Database adapter', () => {
   });
 
   // Break: a successful 500-500-200 Product Database call discards HTTP attempt metadata.
-  it('returns actual attempt count after retrying to HTTP 200', async () => {
+  it('returns actual attempt count after explicitly enabled retries reach HTTP 200', async () => {
     let hits = 0;
     const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
       hits += 1;
@@ -153,7 +153,8 @@ describe('Jungle Scout Product Database adapter', () => {
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: address.url
+      baseUrl: address.url,
+      retryLimit: 2
     });
     const result = await queryProductDatabase(client, {
       marketplace: 'us',
@@ -190,7 +191,7 @@ describe('Jungle Scout Product Database adapter', () => {
   });
 
 
-  it('exposes actual attempt count on terminal HTTP 500', async () => {
+  it('exposes one actual attempt on terminal HTTP 500 by default', async () => {
     let hits = 0;
     const http = createServer((_request: IncomingMessage, response: ServerResponse) => {
       hits += 1;
@@ -208,10 +209,9 @@ describe('Jungle Scout Product Database adapter', () => {
       queryProductDatabase(client, { marketplace: 'us', phrases: ['faucet mat'] })
     ).rejects.toMatchObject({
       status: 500,
-      httpAttempts: 3
+      httpAttempts: 1
     });
-    expect(hits).toBe(3);
+    expect(hits).toBe(1);
   });
 });
-
 

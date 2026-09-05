@@ -21,7 +21,9 @@ import {
   evaluateProductDataQuality,
   groupProductFamilies,
   scoreMarketOpportunity,
-  type CatalogProduct
+  type CatalogProduct,
+  type MarketMetrics,
+  type ProductFamily
 } from '@ara/research-engine';
 import { executeBudgetedApiCall } from './budgeted-api-call';
 import { nextBudgetResetAt } from './budget-reset';
@@ -48,6 +50,7 @@ export function inFlightResumeIdempotencyKey(input: {
 
 const API_CLAIM_LEASE_MS = 120_000;
 const IN_FLIGHT_RECLAIM_MARGIN_MS = 1_000;
+const PROVIDER_SOURCE_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 
 
 export type MarketProbePhase =
@@ -66,6 +69,13 @@ export type MarketProbePhase =
 export interface MarketProbeCheckpoint {
   readonly phase: MarketProbePhase;
   readonly cacheKey?: string;
+}
+
+export function resumedMarketProbeCacheKey(
+  primaryCacheKey: string,
+  checkpoint: MarketProbeCheckpoint | undefined
+): string {
+  return checkpoint?.cacheKey ?? primaryCacheKey;
 }
 
 export interface MarketProbeDependencies {
@@ -98,6 +108,127 @@ function assertNever(value: never): never {
 
 function asJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
+}
+
+type ProviderUpdatedAtAvailability = 'complete' | 'partial' | 'unavailable';
+
+export type MarketEvidenceAssessment =
+  | {
+      readonly kind: 'ready';
+      readonly cacheCapturedAt: string;
+      readonly providerUpdatedAt: string | null;
+      readonly providerUpdatedAtAvailability: ProviderUpdatedAtAvailability;
+    }
+  | {
+      readonly kind: 'incomplete_units' | 'unverified_cache_observation' | 'stale_provider_source';
+      readonly cacheCapturedAt: string | null;
+      readonly providerUpdatedAt: string | null;
+      readonly providerUpdatedAtAvailability: ProviderUpdatedAtAvailability;
+    };
+
+function validTimestamp(value: string | null, nowMilliseconds: number): value is string {
+  if (!value) {
+    return false;
+  }
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && milliseconds <= nowMilliseconds;
+}
+
+export function assessMarketEvidence(input: {
+  readonly families: readonly ProductFamily[];
+  readonly cacheCapturedAt: string | null;
+  readonly now: Date;
+}): MarketEvidenceAssessment {
+  const nowMilliseconds = input.now.getTime();
+  const allVariants = input.families.flatMap((family) => family.variants);
+  const providerUpdatedAtValues = allVariants
+    .map((variant) => variant.updatedAt)
+    .filter((value): value is string => validTimestamp(value, nowMilliseconds));
+  const providerUpdatedAtAvailability: ProviderUpdatedAtAvailability =
+    providerUpdatedAtValues.length === allVariants.length && allVariants.length > 0
+      ? 'complete'
+      : providerUpdatedAtValues.length > 0
+        ? 'partial'
+        : 'unavailable';
+  const providerUpdatedAt = providerUpdatedAtValues.reduce<string | null>(
+    (earliest, value) =>
+      earliest === null || Date.parse(value) < Date.parse(earliest) ? value : earliest,
+    null
+  );
+  const cacheCapturedAt = validTimestamp(input.cacheCapturedAt, nowMilliseconds)
+    ? input.cacheCapturedAt
+    : null;
+  const cacheAgeMilliseconds = cacheCapturedAt
+    ? nowMilliseconds - Date.parse(cacheCapturedAt)
+    : Number.NaN;
+  const hasCompleteSalesEvidence =
+    input.families.length > 0 &&
+    allVariants.length > 0 &&
+    allVariants.every(
+      (variant) =>
+        variant.unitsSold30 !== null &&
+        Number.isFinite(variant.unitsSold30) &&
+        variant.unitsSold30 >= 0
+    );
+
+  if (!hasCompleteSalesEvidence) {
+    return {
+      kind: 'incomplete_units',
+      cacheCapturedAt,
+      providerUpdatedAt,
+      providerUpdatedAtAvailability
+    };
+  }
+  if (
+    !cacheCapturedAt ||
+    !Number.isFinite(cacheAgeMilliseconds) ||
+    cacheAgeMilliseconds > DEFAULT_CACHE_TTL_MS.product_database
+  ) {
+    return {
+      kind: 'unverified_cache_observation',
+      cacheCapturedAt: null,
+      providerUpdatedAt,
+      providerUpdatedAtAvailability
+    };
+  }
+  if (
+    providerUpdatedAt &&
+    nowMilliseconds - Date.parse(providerUpdatedAt) > PROVIDER_SOURCE_STALE_MS
+  ) {
+    return {
+      kind: 'stale_provider_source',
+      cacheCapturedAt,
+      providerUpdatedAt,
+      providerUpdatedAtAvailability
+    };
+  }
+  return {
+    kind: 'ready',
+    cacheCapturedAt,
+    providerUpdatedAt,
+    providerUpdatedAtAvailability
+  };
+}
+
+function snapshotMetrics(metrics: MarketMetrics, families: readonly ProductFamily[]): Json {
+  const variants = families.flatMap((family) => family.variants);
+  const reviewsObserved = variants.every((variant) => variant.reviews !== null);
+  const brandsObserved = variants.every((variant) => variant.brand !== null);
+  const sellerTypesObserved = variants.every((variant) => variant.sellerType !== null);
+  return asJson({
+    observedSampleSales: metrics.observedSampleSales,
+    estimatedMarketSales: metrics.estimatedMarketSales,
+    top3SalesConcentration: metrics.top3SalesConcentration,
+    top10AverageReviews: reviewsObserved ? metrics.top10AverageReviews : null,
+    medianReviews: reviewsObserved ? metrics.medianReviews : null,
+    shareOver1000Reviews: reviewsObserved ? metrics.shareOver1000Reviews : null,
+    brandConcentration: brandsObserved ? metrics.brandConcentration : null,
+    amazonRetailPresent: sellerTypesObserved ? metrics.amazonRetailPresent : null,
+    familyCount: metrics.familyCount,
+    priceCompression: metrics.priceCompression,
+    newerLowReviewSellerSuccess: metrics.newerLowReviewSellerSuccess,
+    historicalTrendConsistency: metrics.historicalTrendConsistency
+  });
 }
 
 function toCatalog(page: ProductDatabasePage): CatalogProduct[] {
@@ -294,6 +425,7 @@ export async function runMarketProbe(
     marketplace: 'us',
     phrases
   });
+  let evidenceCacheKey = resumedMarketProbeCacheKey(cacheKey, dependencies.checkpoint);
   const priorPhase = dependencies.checkpoint?.phase;
   const canReuseFetchedPage =
     priorPhase === 'api_fetched' ||
@@ -309,7 +441,7 @@ export async function runMarketProbe(
     const { data: cached } = await dependencies.client
       .from('api_cache')
       .select('response')
-      .eq('cache_key', cacheKey)
+      .eq('cache_key', evidenceCacheKey)
       .maybeSingle();
     if (cached?.response) {
       page = ProductDatabasePageSchema.parse(cached.response);
@@ -464,6 +596,7 @@ export async function runMarketProbe(
       switch (outcome.kind) {
         case 'completed': {
           page = ProductDatabasePageSchema.parse(outcome.payload ?? { data: [] });
+          evidenceCacheKey = expandedKey;
           if (!outcome.fromCache) {
             realCalls += outcome.httpAttempts;
           }
@@ -503,7 +636,7 @@ export async function runMarketProbe(
     }
   }
 
-  await dependencies.onCheckpoint?.({ phase: 'api_fetched', cacheKey });
+  await dependencies.onCheckpoint?.({ phase: 'api_fetched', cacheKey: evidenceCacheKey });
 
   const families = groupProductFamilies(toCatalog(page));
   for (const family of families) {
@@ -558,7 +691,7 @@ export async function runMarketProbe(
     }
   }
 
-  await dependencies.onCheckpoint?.({ phase: 'families_persisted', cacheKey });
+  await dependencies.onCheckpoint?.({ phase: 'families_persisted', cacheKey: evidenceCacheKey });
 
   const relevant = families.filter(
     (family) => classifyProductRelevance(candidate.keyword, family).relevant
@@ -581,7 +714,7 @@ export async function runMarketProbe(
     throw new Error(`Could not persist relevant ASINs: ${relevantError.message}`);
   }
   const clusters = clusterMicroNiches(relevant, candidate.keyword);
-  await dependencies.onCheckpoint?.({ phase: 'relevance_filtered', cacheKey });
+  await dependencies.onCheckpoint?.({ phase: 'relevance_filtered', cacheKey: evidenceCacheKey });
   const { error: evidenceError } = await dependencies.client.from('candidate_evidence').insert({
     candidate_id: candidate.id,
     kind: 'micro_niches',
@@ -596,8 +729,51 @@ export async function runMarketProbe(
   if (evidenceError) {
     throw new Error(`Could not persist micro-niche evidence: ${evidenceError.message}`);
   }
-  await dependencies.onCheckpoint?.({ phase: 'micro_niches_created', cacheKey });
+  await dependencies.onCheckpoint?.({ phase: 'micro_niches_created', cacheKey: evidenceCacheKey });
 
+  const { data: cacheObservation, error: cacheObservationError } = await dependencies.client
+    .from('api_cache')
+    .select('captured_at')
+    .eq('cache_key', evidenceCacheKey)
+    .maybeSingle();
+  if (cacheObservationError) {
+    throw new Error(`Could not read Product Database cache observation: ${cacheObservationError.message}`);
+  }
+  const processedAt = new Date();
+  const evidence = assessMarketEvidence({
+    families: relevant,
+    cacheCapturedAt: cacheObservation?.captured_at ?? null,
+    now: processedAt
+  });
+  if (evidence.kind !== 'ready') {
+    const { error: statusEvidenceError } = await dependencies.client
+      .from('candidate_evidence')
+      .insert({
+        candidate_id: candidate.id,
+        kind: 'market_evidence_status',
+        payload: asJson({
+          status: evidence.kind,
+          cacheCapturedAt: evidence.cacheCapturedAt,
+          processedAt: processedAt.toISOString(),
+          providerUpdatedAt: evidence.providerUpdatedAt,
+          providerUpdatedAtAvailability: evidence.providerUpdatedAtAvailability
+        })
+      });
+    if (statusEvidenceError) {
+      throw new Error(`Could not persist market evidence status: ${statusEvidenceError.message}`);
+    }
+    await persistDecision(
+      dependencies.client,
+      candidate.id,
+      candidate.state,
+      'Needs Review',
+      [{ code: `MARKET_EVIDENCE_${evidence.kind.toUpperCase()}`, detail: evidence.kind }]
+    );
+    await dependencies.onCheckpoint?.({ phase: 'metrics_scored', cacheKey: evidenceCacheKey });
+    const checkpoint = { phase: 'completed' as const, cacheKey: evidenceCacheKey };
+    await dependencies.onCheckpoint?.(checkpoint);
+    return { checkpoint, realCalls };
+  }
   const metrics = calculateMarketMetrics(relevant);
   const score = scoreMarketOpportunity({
     metrics,
@@ -613,9 +789,18 @@ export async function runMarketProbe(
     estimated_market_sales: metrics.estimatedMarketSales,
     sample_product_family_count: metrics.familyCount,
     source_endpoint_set: asJson(['product_database']),
-    captured_at: new Date().toISOString(),
+    captured_at: processedAt.toISOString(),
     confidence: 0.7,
-    metrics: asJson({ metrics, score })
+    metrics: asJson({
+      metrics: snapshotMetrics(metrics, relevant),
+      score,
+      observation: {
+        cacheCapturedAt: evidence.cacheCapturedAt,
+        processedAt: processedAt.toISOString(),
+        providerUpdatedAt: evidence.providerUpdatedAt,
+        providerUpdatedAtAvailability: evidence.providerUpdatedAtAvailability
+      }
+    })
   });
   if (snapshotError) {
     throw new Error(`Could not persist market snapshot: ${snapshotError.message}`);
@@ -627,8 +812,8 @@ export async function runMarketProbe(
     score.verdict,
     score.reasons.map((detail) => ({ code: 'MARKET_PROBE', detail }))
   );
-  await dependencies.onCheckpoint?.({ phase: 'metrics_scored', cacheKey });
-  const checkpoint = { phase: 'completed' as const, cacheKey };
+  await dependencies.onCheckpoint?.({ phase: 'metrics_scored', cacheKey: evidenceCacheKey });
+  const checkpoint = { phase: 'completed' as const, cacheKey: evidenceCacheKey };
   await dependencies.onCheckpoint?.(checkpoint);
   return { checkpoint, realCalls };
 }

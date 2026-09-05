@@ -13,9 +13,9 @@ import {
   analyzeHistoricalSearchVolume,
   analyzeSalesEstimates,
   analyzeShareOfVoice,
-  scoreMarketOpportunity,
-  type MarketMetrics
+  scoreMarketOpportunity
 } from '@ara/research-engine';
+import { z } from 'zod';
 import { executeBudgetedApiCall, type BudgetedCallOutcome } from './budgeted-api-call';
 import { notifyCandidateDecision } from './candidate-notifications';
 
@@ -48,6 +48,40 @@ export interface EnrichStrongPotentialResult {
 
 function asJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value)) as Json;
+}
+
+const ScorableMarketMetricsSchema = z.object({
+  observedSampleSales: z.number().finite().positive(),
+  top3SalesConcentration: z.number().finite().min(0).max(1),
+  familyCount: z.number().int().positive()
+});
+
+const SnapshotObservationSchema = z.object({
+  cacheCapturedAt: z.string()
+});
+
+function snapshotMetricsForScoring(input: {
+  readonly metrics: unknown;
+  readonly now: Date;
+}): z.infer<typeof ScorableMarketMetricsSchema> | null {
+  const snapshot = z
+    .object({
+      metrics: ScorableMarketMetricsSchema,
+      observation: SnapshotObservationSchema
+    })
+    .safeParse(input.metrics);
+  if (!snapshot.success) {
+    return null;
+  }
+  const cacheCapturedAt = Date.parse(snapshot.data.observation.cacheCapturedAt);
+  if (
+    !Number.isFinite(cacheCapturedAt) ||
+    cacheCapturedAt > input.now.getTime() ||
+    input.now.getTime() - cacheCapturedAt > DEFAULT_CACHE_TTL_MS.product_database
+  ) {
+    return null;
+  }
+  return snapshot.data.metrics;
 }
 
 function relevantAsinsFrom(payload: unknown): string[] {
@@ -369,33 +403,15 @@ export async function runEnrichStrongPotential(
 
   const { data: snapshot } = await client
     .from('market_snapshots')
-    .select('metrics,observed_sample_sales')
+    .select('metrics')
     .eq('candidate_id', candidateId)
     .order('captured_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  let snapshotMetrics: MarketMetrics | null = null;
-  const rawSnapshot = snapshot?.metrics;
-  if (rawSnapshot && typeof rawSnapshot === 'object' && 'metrics' in rawSnapshot) {
-    const inner: unknown = rawSnapshot.metrics;
-    if (inner && typeof inner === 'object' && 'observedSampleSales' in inner) {
-      snapshotMetrics = inner as MarketMetrics;
-    }
-  }
-  const metrics: MarketMetrics = snapshotMetrics ?? {
-    observedSampleSales: snapshot?.observed_sample_sales ?? 0,
-    estimatedMarketSales: null,
-    top3SalesConcentration: 0,
-    top10AverageReviews: null,
-    medianReviews: null,
-    shareOver1000Reviews: 0,
-    brandConcentration: 0,
-    amazonRetailPresent: false,
-    familyCount: 0,
-    priceCompression: null,
-    newerLowReviewSellerSuccess: null,
-    historicalTrendConsistency: null
-  };
+  const metrics = snapshotMetricsForScoring({
+    metrics: snapshot?.metrics,
+    now: new Date()
+  });
 
   const score = scoreMarketOpportunity({
     metrics,

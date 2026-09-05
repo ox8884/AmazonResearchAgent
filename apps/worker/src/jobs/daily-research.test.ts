@@ -4,6 +4,7 @@ import {
   canAdvanceDailyResearchCheckpoint,
   collectDailyResearchPages,
   runDailyResearch,
+  snapshotCacheObservationAt,
   type DailyResearchQueue,
   type DailyResearchRunRecord,
   type DailyResearchRunStore
@@ -150,6 +151,30 @@ function dependencies(
   };
 }
 describe('daily research orchestration', () => {
+  it('uses the carried cache observation instead of the later snapshot processing time', () => {
+    const now = Date.parse('2099-01-03T12:00:00.000Z');
+    const observedAt = snapshotCacheObservationAt(
+      {
+        observation: {
+          cacheCapturedAt: '2099-01-01T12:00:00.000Z',
+          processedAt: '2099-01-03T11:59:00.000Z'
+        }
+      },
+      now
+    );
+
+    expect(observedAt).toBe('2099-01-01T12:00:00.000Z');
+  });
+
+  it('does not accept a future cache observation as fresh evidence', () => {
+    const observedAt = snapshotCacheObservationAt(
+      { observation: { cacheCapturedAt: '2099-01-03T12:00:01.000Z' } },
+      Date.parse('2099-01-03T12:00:00.000Z')
+    );
+
+    expect(observedAt).toBeUndefined();
+  });
+
   // Break: concurrent planners can overwrite the selected checkpoint and fan out their private plans.
   it('publishes one immutable plan and emits only its children under concurrent retries', async () => {
     const store = new InMemoryRunStore();

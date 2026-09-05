@@ -58,7 +58,7 @@ export class JungleScoutClient {
       timeout: config.timeoutMs ?? 30_000,
       redirect: 'manual',
       retry: {
-        limit: config.retryLimit ?? 2,
+        limit: config.retryLimit ?? 0,
         methods: ['get', 'post'],
         statusCodes: RETRY_STATUS_CODES
       },

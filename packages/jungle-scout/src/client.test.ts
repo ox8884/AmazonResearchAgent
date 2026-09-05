@@ -81,7 +81,28 @@ describe('Jungle Scout authenticated client', () => {
     expect(hits).toBe(1);
   });
 
-  // Break: 500s are not retried or each attempt is invisible.
+  it('makes only one HTTP attempt by default so each retry needs a new budget authorization', async () => {
+    // Given a transient provider failure and one authorized logical request.
+    let hits = 0;
+    const mock = await startMockServer((_request, response) => {
+      hits += 1;
+      response.statusCode = 500;
+      response.end('{}');
+    });
+    server = mock.server;
+    const client = new JungleScoutClient({ keyName: 'AI', apiKey: 'secret-key', baseUrl: mock.baseUrl });
+
+    // When the caller has not explicitly budgeted transport retries.
+    await expect(client.request('/api/test', { method: 'GET' })).rejects.toMatchObject({
+      httpAttempts: 1,
+      retryable: true
+    });
+
+    // Then no second wire request consumes unreserved quota.
+    expect(hits).toBe(1);
+  });
+
+  // Break: explicitly requested retries are unbounded or each attempt is invisible.
   it('retries retryable server failures a bounded number of times', async () => {
     let hits = 0;
     const mock = await startMockServer((_request, response) => {
@@ -98,7 +119,8 @@ describe('Jungle Scout authenticated client', () => {
     const client = new JungleScoutClient({
       keyName: 'AI',
       apiKey: 'secret-key',
-      baseUrl: mock.baseUrl
+      baseUrl: mock.baseUrl,
+      retryLimit: 2
     });
 
     const result = await client.request('/api/test', { method: 'GET' });

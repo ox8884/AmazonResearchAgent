@@ -52,6 +52,19 @@ describe('market metrics and scoring', () => {
     expect(result.total).toBe(0);
   });
 
+  it('keeps missing market evidence from becoming a strong opportunity', () => {
+    const result = scoreMarketOpportunity({
+      metrics: null,
+      hardFilterFailed: false,
+      marginProvisional: false,
+      differentiationMode: 'review_text',
+      ipRisk: false
+    });
+
+    expect(result.verdict).toBe('Needs Review');
+    expect(result.total).toBe(0);
+  });
+
   it('detects Amazon retail from seller_type instead of brand text', () => {
     const amazonBrand = calculateMarketMetrics(
       groupProductFamilies([{ ...familyProduct('A', 100), brand: 'Amazon Basics' }])

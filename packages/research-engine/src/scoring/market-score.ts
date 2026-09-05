@@ -1,5 +1,10 @@
 import type { MarketMetrics } from '../market-metrics';
 
+export type ScorableMarketMetrics = Pick<
+  MarketMetrics,
+  'observedSampleSales' | 'top3SalesConcentration' | 'familyCount'
+>;
+
 export interface MarketScoreResult {
   readonly total: number;
   readonly components: {
@@ -14,7 +19,7 @@ export interface MarketScoreResult {
 }
 
 export interface MarketScoreInput {
-  readonly metrics: MarketMetrics;
+  readonly metrics: ScorableMarketMetrics | null;
   readonly hardFilterFailed: boolean;
   readonly hardFilterReason?: string;
   readonly marginProvisional: boolean;
@@ -40,6 +45,25 @@ export function scoreMarketOpportunity(input: MarketScoreInput): MarketScoreResu
       verdict: 'Reject',
       reasons: ['High IP risk blocks Strong and Watch promotion'],
       hardFilterFailed: true
+    };
+  }
+
+  if (
+    !input.metrics ||
+    !Number.isInteger(input.metrics.familyCount) ||
+    input.metrics.familyCount < 1 ||
+    !Number.isFinite(input.metrics.observedSampleSales) ||
+    input.metrics.observedSampleSales <= 0 ||
+    !Number.isFinite(input.metrics.top3SalesConcentration) ||
+    input.metrics.top3SalesConcentration < 0 ||
+    input.metrics.top3SalesConcentration > 1
+  ) {
+    return {
+      total: 0,
+      components: { competition: 0, demand: 0, margin: 0, differentiation: 0 },
+      verdict: 'Needs Review',
+      reasons: ['MARKET_EVIDENCE_UNVERIFIED'],
+      hardFilterFailed: false
     };
   }
 

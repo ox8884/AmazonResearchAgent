@@ -412,7 +412,8 @@ integration('strong potential enrichment', () => {
           priceCompression: 0.1,
           newerLowReviewSellerSuccess: null,
           historicalTrendConsistency: null
-        }
+        },
+        observation: { cacheCapturedAt: new Date().toISOString() }
       }
     });
     await client.from('candidate_evidence').insert({
@@ -445,6 +446,5 @@ integration('strong potential enrichment', () => {
     expect(verdict?.payload).toMatchObject({ verdict: 'strong_potential', candidateState: 'Watch' });
   });
 });
-
 
 

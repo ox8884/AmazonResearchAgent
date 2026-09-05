@@ -136,7 +136,7 @@ integration('Milestone 3 full-pipeline fixtures', () => {
     expect(snapshot?.estimated_market_sales).toBeNull();
   });
 
-  it('treats the recorded sink drip tray zero page as empty sample sales', async () => {
+  it('keeps an empty product page out of scored snapshots', async () => {
     const candidateId = await seedCandidate('sink drip tray', ['sink drip tray']);
     await runMarketProbe(
       { candidateId, locale: 'en' },
@@ -151,8 +151,20 @@ integration('Milestone 3 full-pipeline fixtures', () => {
       .select('observed_sample_sales,sample_product_family_count')
       .eq('candidate_id', candidateId)
       .maybeSingle();
-    expect(snapshot?.sample_product_family_count).toBe(0);
-    expect(snapshot?.observed_sample_sales).toBe(0);
+    const { data: candidate } = await client
+      .from('candidates')
+      .select('state')
+      .eq('id', candidateId)
+      .single();
+    const { data: evidence } = await client
+      .from('candidate_evidence')
+      .select('payload')
+      .eq('candidate_id', candidateId)
+      .eq('kind', 'market_evidence_status')
+      .maybeSingle();
+    expect(snapshot).toBeNull();
+    expect(candidate?.state).toBe('Needs Review');
+    expect(evidence?.payload).toMatchObject({ status: 'incomplete_units' });
   });
 
   it('records expanded sink metadata 329 while probing the top page', async () => {
