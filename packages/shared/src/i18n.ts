@@ -125,6 +125,7 @@ export type CopyKey =
   | 'adminLoginTitle'
   | 'adminPassword'
   | 'adminTotp'
+  | 'adminTotpHint'
   | 'adminLogin'
   | 'adminLogout'
   | 'invalidLogin'
@@ -376,7 +377,8 @@ export const COPY = {
     modelPriority: 'Model priority',
     adminLoginTitle: '관리자 로그인',
     adminPassword: '관리자 비밀번호',
-    adminTotp: '인증 앱 코드 (설정한 경우)',
+    adminTotp: '인증 앱 코드',
+    adminTotpHint: '한 번 입력하면 이 브라우저에서는 30일간 다시 묻지 않습니다. 로그인은 2주간 유지됩니다.',
     adminLogin: '로그인',
     adminLogout: '로그아웃',
     invalidLogin: '로그인 정보가 올바르지 않습니다.',
@@ -625,7 +627,8 @@ export const COPY = {
     modelPriority: 'Model priority',
     adminLoginTitle: 'Admin login',
     adminPassword: 'Admin password',
-    adminTotp: 'Authenticator code (if enabled)',
+    adminTotp: 'Authenticator code',
+    adminTotpHint: 'After one successful code, this browser skips authenticator prompts for 30 days. Sign-in lasts 14 days.',
     adminLogin: 'Log in',
     adminLogout: 'Log out',
     invalidLogin: 'The login credentials are invalid.',

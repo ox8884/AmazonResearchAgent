@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createAdminSession,
+  createTrustedDeviceToken,
   hashAdminPassword,
   parseCookieHeader,
   requestUsesSecureCookies,
   verifyAdminPassword,
-  verifyAdminSession
+  verifyAdminSession,
+  verifyTrustedDeviceToken
 } from './admin-session';
 import { verifyCsrfRequest } from './csrf';
 
@@ -87,6 +89,14 @@ describe('single-admin session', () => {
       verifyCsrfRequest(request, key, new Date('2026-08-27T00:10:00.000Z'))
     ).toMatchObject({ csrfToken: issued.csrfToken });
     vi.unstubAllEnvs();
+  });
+
+  it('issues a 30-day trusted-device token that later logins can skip TOTP with', () => {
+    const key = Buffer.alloc(32, 6);
+    const issued = createTrustedDeviceToken(key, new Date('2026-09-05T00:00:00.000Z'));
+    expect(verifyTrustedDeviceToken(issued.token, key, new Date('2026-09-20T00:00:00.000Z'))).toBe(true);
+    expect(verifyTrustedDeviceToken(issued.token, key, new Date('2026-10-06T00:00:01.000Z'))).toBe(false);
+    expect(verifyTrustedDeviceToken(`${issued.token}x`, key, new Date('2026-09-20T00:00:00.000Z'))).toBe(false);
   });
 
   it('marks HTTPS requests as Secure even when NODE_ENV is not production', () => {

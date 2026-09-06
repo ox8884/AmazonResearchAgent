@@ -2,12 +2,33 @@
 
 import { getCopy, type Locale } from '@ara/shared';
 import ky from 'ky';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
 export function AdminLoginForm({ locale }: { locale: Locale }) {
   const copy = getCopy(locale);
   const [failed, setFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [totpRequired, setTotpRequired] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ky
+      .get('/api/auth/login', { credentials: 'same-origin' })
+      .json<{ totpRequired?: boolean }>()
+      .then((body) => {
+        if (!cancelled) {
+          setTotpRequired(body.totpRequired !== false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTotpRequired(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -44,15 +65,21 @@ export function AdminLoginForm({ locale }: { locale: Locale }) {
           autoComplete="current-password"
           required
         />
-        <label htmlFor="admin-totp">{copy.adminTotp}</label>
-        <input
-          id="admin-totp"
-          name="totp"
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          pattern="[0-9]*"
-        />
+        {totpRequired ? (
+          <>
+            <label htmlFor="admin-totp">{copy.adminTotp}</label>
+            <input
+              id="admin-totp"
+              name="totp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              required
+            />
+            <p className="field-help">{copy.adminTotpHint}</p>
+          </>
+        ) : null}
       </div>
       <button className="button button--primary" type="submit" disabled={submitting}>
         {copy.adminLogin}

@@ -7,11 +7,15 @@ export {
   adminSessionCookies,
   clearedAdminCookies,
   createAdminSession,
+  createTrustedDeviceToken,
   getSessionSigningKey,
   parseCookieHeader,
   requestUsesSecureCookies,
   sessionFromRequest,
+  trustedDeviceCookie,
+  trustedDeviceFromRequest,
   verifyAdminSession,
+  verifyTrustedDeviceToken,
   type AdminSession,
   type IssuedAdminSession
 } from '../admin-session-cookie';

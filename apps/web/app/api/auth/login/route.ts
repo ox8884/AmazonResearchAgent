@@ -2,9 +2,12 @@ import {
   adminSessionCookies,
   AdminAuthError,
   createAdminSession,
+  createTrustedDeviceToken,
   getAdminPasswordVerifier,
   getSessionSigningKey,
   requestUsesSecureCookies,
+  trustedDeviceCookie,
+  trustedDeviceFromRequest,
   verifyAdminPassword
 } from '../../../../lib/server/admin-session';
 import { verifyRequestOrigin } from '../../../../lib/server/csrf';
@@ -38,6 +41,19 @@ function invalidCredentials(): NextResponse {
   return NextResponse.json({ error: 'invalid_credentials' }, { status: 401 });
 }
 
+export async function GET(request: Request): Promise<NextResponse> {
+  try {
+    assertAdminClientAllowed(request);
+    const totpSecret = configuredAdminTotpSecret();
+    const totpRequired =
+      totpSecret !== undefined &&
+      !trustedDeviceFromRequest(request, getSessionSigningKey());
+    return NextResponse.json({ totpRequired });
+  } catch {
+    return NextResponse.json({ totpRequired: true });
+  }
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   try {
     verifyRequestOrigin(request);
@@ -58,17 +74,24 @@ export async function POST(request: Request): Promise<NextResponse> {
       return invalidCredentials();
     }
     const totpSecret = configuredAdminTotpSecret();
-    if (totpSecret && !verifyAdminTotp(totpSecret, parsed.data.totp)) {
+    const signingKey = getSessionSigningKey();
+    const deviceTrusted = totpSecret !== undefined && trustedDeviceFromRequest(request, signingKey);
+    if (totpSecret && !deviceTrusted && !verifyAdminTotp(totpSecret, parsed.data.totp)) {
       return invalidCredentials();
     }
-    const issued = createAdminSession(getSessionSigningKey());
+    const issued = createAdminSession(signingKey);
     await persistAdminSession(issued);
+    const secure = requestUsesSecureCookies(request);
     const response = NextResponse.json({ authenticated: true });
-    for (const cookie of adminSessionCookies(
-      issued,
-      requestUsesSecureCookies(request)
-    )) {
+    for (const cookie of adminSessionCookies(issued, secure)) {
       response.headers.append('set-cookie', cookie);
+    }
+    if (totpSecret) {
+      const device = createTrustedDeviceToken(signingKey);
+      response.headers.append(
+        'set-cookie',
+        trustedDeviceCookie(device.token, device.expiresAt, secure)
+      );
     }
     return response;
   } catch (error) {

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashAdminPassword } from '../../../../lib/server/admin-session';
 import { AbuseGuardError } from '../../../../lib/server/abuse-guard';
-import { POST } from './route';
+import { GET, POST } from './route';
+import {
+  createTrustedDeviceToken,
+  getSessionSigningKey
+} from '../../../../lib/server/admin-session';
 
 const originalEnvironment = {
   ADMIN_PASSWORD_SCRYPT: process.env.ADMIN_PASSWORD_SCRYPT,
@@ -212,6 +216,31 @@ describe('login abuse protection', () => {
 
     expect(response.status).toBe(401);
     expect(persistAdminSession).not.toHaveBeenCalled();
+  });
+
+  it('skips TOTP on a remembered browser after a trusted-device cookie is present', async () => {
+    vi.stubEnv('ADMIN_TOTP_SECRET_BASE32', 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    const device = createTrustedDeviceToken(getSessionSigningKey());
+    const response = await POST(loginRequest('correct horse battery staple', {
+      cookie: `ara_admin_device=${device.token}`
+    }));
+    const cookies = response.headers.getSetCookie();
+
+    expect(response.status).toBe(200);
+    expect(persistAdminSession).toHaveBeenCalledOnce();
+    expect(cookies.some((cookie) => cookie.includes('ara_admin_device='))).toBe(true);
+  });
+
+  it('reports whether TOTP is required before the login form renders the code field', async () => {
+    vi.stubEnv('ADMIN_TOTP_SECRET_BASE32', 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    const required = await GET(new Request('https://app.example.test/api/auth/login'));
+    expect(await required.json()).toEqual({ totpRequired: true });
+
+    const device = createTrustedDeviceToken(getSessionSigningKey());
+    const remembered = await GET(new Request('https://app.example.test/api/auth/login', {
+      headers: { cookie: `ara_admin_device=${device.token}` }
+    }));
+    expect(await remembered.json()).toEqual({ totpRequired: false });
   });
 
   it('rejects production logins from an IP outside the admin allowlist', async () => {
